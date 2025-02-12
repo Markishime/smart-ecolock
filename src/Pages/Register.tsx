@@ -16,7 +16,9 @@ import {
   CheckIcon, 
   ArrowPathIcon,
   EyeIcon,
-  EyeSlashIcon 
+  EyeSlashIcon,
+  AcademicCapIcon,
+  UserIcon 
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { Link, useNavigate } from 'react-router-dom';
@@ -76,7 +78,26 @@ const Register: React.FC = () => {
     hasMinLength: false
   });
 
+  const [currentStep, setCurrentStep] = useState(1);
+  const [formProgress, setFormProgress] = useState(0);
+
   const navigate = useNavigate();
+
+  const steps = [
+    { id: 1, title: 'Account Type', description: 'Choose your role' },
+    { id: 2, title: 'Personal Info', description: 'Basic information' },
+    { id: 3, title: 'Department', description: 'Academic details' },
+    { id: 4, title: 'Security', description: 'Set up password' }
+  ];
+
+  const calculateProgress = () => {
+    const progress = (currentStep / steps.length) * 100;
+    setFormProgress(progress);
+  };
+
+  useEffect(() => {
+    calculateProgress();
+  }, [currentStep]);
 
   useEffect(() => {
     // Real-time listeners for available data
@@ -161,6 +182,18 @@ const Register: React.FC = () => {
       }
     };
   }, [formData.password]);
+
+  const nextStep = () => {
+    if (currentStep < steps.length) {
+      setCurrentStep(prev => prev + 1);
+    }
+  };
+
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(prev => prev - 1);
+    }
+  };
 
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({
@@ -309,551 +342,316 @@ const Register: React.FC = () => {
     }
   };
 
-  const renderRoleSpecificFields = () => {
-    if (formData.role === 'instructor') {
-      return (
-        <>
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.8 }}
-          >
-            <div className="relative">
-              <label className={`absolute left-4 transition-all duration-200 ${
-                inputFocus.department || formData.department ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-              }`}>
-                Department
-              </label>
-              <select
-                className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 appearance-none"
-                value={formData.department}
-                onChange={(e) => handleInputChange('department', e.target.value)}
-                onFocus={() => setInputFocus(prev => ({ ...prev, department: true }))}
-                onBlur={() => setInputFocus(prev => ({ ...prev, department: false }))}
-                required
-              >
-                <option value="" disabled></option>
-                {availableData.departments.map(dept => (
-                  <option key={dept} value={dept}>{dept}</option>
-                ))}
-              </select>
-            </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 1.0 }}
-          >
-            <div className="relative">
-              <label className={`absolute left-4 transition-all duration-200 ${
-                inputFocus.yearsOfExperience || formData.yearsOfExperience ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-              }`}>
-                Years of Experience
-              </label>
-              <input
-                type="number"
-                className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500"
-                value={formData.yearsOfExperience}
-                onChange={(e) => handleInputChange('yearsOfExperience', e.target.value)}
-                onFocus={() => setInputFocus(prev => ({ ...prev, yearsOfExperience: true }))}
-                onBlur={() => setInputFocus(prev => ({ ...prev, yearsOfExperience: false }))}
-                min="0"
-                required
-              />
-            </div>
-          </motion.div>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.8 }}
-        >
-          <div className="relative">
-            <label className={`absolute left-4 transition-all duration-200 ${
-              inputFocus.major || formData.major ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-            }`}>
-              Course
-            </label>
-            <select
-              className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 appearance-none"
-              value={formData.major}
-              onChange={(e) => handleInputChange('major', e.target.value)}
-              onFocus={() => setInputFocus(prev => ({ ...prev, major: true }))}
-              onBlur={() => setInputFocus(prev => ({ ...prev, major: false }))}
-              required
-            >
-              <option value="" disabled></option>
-              {availableData.courses.map(course => (
-                <option key={course} value={course}>{course}</option>
-              ))}
-            </select>
+  const renderInput = (
+    name: string,
+    label: string,
+    type: string = 'text',
+    placeholder: string = '',
+    icon?: React.ReactNode
+  ) => (
+    <div>
+      <label className="block text-white/90 text-sm font-medium mb-2">
+        {label}
+      </label>
+      <div className="relative">
+        <input
+          type={type}
+          value={formData[name as keyof typeof formData] as string}
+          onChange={(e) => handleInputChange(name, e.target.value)}
+          onFocus={() => setInputFocus({ ...inputFocus, [name]: true })}
+          onBlur={() => setInputFocus({ ...inputFocus, [name]: false })}
+          className={`
+            w-full px-4 py-3 rounded-xl
+            bg-white/10 border border-white/20
+            text-white placeholder-white/50
+            focus:outline-none focus:ring-2 focus:ring-white/30
+            transition-all duration-200
+          `}
+          placeholder={placeholder}
+          required
+        />
+        {icon && (
+          <div className="absolute right-3 top-3 text-white/50">
+            {icon}
           </div>
-        </motion.div>
+        )}
+      </div>
+    </div>
+  );
 
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.9 }}
-        >
-          <div className="relative">
-            <label className={`absolute left-4 transition-all duration-200 ${
-              inputFocus.yearLevel || formData.yearLevel ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-            }`}>
-              Year Level
-            </label>
-            <select
-              className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 appearance-none"
-              value={formData.yearLevel}
-              onChange={(e) => handleInputChange('yearLevel', e.target.value)}
-              onFocus={() => setInputFocus(prev => ({ ...prev, yearLevel: true }))}
-              onBlur={() => setInputFocus(prev => ({ ...prev, yearLevel: false }))}
-              required
-            >
-              <option value="1">1st Year</option>
-              <option value="2">2nd Year</option>
-              <option value="3">3rd Year</option>
-              <option value="4">4th Year</option>
-            </select>
-          </div>
-        </motion.div>
-              
-        {/* Sections Selection */}  
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 1.1 }}
-          className="md:col-span-2"
-        >
-          <div className="relative">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Sections
-            </label>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {availableData.sections.map(section => (
-                <button
+  const renderSelect = (
+    name: string,
+    label: string,
+    options: { value: string; label: string }[]
+  ) => (
+    <div>
+      <label className="block text-white/90 text-sm font-medium mb-2">
+        {label}
+      </label>
+      <select
+        value={formData[name as keyof typeof formData] as string}
+        onChange={(e) => handleInputChange(name, e.target.value)}
+        className={`
+          w-full px-4 py-3 rounded-xl
+          bg-white/10 border border-white/20
+          text-white
+          focus:outline-none focus:ring-2 focus:ring-white/30
+          transition-all duration-200
+        `}
+        required
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value} className="bg-gray-800">
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  const renderStepContent = () => {
+    switch (currentStep) {
+      case 1:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white mb-4">Choose Your Role</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {['student', 'instructor'].map((role) => (
+                <motion.button
+                  key={role}
                   type="button"
-                  key={section}
-                  onClick={() => handleSectionSelect(section)}
-                  className={`p-2 rounded-lg border ${
-                    formData.sections.includes(section)
-                      ? 'bg-indigo-100 border-indigo-500'
-                      : 'bg-gray-50 border-gray-200'
-                  }`}
+                  onClick={() => {
+                    setFormData({ ...formData, role });
+                    nextStep();
+                  }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className={`
+                    p-6 rounded-xl text-center transition-all duration-200
+                    ${formData.role === role
+                      ? 'bg-white text-indigo-600 shadow-lg'
+                      : 'bg-white/10 text-white hover:bg-white/20'
+                    }
+                  `}
                 >
-                  {section}
-                </button>
+                  <div className="flex flex-col items-center space-y-3">
+                    {role === 'student' ? (
+                      <AcademicCapIcon className="w-8 h-8" />
+                    ) : (
+                      <UserIcon className="w-8 h-8" />
+                    )}
+                    <span className="text-lg font-medium">
+                      {role.charAt(0).toUpperCase() + role.slice(1)}
+                    </span>
+                    <p className="text-sm opacity-80">
+                      {role === 'student' 
+                        ? 'Access your courses and track your progress'
+                        : 'Manage your classes and student records'}
+                    </p>
+                  </div>
+                </motion.button>
               ))}
             </div>
           </div>
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 1.2 }}
-          className="md:col-span-2"
-        >
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Class Days
-              </label>
-              <div className="flex gap-2 flex-wrap">
-                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => (
+        );
+
+      case 2:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white mb-4">Personal Information</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {renderInput('fullName', 'Full Name', 'text', 'Enter your full name')}
+              {renderInput('idNumber', 'ID Number', 'text', 'Enter your ID number')}
+              {renderInput('email', 'Email', 'email', 'Enter your email')}
+              {renderInput('mobileNumber', 'Mobile Number', 'tel', 'Enter your mobile number')}
+            </div>
+          </div>
+        );
+
+      case 3:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white mb-4">Academic Details</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {renderSelect('department', 'Department', availableData.departments.map(dept => ({
+                value: dept,
+                label: dept
+              })))}
+              
+              {formData.role === 'student' ? (
+                <>
+                  {renderSelect('major', 'Major', availableData.courses.map(course => ({
+                    value: course,
+                    label: course
+                  })))}
+                  {renderSelect('yearLevel', 'Year Level', [
+                    { value: '1', label: '1st Year' },
+                    { value: '2', label: '2nd Year' },
+                    { value: '3', label: '3rd Year' },
+                    { value: '4', label: '4th Year' }
+                  ])}
+                </>
+              ) : (
+                renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience')
+              )}
+            </div>
+          </div>
+        );
+
+      case 4:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white mb-4">Security Setup</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="md:col-span-2 relative">
+                {renderInput('password', 'Password', showPassword ? 'text' : 'password', 'Create a strong password',
                   <button
                     type="button"
-                    key={day}
-                    onClick={() => handleScheduleChange(
-                      'days',
-                      formData.schedule.days.includes(day)
-                        ? formData.schedule.days.filter(d => d !== day)
-                        : [...formData.schedule.days, day]
-                    )}
-                    className={`p-2 rounded-lg border ${
-                      formData.schedule.days.includes(day)
-                        ? 'bg-indigo-100 border-indigo-500'
-                        : 'bg-gray-50 border-gray-200'
-                    }`}
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="hover:text-white/80 transition-colors"
                   >
-                    {day}
+                    {showPassword ? <EyeSlashIcon className="w-6 h-6" /> : <EyeIcon className="w-6 h-6" />}
                   </button>
-                ))}
+                )}
+                
+                {/* Password Validation Indicators */}
+                <div className="absolute -bottom-24 left-0 space-y-1">
+                  {Object.entries(passwordValidations).map(([key, isValid]) => (
+                    <div key={key} className="flex items-center space-x-2">
+                      <CheckIcon className={`w-4 h-4 ${isValid ? 'text-green-400' : 'text-white/30'}`} />
+                      <span className={`text-xs ${isValid ? 'text-green-400' : 'text-white/50'}`}>
+                        {key === 'hasUpper' && 'Uppercase letter'}
+                        {key === 'hasLower' && 'Lowercase letter'}
+                        {key === 'hasNumber' && 'Number'}
+                        {key === 'hasMinLength' && 'Minimum 8 characters'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Start Time
-                </label>
-                <input
-                  type="time"
-                  className="w-full p-2 bg-gray-50 rounded-lg border focus:ring-indigo-500"
-                  value={formData.schedule.startTime}
-                  onChange={(e) => handleScheduleChange('startTime', e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  End Time
-                </label>
-                <input
-                  type="time"
-                  className="w-full p-2 bg-gray-50 rounded-lg border focus:ring-indigo-500"
-                  value={formData.schedule.endTime}
-                  onChange={(e) => handleScheduleChange('endTime', e.target.value)}
-                />
-              </div>
+              {renderInput('confirmPassword', 'Confirm Password', showConfirmPassword ? 'text' : 'password', 'Confirm your password',
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="hover:text-white/80 transition-colors"
+                >
+                  {showConfirmPassword ? <EyeSlashIcon className="w-6 h-6" /> : <EyeIcon className="w-6 h-6" />}
+                </button>
+              )}
             </div>
           </div>
-        </motion.div>
-      </>
-    );
+        );
+    }
   };
 
-  
-
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <motion.div 
-        className="w-full max-w-2xl"
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 py-12 px-4">
+      <div className="absolute inset-0 bg-pattern opacity-10"></div>
+      
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
+        className="w-full max-w-2xl bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl relative overflow-hidden"
       >
-        <div className="bg-white rounded-2xl shadow-xl p-8 sm:p-12 relative overflow-hidden">
-          <motion.div
-            className="absolute -top-32 -right-32 w-64 h-64 bg-indigo-100 rounded-full"
-            animate={{ scale: [1, 1.2, 1] }}
-            transition={{ duration: 8, repeat: Infinity }}
-          />
-
-          <div className="relative z-10">
-            <div className="flex flex-col items-center mb-10">
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ delay: 0.2 }}
-              >
-                <LockClosedIcon className="w-14 h-14 text-indigo-600 mb-4" />
-              </motion.div>
-              <motion.h1 
-                className="text-3xl font-bold text-gray-900 mb-2"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.3 }}
-              >
-                Registration
-              </motion.h1>
-              <p className="text-gray-500">Join our smart security system</p>
-            </div>
-
-            <form onSubmit={handleRegister} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Role Selection */}
-          <motion.div
-            className="md:col-span-2"
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.4 }}
-          >
-            <div className="relative">
-              <label className={`absolute left-4 transition-all duration-200 ${
-                inputFocus.role || formData.role ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-              }`}>
-                Register As
-              </label>
-              <select
-                className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 appearance-none"
-                value={formData.role}
-                onChange={(e) => handleInputChange('role', e.target.value)}
-                required
-              >
-                <option value="student">Student</option>
-                <option value="instructor">Instructor</option>
-              </select>
-            </div>
-          </motion.div>
-
-
-              <AnimatePresence>
-                {/* Full Name Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.4 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.fullName || formData.fullName ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      Full Name
-                    </label>
-                    <input
-                      type="text"
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500"
-                      value={formData.fullName}
-                      onChange={(e) => handleInputChange('fullName', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, fullName: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, fullName: false }))}
-                      required
-                    />
-                    {formData.fullName && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-4 top-5" />
-                    )}
-                  </div>
-                </motion.div>
-
-                {/* ID Number Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.5 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.idNumber || formData.idNumber ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      ID Number
-                    </label>
-                    <input
-                      type="text"
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500"
-                      value={formData.idNumber}
-                      onChange={(e) => handleInputChange('idNumber', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, idNumber: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, idNumber: false }))}
-                      maxLength={12}
-                      required
-                    />
-                    {formData.idNumber.length === 12 && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-4 top-5" />
-                    )}
-                  </div>
-                </motion.div>
-
-                {/* Email Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.6 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.email || formData.email ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500"
-                      value={formData.email}
-                      onChange={(e) => handleInputChange('email', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, email: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, email: false }))}
-                      required
-                    />
-                    {formData.email.includes('@') && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-4 top-5" />
-                    )}
-                  </div>
-                </motion.div>
-
-                {/* Mobile Number Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.7 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.mobileNumber || formData.mobileNumber ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      Mobile Number
-                    </label>
-                    <input
-                      type="text"
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500"
-                      value={formData.mobileNumber}
-                      onChange={(e) => handleInputChange('mobileNumber', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, mobileNumber: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, mobileNumber: false }))}
-                      maxLength={11}
-                      required
-                    />
-                    {formData.mobileNumber.length === 11 && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-4 top-5" />
-                    )}
-                  </div>
-                </motion.div>
-
-               
-
-                {/* Password Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.8 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.password || formData.password ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      Password
-                    </label>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 pr-12"
-                      value={formData.password}
-                      onChange={(e) => handleInputChange('password', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, password: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, password: false }))}
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-4 top-5 text-gray-400 hover:text-indigo-600"
-                    >
-                      {showPassword ? (
-                        <EyeSlashIcon className="w-5 h-5" />
-                      ) : (
-                        <EyeIcon className="w-5 h-5" />
-                      )}
-                    </button>
-                    {passwordValidations.hasUpper &&
-                    passwordValidations.hasLower &&
-                    passwordValidations.hasNumber &&
-                    passwordValidations.hasMinLength && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-12 top-5" />
-                    )}
-                   <div className="mt-2 text-sm text-gray-500 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <CheckIcon className={`w-4 h-4 ${
-                          passwordValidations.hasMinLength ? 'text-green-500' : 'text-gray-300'
-                        }`} />
-                        <span className={passwordValidations.hasMinLength ? 'text-green-500' : ''}>
-                          At least 8 characters
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                      <CheckIcon className={`w-4 h-4 ${
-                          passwordValidations.hasUpper ? 'text-green-500' : 'text-gray-300'
-                        }`} />
-                        <span className={passwordValidations.hasUpper ? 'text-green-500' : ''}>
-                          1 uppercase letter
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <CheckIcon className={`w-4 h-4 ${
-                          passwordValidations.hasLower ? 'text-green-500' : 'text-gray-300'
-                        }`} />
-                        <span className={passwordValidations.hasLower ? 'text-green-500' : ''}>
-                          1 lowercase letter
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <CheckIcon className={`w-4 h-4 ${
-                          passwordValidations.hasNumber ? 'text-green-500' : 'text-gray-300'
-                        }`} />
-                        <span className={passwordValidations.hasNumber ? 'text-green-500' : ''}>
-                          1 number
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-
-                {/* Confirm Password Input */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.9 }}
-                >
-                  <div className="relative">
-                    <label className={`absolute left-4 transition-all duration-200 ${
-                      inputFocus.confirmPassword || formData.confirmPassword ? 'top-1 text-sm text-indigo-600' : 'top-4 text-gray-400'
-                    }`}>
-                      Confirm Password
-                    </label>
-                    <input
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      className="w-full p-4 pt-6 bg-gray-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 pr-12"
-                      value={formData.confirmPassword}
-                      onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                      onFocus={() => setInputFocus(prev => ({ ...prev, confirmPassword: true }))}
-                      onBlur={() => setInputFocus(prev => ({ ...prev, confirmPassword: false }))}
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                      className="absolute right-4 top-5 text-gray-400 hover:text-indigo-600"
-                    >
-                      {showConfirmPassword ? (
-                        <EyeSlashIcon className="w-5 h-5" />
-                      ) : (
-                        <EyeIcon className="w-5 h-5" />
-                      )}
-                    </button>
-                    {formData.confirmPassword === formData.password && formData.confirmPassword && (
-                      <CheckIcon className="w-5 h-5 text-green-500 absolute right-12 top-5" />
-                    )}
-                  </div>
-      
-                </motion.div>
-                {renderRoleSpecificFields()}
-
-
-                <motion.div
-                  className="md:col-span-2"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 1.0 }}
-                >
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold p-4 rounded-lg transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    {isLoading ? (
-                      <>
-                        <ArrowPathIcon className="w-5 h-5 animate-spin" />
-                        Creating Account...
-                      </>
-                    ) : (
-                      <>
-                        <LockClosedIcon className="w-5 h-5" />
-                        Register Now
-                      </>
-                    )}
-                  </button>
-                </motion.div>
-              </AnimatePresence>
-            </form>
-
-            <motion.div 
-              className="mt-8 text-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1.1 }}
+        <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-white/5 pointer-events-none"></div>
+        
+        <div className="relative p-8">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              className="w-16 h-16 bg-white rounded-2xl shadow-lg mx-auto mb-4 flex items-center justify-center"
             >
-              <p className="text-gray-500">
-                Already have an account?{' '}
-                <Link 
-                  to="/login" 
-                  className="text-indigo-600 hover:text-indigo-800 font-semibold hover:underline"
-                >
-                  Login Here
-                </Link>
-              </p>
+              <LockClosedIcon className="w-8 h-8 text-indigo-600" />
             </motion.div>
+            <h2 className="text-3xl font-bold text-white mb-2">Create Account</h2>
+            <p className="text-white/80">Join our community today</p>
           </div>
+
+          {/* Progress Bar */}
+          <div className="mb-8">
+            <div className="flex justify-between mb-2">
+              {steps.map((step) => (
+                <div
+                  key={step.id}
+                  className={`text-sm ${
+                    currentStep >= step.id ? 'text-white' : 'text-white/50'
+                  }`}
+                >
+                  {step.title}
+                </div>
+              ))}
+            </div>
+            <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+              <motion.div
+                className="h-full bg-white"
+                initial={{ width: 0 }}
+                animate={{ width: `${formProgress}%` }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
+          </div>
+
+          {/* Form Content */}
+          <form onSubmit={handleRegister} className="space-y-6">
+            {renderStepContent()}
+
+            {/* Navigation Buttons */}
+            <div className="flex justify-between mt-8 pt-6 border-t border-white/10">
+              {currentStep > 1 && (
+                <button
+                  type="button"
+                  onClick={prevStep}
+                  className="px-6 py-3 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors"
+                >
+                  Back
+                </button>
+              )}
+              {currentStep < steps.length ? (
+                <button
+                  type="button"
+                  onClick={nextStep}
+                  className="px-6 py-3 rounded-xl bg-white text-indigo-600 hover:bg-indigo-50 transition-colors ml-auto"
+                >
+                  Continue
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className={`
+                    px-6 py-3 rounded-xl bg-white text-indigo-600
+                    hover:bg-indigo-50 transition-colors ml-auto
+                    flex items-center space-x-2
+                    ${isLoading ? 'opacity-80 cursor-not-allowed' : ''}
+                  `}
+                >
+                  {isLoading ? (
+                    <>
+                      <ArrowPathIcon className="w-5 h-5 animate-spin" />
+                      <span>Creating Account...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Complete Registration</span>
+                      <CheckIcon className="w-5 h-5" />
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </form>
+
+          <p className="text-center text-white/80 mt-6">
+            Already have an account?{' '}
+            <Link to="/login" className="text-white font-medium hover:underline">
+              Sign in
+            </Link>
+          </p>
         </div>
       </motion.div>
     </div>

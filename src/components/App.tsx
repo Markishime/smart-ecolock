@@ -14,16 +14,19 @@ import EnergyUsagePage from '../Pages/EnergyUsagePage';
 import StudentDashboard from '../Pages/StudentDashboard';
 import Reports from '../Pages/Reports';
 import Users from '../Pages/Users';
-import Schedules from '../Pages/Schedules';
+import Schedules from '../Pages/AdminSchedules';
 import TeachersPage from '../Pages/TeachersPage';
 import StudentsPage from '../Pages/StudentsPage';
 import SettingsPage from '../Pages/SettingsPage';
 import Subjects from '../Pages/Subjects';
+import ClassesPage from '../Pages/ClassesPage';
+import Departments from '../Pages/Departments';
+import InstructorSchedules from '../Pages/Schedules';
 
 const App = () => {
   return (
-    <AuthProvider>
-      <Router>
+    <Router>
+      <AuthProvider>
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
@@ -31,32 +34,35 @@ const App = () => {
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/adminregistration" element={<AdminRegistration />} />
 
-          {/* Protected routes */}
-          <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-          <Route path="/attendance" element={<PrivateRoute><AttendancePage instructorfullName='' /></PrivateRoute>} />
-          <Route path="/securitylogs" element={<PrivateRoute><SecurityLogsPage /></PrivateRoute>} />
-          <Route path="/energyusage" element={<PrivateRoute><EnergyUsagePage /></PrivateRoute>} />
-          <Route path="/reports" element={<PrivateRoute><Reports /></PrivateRoute>} />
-          <Route path="/studentdashboard" element={<PrivateRoute><StudentDashboard /></PrivateRoute>} />
-          <Route path="/subjects" element={<PrivateRoute><Subjects /></PrivateRoute>} />
-          <Route path="/schedules" element={<PrivateRoute><Schedules /></PrivateRoute>} />
-          <Route path="/teachers" element={<PrivateRoute><TeachersPage /></PrivateRoute>} />
-          <Route path="/schedules" element={<PrivateRoute><Schedules /></PrivateRoute>} />
-          <Route path="/students" element={<PrivateRoute><StudentsPage /></PrivateRoute>} />
-          <Route path="/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
+          {/* Admin routes */}
+          <Route path="/admin/dashboard" element={<PrivateRoute roles={['admin']}><AdminDashboard /></PrivateRoute>} />
+          <Route path="/admin/users" element={<PrivateRoute roles={['admin']}><Users /></PrivateRoute>} />
+          <Route path="/admin/schedules" element={<PrivateRoute roles={['admin']}><Schedules /></PrivateRoute>} />
+          <Route path="/admin/reports" element={<PrivateRoute roles={['admin']}><Reports /></PrivateRoute>} />
+          <Route path="/admin/security-logs" element={<PrivateRoute roles={['admin']}><SecurityLogsPage /></PrivateRoute>} />
+          <Route path="/admin/settings" element={<PrivateRoute roles={['admin']}><SettingsPage /></PrivateRoute>} />
+          <Route path="/admin/departments" element={<PrivateRoute roles={['admin']}><Departments /></PrivateRoute>} />
+          <Route path="/admin/energyusage" element={<PrivateRoute roles={['admin']}><EnergyUsagePage /></PrivateRoute>} />
 
-          {/* Admin Protected routes */}
-          <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
-          <Route path="/users" element={<AdminRoute><Users /></AdminRoute>} />
+          {/* Instructor routes */}
+          <Route path="/instructor/dashboard" element={<PrivateRoute roles={['instructor']}><Dashboard /></PrivateRoute>} />
+          <Route path="/instructor/attendance" element={<PrivateRoute roles={['instructor']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
+          <Route path="/instructor/subjects" element={<PrivateRoute roles={['instructor']}><Subjects /></PrivateRoute>} />
+          <Route path="/instructor/schedules" element={<PrivateRoute roles={['instructor']}><InstructorSchedules /></PrivateRoute>} />
+          <Route path="/instructor/classes" element={<PrivateRoute roles={['instructor']}><ClassesPage /></PrivateRoute>} />
 
-          {/* Root redirect */}
+          {/* Student routes */}
+          <Route path="/students/dashboard" element={<PrivateRoute roles={['student']}><StudentDashboard /></PrivateRoute>} />
+          <Route path="/students/attendance" element={<PrivateRoute roles={['student']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
+
+          {/* Redirect root to login */}
           <Route path="/" element={<Navigate to="/login" replace />} />
-
-          {/* 404 Not Found */}
+          
+          {/* Catch all route */}
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </Router>
-    </AuthProvider>
+      </AuthProvider>
+    </Router>
   );
 };
 

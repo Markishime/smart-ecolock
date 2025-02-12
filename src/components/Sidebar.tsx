@@ -2,52 +2,30 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   HomeIcon,
-  UsersIcon,
   BookOpenIcon,
   CalendarIcon,
   ShieldCheckIcon,
-  ChartBarIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  UserGroupIcon,
-  AcademicCapIcon,
   CogIcon,
-  ClockIcon,
   DocumentChartBarIcon,
   UserCircleIcon,
-  MapIcon,
-  PaperAirplaneIcon,
   ArrowLeftEndOnRectangleIcon,
-  LockClosedIcon
+  LockClosedIcon,
+  UserGroupIcon,
+  PaperAirplaneIcon,
+  AcademicCapIcon,
+  ClockIcon,
+  UsersIcon,
+  BuildingOfficeIcon,
+  ChartBarIcon,
+  Cog6ToothIcon,
+  UserIcon,
+  ArrowLeftOnRectangleIcon
 } from '@heroicons/react/24/solid';
 import { motion } from 'framer-motion';
 import { useAuth } from '../Pages/AuthContext';
 import { theme } from '../styles/theme';
-
-interface InstructorData {
-  id: string;
-  fullName: string;
-  email: string;
-  department: string;
-  subjects: Subject[];
-  schedules: Schedule[];
-  sections: Section[];
-}
-
-interface Section {
-  id: string;
-  name: string;
-  course: string;
-  subjectCode: string;
-  maxStudents: number;
-  students: any[];
-  schedule: {
-    days: string[];
-    startTime: string;
-    endTime: string;
-    roomNumber: string;
-  };
-}
 
 interface Schedule {
   id: string;
@@ -81,169 +59,233 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ 
   isCollapsed, 
-  setIsCollapsed, 
-  instructor, 
-  userRole, 
-  profileImage, 
-  adminPermissions = {} 
+  setIsCollapsed 
 }) => {
   const location = useLocation();
   const { logout, currentUser } = useAuth();
 
-  const sidebarBackground = theme.colors.primary.main;
-  const activeItemBackground = theme.colors.primary.dark;
-  const hoverBackground = theme.colors.primary.light;
-
-  // Enhanced admin menu items with granular permissions
-  const getAdminSidebarItems = () => {
-    const adminItems = [
-      ...(adminPermissions.canManageUsers ? [
-        { 
-          icon: UserGroupIcon, 
-          label: 'User Management', 
-          path: '/users',
-          requiredPermission: 'canManageUsers'
-        }
-      ] : []),
-      ...(adminPermissions.canManageSubjects ? [
-        { 
-          icon: BookOpenIcon, 
-          label: 'Subject Management', 
-          path: '/admin/subjects',
-          requiredPermission: 'canManageSubjects'
-        }
-      ] : []),
-      ...(adminPermissions.canManageSchedules ? [
-        { 
-          icon: CalendarIcon, 
-          label: 'Schedule Management', 
-          path: '/admin/schedules',
-          requiredPermission: 'canManageSchedules'
-        }
-      ] : []),
-      ...(adminPermissions.canViewReports ? [
-        { 
-          icon: DocumentChartBarIcon, 
-          label: 'Comprehensive Reports', 
-          path: '/admin/reports',
-          requiredPermission: 'canViewReports'
-        }
-      ] : []),
-      ...(adminPermissions.canAccessSecurityLogs ? [
-        { 
-          icon: ShieldCheckIcon, 
-          label: 'Security Logs', 
-          path: '/admin/securitylogs',
-          requiredPermission: 'canAccessSecurityLogs'
-        }
-      ] : []),
-      ...(userRole === 'superadmin' ? [
-        { 
-          icon: CogIcon, 
-          label: 'System Configuration', 
-          path: '/superadmin/system-config'
-        }
-      ] : [])
-    ];
-
-    return adminItems;
-  };
-
-  // Combine base sidebar items with admin-specific items
-  const sidebarItems = [
-    { 
-      icon: HomeIcon, 
-      label: 'Dashboard', 
-      path: userRole === 'admin' ? '/admin' : 
-             userRole === 'instructor' ? '/dashboard' : '/dashboard'
+  const getAdminSidebarItems = () => [
+    {
+      title: 'Dashboard',
+      path: '/admin/dashboard',
+      icon: <HomeIcon className="w-6 h-6" />,
+      description: 'Overview'
     },
-    ...(userRole === 'admin' || userRole === 'superadmin' ? getAdminSidebarItems() : []),
-    { 
-      icon: UserCircleIcon, 
-      label: 'Profile', 
-      path: '/profile' 
+    {
+      title: 'Users',
+      path: '/admin/users',
+      icon: <UsersIcon className="w-6 h-6" />,
+      description: 'Manage users'
     },
-    { 
-      icon: CogIcon, 
-      label: 'Settings', 
-      path: '/settings' 
+    {
+      title: 'Departments',
+      path: '/admin/departments',
+      icon: <BuildingOfficeIcon className="w-6 h-6" />,
+      description: 'Manage departments'
+    },
+    {
+      title: 'Schedules',
+      path: '/admin/schedules',
+      icon: <ClockIcon className="w-6 h-6" />,
+      description: 'Class schedules'
+    },
+    {
+      title: 'Reports',
+      path: '/admin/reports',
+      icon: <ChartBarIcon className="w-6 h-6" />,
+      description: 'Analytics & reports'
+    },
+    {
+      title: 'Energy Usage',
+      path: '/admin/energyusage',
+      icon: <UserCircleIcon className="w-6 h-6" />,
+      description: 'Classroom Energy usage'
+    },
+    {
+      title: 'Settings',
+      path: '/admin/settings',
+      icon: <Cog6ToothIcon className="w-6 h-6" />,
+      description: 'System settings'
+    },
+  
+  ];
+
+  const getInstructorSidebarItems = () => [
+    {
+      title: 'Dashboard',
+      path: '/instructor/dashboard',
+      icon: <HomeIcon className="w-6 h-6" />,
+      description: 'Overview'
+    },
+    {
+      title: 'My Classes',
+      path: '/instructor/classes',
+      icon: <UserGroupIcon className="w-6 h-6" />,
+      description: 'Manage your classes'
+    },
+    {
+      title: 'Schedule',
+      path: '/instructor/schedules',
+      icon: <ClockIcon className="w-6 h-6" />,
+      description: 'Your timetable'
+    },
+    {
+      title: 'Subjects',
+      path: '/instructor/subjects',
+      icon: <BookOpenIcon className="w-6 h-6" />,
+      description: 'Your subjects'
+    },
+ 
+  ];
+
+  const getStudentSidebarItems = () => [
+    {
+      title: 'Dashboard',
+      path: '/students/dashboard',
+      icon: <HomeIcon className="w-6 h-6" />,
+      description: 'Overview'
+    },
+    {
+      title: 'My Classes',
+      path: '/students/classes',
+      icon: <AcademicCapIcon className="w-6 h-6" />,
+      description: 'View your classes'
+    },
+    {
+      title: 'Schedule',
+      path: '/students/schedule',
+      icon: <ClockIcon className="w-6 h-6" />,
+      description: 'Your timetable'
+    },
+    {
+      title: 'Grades',
+      path: '/students/grades',
+      icon: <ChartBarIcon className="w-6 h-6" />,
+      description: 'View your grades'
+    },
+    {
+      title: 'Profile',
+      path: '/students/profile',
+      icon: <UserCircleIcon className="w-6 h-6" />,
+      description: 'Personal info'
     }
   ];
+
+  const getSidebarItems = () => {
+    switch (currentUser?.role) {
+      case 'admin':
+        return getAdminSidebarItems();
+      case 'instructor':
+        return getInstructorSidebarItems();
+      case 'student':
+        return getStudentSidebarItems();
+      default:
+        return [];
+    }
+  };
 
   const handleLogout = async () => {
     try {
       await logout();
-      // Redirect to login page will be handled by the logout function in AuthContext
     } catch (error) {
-      console.error('Logout failed', error);
+      console.error('Logout failed:', error);
     }
   };
 
   return (
-    <motion.div 
-      initial={{ width: isCollapsed ? '5rem' : '16rem' }}
-      animate={{ width: isCollapsed ? '5rem' : '16rem' }}
-      transition={{ duration: 0.3 }}
-      className={`bg-[${sidebarBackground}] h-screen fixed left-0 top-0 bottom-0 z-50 shadow-xl border-r border-blue-200 overflow-hidden`}
+    <div
+      className={`
+        ${isCollapsed ? 'w-20' : 'w-64'}
+        fixed left-0 h-screen bg-gradient-to-b from-indigo-600 to-indigo-800
+        text-white transition-all duration-300 ease-in-out z-50
+      `}
     >
-      <div className="flex items-center justify-between p-4 border-b border-blue-300">
-        {!isCollapsed && (
-          <div className="flex items-center">
-            <LockClosedIcon className="h-8 w-8 mr-2 text-blue-600" />
-            <span className="text-xl font-bold text-blue-800">Smart EcoLock</span>
-          </div>
-        )}
-        <button 
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          className="p-2 rounded-full hover:bg-blue-200 transition"
-        >
-          {isCollapsed ? <ChevronRightIcon className="h-6 w-6 text-blue-600" /> : <ChevronLeftIcon className="h-6 w-6 text-blue-600" />}
-        </button>
-      </div>
-
-      {/* Profile Section */}
-      <div className={`p-4 flex items-center border-b border-blue-300 ${isCollapsed ? 'justify-center' : 'justify-start'}`}>
-        {profileImage ? (
-          <img 
-            src={profileImage} 
-            alt="Profile" 
-            className={`rounded-full border-2 border-blue-300 ${isCollapsed ? 'w-10 h-10' : 'w-12 h-12 mr-4'}`} 
-          />
+      {/* Collapse Button */}
+      <button
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        className="absolute -right-3 top-8 bg-white rounded-full p-1 text-indigo-600 hover:bg-indigo-50 transition-colors"
+      >
+        {isCollapsed ? (
+          <ChevronRightIcon className="w-4 h-4" />
         ) : (
-          <UserCircleIcon className={`text-blue-600 ${isCollapsed ? 'w-10 h-10' : 'w-12 h-12 mr-4'}`} />
+          <ChevronLeftIcon className="w-4 h-4" />
         )}
-        {!isCollapsed && (
-          <div>
-            <p className="text-sm font-semibold text-blue-800">{currentUser?.fullName}</p>
-            <p className="text-xs text-blue-600">{currentUser?.role}</p>
+      </button>
+
+      {/* User Profile Section */}
+      <div className="p-4">
+        <div className="flex items-center space-x-4">
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+            {currentUser?.photoURL ? (
+              <img
+                src={currentUser.photoURL}
+                alt="Profile"
+                className="w-10 h-10 rounded-full"
+              />
+            ) : (
+              <UserIcon className="w-6 h-6 text-white/70" />
+            )}
           </div>
-        )}
+          {!isCollapsed && (
+            <div className="flex-1 min-w-0">
+              <h3 className="text-white font-medium truncate">
+                {currentUser?.fullName || 'User'}
+              </h3>
+              <p className="text-white/70 text-sm truncate">
+                {currentUser?.email || ''}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Navigation Items */}
-      <nav className="mt-4">
-        {sidebarItems.map((item, index) => (
-          <Link 
-            key={index} 
-            to={item.path} 
-            className={`flex items-center ${isCollapsed ? 'justify-center' : 'px-4'} py-3 hover:bg-[${hoverBackground}] transition 
-              ${location.pathname === item.path ? `bg-[${activeItemBackground}] border-r-4 border-blue-600` : ''}`}
-          >
-            <item.icon className={`${isCollapsed ? 'w-6 h-6' : 'w-5 h-5 mr-3'} text-blue-600`} />
-            {!isCollapsed && <span className="text-sm text-blue-800">{item.label}</span>}
-          </Link>
-        ))}
-
-        {/* Logout Button */}
-        <button 
-          onClick={handleLogout}
-          className={`flex items-center ${isCollapsed ? 'justify-center' : 'px-4'} py-3 w-full hover:bg-[${hoverBackground}] transition`}
-        >
-          <ArrowLeftEndOnRectangleIcon className={`${isCollapsed ? 'w-6 h-6' : 'w-5 h-5 mr-3'} text-red-600`} />
-          {!isCollapsed && <span className="text-sm text-red-600">Logout</span>}
-        </button>
+      <nav className="mt-8 px-4">
+        <ul className="space-y-2">
+          {getSidebarItems().map((item, index) => (
+            <li key={index}>
+              <Link
+                to={item.path}
+                className={`
+                  flex items-center space-x-3 px-4 py-3 rounded-xl
+                  transition-all duration-200
+                  ${location.pathname === item.path
+                    ? 'bg-white text-indigo-600'
+                    : 'text-white/80 hover:bg-white/10'
+                  }
+                `}
+              >
+                {item.icon}
+                {!isCollapsed && (
+                  <div className="flex-1">
+                    <span className="block font-medium">{item.title}</span>
+                    <span className="block text-sm opacity-70">
+                      {item.description}
+                    </span>
+                  </div>
+                )}
+              </Link>
+            </li>
+          ))}
+        </ul>
       </nav>
-    </motion.div>
+
+      {/* Logout Button */}
+      <div className="absolute bottom-8 w-full px-4">
+        <button
+          onClick={handleLogout}
+          className={`
+            flex items-center space-x-3 w-full px-4 py-3 rounded-xl
+            text-white/80 hover:bg-white/10 transition-all duration-200
+          `}
+        >
+          <ArrowLeftEndOnRectangleIcon className="w-6 h-6" />
+          {!isCollapsed && (
+            <span className="font-medium">Logout</span>
+          )}
+        </button>
+      </div>
+    </div>
   );
 };
 

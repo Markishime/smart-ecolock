@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion } from 'framer-motion';
+import Sidebar from '../components/Sidebar';
 import { 
   BoltIcon,
   ChartBarIcon,
   PowerIcon,
   LightBulbIcon,
-  ArrowsRightLeftIcon
+  ArrowsRightLeftIcon,
+  BuildingOfficeIcon,
+  ClockIcon,
+  ExclamationCircleIcon
 } from '@heroicons/react/24/solid';
 import { Line } from 'react-chartjs-2';
 import {
@@ -32,6 +36,12 @@ ChartJS.register(
   Legend
 );
 
+interface Room {
+  id: string;
+  roomNumber: string;
+  department: string;
+}
+
 interface EnergyUsage {
   id: string;
   classroomId: string;
@@ -47,11 +57,58 @@ interface EnergyUsage {
 
 const EnergyUsagePage: React.FC = () => {
   const [energyData, setEnergyData] = useState<EnergyUsage[]>([]);
-  const [selectedClassroom, setSelectedClassroom] = useState<string>('Room-101');
+  const [selectedClassroom, setSelectedClassroom] = useState<string>('');
   const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week'>('hour');
   const [loading, setLoading] = useState(true);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Fetch rooms from teachers collection
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        const teachersRef = collection(db, 'teachers');
+        const snapshot = await getDocs(teachersRef);
+        const uniqueRooms = new Set<string>();
+        const roomsData: Room[] = [];
+
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          if (data.roomNumber && !uniqueRooms.has(data.roomNumber)) {
+            uniqueRooms.add(data.roomNumber);
+            roomsData.push({
+              id: doc.id,
+              roomNumber: data.roomNumber,
+              department: data.department || 'Unknown'
+            });
+          }
+        });
+
+        setRooms(roomsData.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber)));
+        if (roomsData.length > 0 && !selectedClassroom) {
+          setSelectedClassroom(roomsData[0].roomNumber);
+        }
+      } catch (error) {
+        console.error('Error fetching rooms:', error);
+        Swal.fire('Error', 'Failed to fetch rooms', 'error');
+      }
+    };
+
+    fetchRooms();
+  }, []);
 
   useEffect(() => {
+    if (!selectedClassroom) return;
+
+    const getStartTime = () => {
+      const now = new Date();
+      switch(timeRange) {
+        case 'hour': return new Date(now.getTime() - 60 * 60 * 1000);
+        case 'day': return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        case 'week': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      }
+    };
+
     const fetchEnergyData = async () => {
       try {
         const q = query(
@@ -73,6 +130,7 @@ const EnergyUsagePage: React.FC = () => {
 
         return () => unsubscribe();
       } catch (error) {
+        console.error('Error fetching energy data:', error);
         Swal.fire('Error', 'Failed to fetch energy data', 'error');
         setLoading(false);
       }
@@ -81,143 +139,196 @@ const EnergyUsagePage: React.FC = () => {
     fetchEnergyData();
   }, [selectedClassroom, timeRange]);
 
-  const getStartTime = () => {
-    const now = new Date();
-    switch(timeRange) {
-      case 'hour': return new Date(now.getTime() - 60 * 60 * 1000);
-      case 'day': return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      case 'week': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    }
-  };
-
   const chartData = {
     labels: energyData.map(entry => 
-      entry.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      entry.timestamp.toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+      })
     ),
     datasets: [
       {
         label: 'Total Energy Consumption (kWh)',
         data: energyData.map(entry => entry.consumptionKWh),
         borderColor: 'rgb(99, 102, 241)',
-        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+        backgroundColor: 'rgba(99, 102, 241, 0.5)',
         tension: 0.4,
+      }
+    ]
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
       },
-    ],
+      title: {
+        display: true,
+        text: 'Energy Consumption Over Time',
+        font: {
+          size: 16,
+          weight: 'bold' as 'bold'
+        }
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        title: {
+          display: true,
+          text: 'Energy (kWh)'
+        }
+      },
+      x: {
+        title: {
+          display: true,
+          text: 'Time'
+        }
+      }
+    }
   };
 
   const totalConsumption = energyData.reduce((sum, entry) => sum + entry.consumptionKWh, 0);
-  const averageUsage = energyData.length > 0 ? totalConsumption / energyData.length : 0;
+  const averageConsumption = totalConsumption / (energyData.length || 1);
+  const peakUsage = energyData.length > 0 ? Math.max(...energyData.map(d => d.consumptionKWh)) : 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          {/* Header */}
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
-            <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-2 mb-4 md:mb-0">
-              <BoltIcon className="w-8 h-8 text-indigo-600" />
-              Energy Usage Monitoring
-            </h1>
-            <div className="flex gap-4">
-              <select
-                value={selectedClassroom}
-                onChange={(e) => setSelectedClassroom(e.target.value)}
-                className="p-2 rounded-lg border border-gray-300"
-              >
-                <option value="Room-101">Room 101</option>
-                <option value="Room-102">Room 102</option>
-                <option value="Room-103">Room 103</option>
-              </select>
-              <select
-                value={timeRange}
-                onChange={(e) => setTimeRange(e.target.value as any)}
-                className="p-2 rounded-lg border border-gray-300"
-              >
-                <option value="hour">Last Hour</option>
-                <option value="day">Last 24 Hours</option>
-                <option value="week">Last Week</option>
-              </select>
+    <div className="flex h-screen bg-gray-50">
+       <Sidebar isCollapsed={sidebarCollapsed} setIsCollapsed={setSidebarCollapsed} userRole="admin" />
+      
+       <div className={`flex-1 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
+        <div className="p-8">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-gray-900">Energy Usage Analytics</h1>
+            <p className="mt-2 text-gray-600">Monitor and analyze classroom energy consumption</p>
+          </div>
+
+          {/* Filters */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div className="bg-white rounded-xl shadow-sm p-6">
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                <BuildingOfficeIcon className="w-5 h-5 inline-block mr-2 text-indigo-600" />
+                Select Classroom
+              </label>
+              {rooms.length > 0 ? (
+                <select
+                  value={selectedClassroom}
+                  onChange={(e) => setSelectedClassroom(e.target.value)}
+                  className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-2.5"
+                >
+                  {rooms.map((room) => (
+                    <option key={room.id} value={room.roomNumber}>
+                      Room {room.roomNumber} - {room.department}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex items-center text-yellow-600">
+                  <ExclamationCircleIcon className="w-5 h-5 mr-2" />
+                  <span>No rooms available</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm p-6">
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                <ClockIcon className="w-5 h-5 inline-block mr-2 text-indigo-600" />
+                Time Range
+              </label>
+              <div className="flex gap-3">
+                {['hour', 'day', 'week'].map((range) => (
+                  <button
+                    key={range}
+                    onClick={() => setTimeRange(range as any)}
+                    className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+                      timeRange === range
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {range === 'hour' ? 'Last Hour' : range === 'day' ? 'Last 24 Hours' : 'Last Week'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           {loading ? (
             <div className="flex justify-center items-center h-64">
-              <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
-            </div>
-          ) : energyData.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              No energy usage data available for this period
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
             </div>
           ) : (
             <>
-              {/* Main Chart */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="mb-8"
-              >
-                <div className="bg-gray-50 p-4 rounded-xl">
-                  <Line data={chartData} options={{
-                    responsive: true,
-                    plugins: {
-                      legend: { position: 'top' },
-                      title: { display: true, text: 'Energy Consumption Over Time' }
-                    },
-                  }} />
-                </div>
-              </motion.div>
-
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              {/* Stats Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <StatCard
-                  icon={PowerIcon}
+                  icon={BoltIcon}
                   title="Total Consumption"
                   value={`${totalConsumption.toFixed(2)} kWh`}
-                  description="Total energy used in selected period"
+                  description="Total energy used"
+                />
+                <StatCard
+                  icon={ChartBarIcon}
+                  title="Average Consumption"
+                  value={`${averageConsumption.toFixed(2)} kWh`}
+                  description="Average per reading"
+                />
+                <StatCard
+                  icon={PowerIcon}
+                  title="Peak Usage"
+                  value={`${peakUsage.toFixed(2)} kWh`}
+                  description="Highest consumption"
                 />
                 <StatCard
                   icon={ArrowsRightLeftIcon}
-                  title="Average Usage"
-                  value={`${averageUsage.toFixed(2)} kWh/h`}
-                  description="Average hourly consumption"
-                />
-                <StatCard
-                  icon={LightBulbIcon}
-                  title="Projected Cost"
-                  value={`$${(totalConsumption * 0.15).toFixed(2)}`}
-                  description="Estimated cost at $0.15/kWh"
+                  title="Readings"
+                  value={energyData.length}
+                  description="Total data points"
                 />
               </div>
 
-              {/* Device Breakdown */}
-              <div className="bg-gray-50 p-6 rounded-xl">
-                <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                  <ChartBarIcon className="w-6 h-6 text-indigo-600" />
-                  Energy Consumption Breakdown
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <DeviceEnergy
-                    label="Lighting"
-                    value={energyData.reduce((sum, entry) => sum + entry.devices.lighting, 0)}
-                    color="bg-yellow-400"
-                  />
-                  <DeviceEnergy
-                    label="Projection"
-                    value={energyData.reduce((sum, entry) => sum + entry.devices.projection, 0)}
-                    color="bg-blue-400"
-                  />
-                  <DeviceEnergy
-                    label="Computers"
-                    value={energyData.reduce((sum, entry) => sum + entry.devices.computers, 0)}
-                    color="bg-green-400"
-                  />
-                  <DeviceEnergy
-                    label="HVAC"
-                    value={energyData.reduce((sum, entry) => sum + entry.devices.hvac, 0)}
-                    color="bg-red-400"
-                  />
+              {/* Main Chart */}
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
+                <div className="h-[400px]">
+                  <Line data={chartData} options={chartOptions} />
                 </div>
               </div>
+
+              {/* Device Breakdown */}
+              {energyData.length > 0 && (
+                <div className="bg-white p-6 rounded-xl shadow-sm">
+                  <h3 className="text-lg font-semibold mb-6">Device Energy Breakdown</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <DeviceEnergy
+                      label="Lighting"
+                      value={energyData[energyData.length - 1].devices.lighting}
+                      color="rgb(59, 130, 246)"
+                      icon={LightBulbIcon}
+                    />
+                    <DeviceEnergy
+                      label="Projection"
+                      value={energyData[energyData.length - 1].devices.projection}
+                      color="rgb(16, 185, 129)"
+                      icon={ChartBarIcon}
+                    />
+                    <DeviceEnergy
+                      label="Computers"
+                      value={energyData[energyData.length - 1].devices.computers}
+                      color="rgb(245, 158, 11)"
+                      icon={PowerIcon}
+                    />
+                    <DeviceEnergy
+                      label="HVAC"
+                      value={energyData[energyData.length - 1].devices.hvac}
+                      color="rgb(239, 68, 68)"
+                      icon={ArrowsRightLeftIcon}
+                    />
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -228,30 +339,45 @@ const EnergyUsagePage: React.FC = () => {
 
 const StatCard = ({ icon: Icon, title, value, description }: any) => (
   <motion.div
-    className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"
-    whileHover={{ y: -5 }}
+    whileHover={{ scale: 1.02 }}
+    className="bg-white p-6 rounded-xl shadow-sm"
   >
-    <div className="flex items-center gap-4">
-      <div className="p-3 bg-indigo-100 rounded-lg">
+    <div className="flex items-center">
+      <div className="p-2 bg-indigo-100 rounded-lg">
         <Icon className="w-6 h-6 text-indigo-600" />
       </div>
-      <div>
-        <h4 className="text-lg font-semibold">{title}</h4>
-        <p className="text-2xl font-bold">{value}</p>
-        <p className="text-sm text-gray-500 mt-1">{description}</p>
+      <div className="ml-4">
+        <p className="text-sm font-medium text-gray-600">{title}</p>
+        <p className="text-2xl font-semibold text-gray-900">{value}</p>
+        <p className="text-sm text-gray-500">{description}</p>
       </div>
     </div>
   </motion.div>
 );
 
-const DeviceEnergy = ({ label, value, color }: any) => (
-  <div className="bg-white p-4 rounded-lg flex items-center justify-between">
-    <div className="flex items-center gap-3">
-      <div className={`w-3 h-3 rounded-full ${color}`}></div>
-      <span className="font-medium">{label}</span>
+const DeviceEnergy = ({ label, value, color, icon: Icon }: any) => (
+  <div className="bg-gray-50 p-4 rounded-lg">
+    <div className="flex items-center gap-2 mb-3">
+      <Icon className="w-5 h-5" style={{ color }} />
+      <span className="text-sm font-medium text-gray-600">{label}</span>
     </div>
-    <span className="text-gray-600">{value.toFixed(2)} kWh</span>
+    <div className="flex justify-between items-center mb-2">
+      <span className="text-2xl font-semibold" style={{ color }}>
+        {value.toFixed(2)} kWh
+      </span>
+    </div>
+    <div className="w-full bg-gray-200 rounded-full h-2">
+      <div
+        className="h-2 rounded-full transition-all duration-500"
+        style={{ 
+          width: `${(value / 10) * 100}%`, 
+          backgroundColor: color,
+          boxShadow: `0 0 8px ${color}40`
+        }}
+      />
+    </div>
   </div>
 );
 
 export default EnergyUsagePage;
+    
