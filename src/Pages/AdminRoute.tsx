@@ -1,39 +1,19 @@
-import React, { useEffect, useState } from 'react';
-import { Navigate, useNavigate, useLocation } from 'react-router-dom';
+import React from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth } from './AuthContext';
 
-const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    const storedAdminStatus = localStorage.getItem('isAdmin');
-
-    if (storedAdminStatus) {
-      setIsAdmin(JSON.parse(storedAdminStatus));
-    } else {
-      setIsAdmin(false); // Default to false if nothing is stored
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isAdmin === false && location.pathname.startsWith('/admin')) {
-      navigate('/login', { replace: true });
-    }
-  }, [isAdmin, location.pathname, navigate]);
-
-
-  if (isAdmin === null) {
-    return <div>Loading...</div>;
-  }
-
-  if (isAdmin) {
-    return <>{children}</>;
-  } else if (location.pathname.startsWith('/admin')) {
+const AdminRoute: React.FC<{ children: JSX.Element }> = ({ children }) => {
+  const { currentUser } = useAuth();
+  
+  if (!currentUser) {
     return <Navigate to="/login" replace />;
-  } else { // If not admin but not trying to access admin page
-    return null; // Or return a different component/message if you prefer
   }
+  
+  if (currentUser.role !== 'admin') {
+    return <Navigate to="/unauthorized" replace />;
+  }
+  
+  return children;
 };
 
 export default AdminRoute;

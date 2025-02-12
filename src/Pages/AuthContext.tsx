@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../firebase';
 import { User, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, setDoc } from 'firebase/firestore';
 
 interface Schedule {
   days: string[];
@@ -12,7 +12,7 @@ interface Schedule {
 interface UserData {
   uid: string;
   email: string;
-  role: 'admin' | 'instructor' | 'student';
+  role: 'admin' | 'instructor' | 'student' | 'superadmin';
   fullName: string;
   idNumber: string;
   mobileNumber: string;
@@ -22,6 +22,14 @@ interface UserData {
   yearsOfExperience?: string;
   sections: string[];
   schedule: Schedule;
+  photoURL?: string | null;
+  adminPermissions?: {
+    canManageUsers?: boolean;
+    canManageSubjects?: boolean;
+    canViewReports?: boolean;
+    canManageSchedules?: boolean;
+    canAccessSecurityLogs?: boolean;
+  };
 }
 
 interface AuthContextType {
@@ -30,6 +38,7 @@ interface AuthContextType {
   isAdmin: boolean;
   isInstructor: boolean;
   isStudent: boolean;
+  isSuperAdmin: boolean;
   login: (email: string, password: string) => Promise<UserData>;
   logout: () => Promise<void>;
 }
@@ -40,6 +49,7 @@ const AuthContext = createContext<AuthContextType>({
   isAdmin: false,
   isInstructor: false,
   isStudent: false,
+  isSuperAdmin: false,
   login: async () => { throw new Error('Not implemented') },
   logout: async () => { throw new Error('Not implemented') }
 });
@@ -69,7 +79,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           days: [],
           startTime: '',
           endTime: ''
-        }
+        },
+        photoURL: user.photoURL,
+        adminPermissions: data.adminPermissions
       };
     }
 
@@ -92,7 +104,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           days: [],
           startTime: '',
           endTime: ''
-        }
+        },
+        photoURL: user.photoURL
       };
     }
 
@@ -115,11 +128,56 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           days: [],
           startTime: '',
           endTime: ''
-        }
+        },
+        photoURL: user.photoURL
       };
     }
 
     return null;
+  };
+
+  const createUserProfile = async (user: User, additionalData: Partial<UserData>) => {
+    if (!user) return;
+
+    const userRef = doc(db, 'users', user.uid);
+    
+    // Default permissions for different roles
+    const defaultPermissions = {
+      admin: {
+        canManageUsers: true,
+        canManageSubjects: true,
+        canViewReports: true,
+        canManageSchedules: true,
+        canAccessSecurityLogs: true
+      },
+      superadmin: {
+        canManageUsers: true,
+        canManageSubjects: true,
+        canViewReports: true,
+        canManageSchedules: true,
+        canAccessSecurityLogs: true
+      },
+      instructor: {},
+      student: {}
+    };
+
+    const userProfile: UserData = {
+      uid: user.uid,
+      email: user.email ?? '',
+      fullName: additionalData.fullName ?? '',
+      role: additionalData.role ?? 'student',
+      photoURL: user.photoURL ?? additionalData.photoURL ?? null,
+      department: additionalData.department ?? '',
+      idNumber: additionalData.idNumber ?? '',
+      mobileNumber: additionalData.mobileNumber ?? '',
+      major: additionalData.major ?? '',
+      sections: additionalData.sections ?? [],
+      schedule: additionalData.schedule ?? { days: [], startTime: '', endTime: '' },
+      adminPermissions: defaultPermissions[additionalData.role ?? 'student']
+    };
+
+    await setDoc(userRef, userProfile, { merge: true });
+    return userProfile;
   };
 
   const login = async (email: string, password: string): Promise<UserData> => {
@@ -182,6 +240,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     isAdmin: currentUser?.role === 'admin',
     isInstructor: currentUser?.role === 'instructor',
     isStudent: currentUser?.role === 'student',
+    isSuperAdmin: currentUser?.role === 'superadmin',
     login,
     logout
   };

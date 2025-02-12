@@ -1,5 +1,5 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from '../Pages/AuthContext';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { AuthProvider, useAuth, } from '../Pages/AuthContext';
 import Login from '../Pages/Login';
 import Register from '../Pages/Register';
 import Dashboard from '../Pages/Dashboard';
@@ -13,6 +13,12 @@ import SecurityLogsPage from '../Pages/SecurityLogs';
 import EnergyUsagePage from '../Pages/EnergyUsagePage';
 import StudentDashboard from '../Pages/StudentDashboard';
 import Reports from '../Pages/Reports';
+import Users from '../Pages/Users';
+import Schedules from '../Pages/Schedules';
+import TeachersPage from '../Pages/TeachersPage';
+import StudentsPage from '../Pages/StudentsPage';
+import SettingsPage from '../Pages/SettingsPage';
+import Subjects from '../Pages/Subjects';
 
 const App = () => {
   return (
@@ -24,46 +30,46 @@ const App = () => {
           <Route path="/register" element={<Register />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/adminregistration" element={<AdminRegistration />} />
-          <Route path="/attendance" element={<AttendancePage instructorfullName='' />} />
-          <Route path="/securitylogs" element={<SecurityLogsPage />} />
-          <Route path="/energyusage" element={<EnergyUsagePage />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/studentdashboard" element={<StudentDashboard />} />
-          <Route path="/dashboard" element={<PrivateRoute><Dashboard/></PrivateRoute>} />
 
+          {/* Protected routes */}
+          <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+          <Route path="/attendance" element={<PrivateRoute><AttendancePage instructorfullName='' /></PrivateRoute>} />
+          <Route path="/securitylogs" element={<PrivateRoute><SecurityLogsPage /></PrivateRoute>} />
+          <Route path="/energyusage" element={<PrivateRoute><EnergyUsagePage /></PrivateRoute>} />
+          <Route path="/reports" element={<PrivateRoute><Reports /></PrivateRoute>} />
+          <Route path="/studentdashboard" element={<PrivateRoute><StudentDashboard /></PrivateRoute>} />
+          <Route path="/subjects" element={<PrivateRoute><Subjects /></PrivateRoute>} />
+          <Route path="/schedules" element={<PrivateRoute><Schedules /></PrivateRoute>} />
+          <Route path="/teachers" element={<PrivateRoute><TeachersPage /></PrivateRoute>} />
+          <Route path="/schedules" element={<PrivateRoute><Schedules /></PrivateRoute>} />
+          <Route path="/students" element={<PrivateRoute><StudentsPage /></PrivateRoute>} />
+          <Route path="/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
 
-
-           {/* Admin Protected route */}
+          {/* Admin Protected routes */}
           <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+          <Route path="/users" element={<AdminRoute><Users /></AdminRoute>} />
 
-          {/* Root redirect - ONLY if NO other routes match */}
-          <Route path="/login" element={<NavigateToDefault />} />
+          {/* Root redirect */}
           <Route path="/" element={<Navigate to="/login" replace />} />
 
           {/* 404 Not Found */}
           <Route path="*" element={<NotFound />} />
-
         </Routes>
       </Router>
     </AuthProvider>
   );
 };
-const NavigateToDefault = () => {
-  const { currentUser } = useAuth();
-
-  if (!currentUser) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <Navigate to="/dashboard" replace />;
-};
 
 const NotFound = () => {
   return (
-    <div>
-      <h1>404: Page Not Found</h1>
-      <p>The page you are looking for does not exist.</p>
-      {/* You could add a "Go Home" link here */}
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold text-indigo-600 mb-4">404</h1>
+        <p className="text-xl text-gray-600 mb-8">Page not found</p>
+        <Link to="/" className="text-indigo-600 hover:text-indigo-700 font-medium">
+          Go back home
+        </Link>
+      </div>
     </div>
   );
 };

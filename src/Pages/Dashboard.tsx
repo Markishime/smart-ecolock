@@ -1,11 +1,12 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { signOut } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import Sidebar from '../components/Sidebar';
 import {
   LockClosedIcon,
   UserIcon,
@@ -18,12 +19,16 @@ import {
   ChevronDoubleLeftIcon,
   ChatBubbleLeftRightIcon,
   SparklesIcon,
-  AcademicCapIcon,
+  ClipboardDocumentCheckIcon,
   CalendarIcon,
   BookmarkIcon,
-  ShieldCheckIcon,
+  ChartBarIcon,
   XMarkIcon,
-  ClipboardIcon
+  ClipboardIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 
@@ -49,7 +54,8 @@ interface Schedule {
   startTime: string;
   endTime: string;
   roomNumber: string;
-  semester: string;
+  semester?: string;
+  subjectCode: string;
 }
 
 interface Subject {
@@ -76,6 +82,23 @@ interface Section {
   students: string[];
 }
 
+interface AttendanceRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  subject: string;
+  date: string;
+  status: 'present' | 'absent' | 'late';
+  timestamp: any;
+}
+
+interface DashboardStats {
+  totalStudents: number;
+  totalClasses: number;
+  attendanceRate: number;
+  onTimeRate: number;
+}
+
 const InstructorDashboard = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
@@ -84,6 +107,47 @@ const InstructorDashboard = () => {
   const [selectedSection, setSelectedSection] = useState<string>('');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [recentAttendance, setRecentAttendance] = useState<AttendanceRecord[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({
+    totalStudents: 0,
+    totalClasses: 0,
+    attendanceRate: 0,
+    onTimeRate: 0,
+  });
+  const [loading, setLoading] = useState(true);
+
+  const handleRemoveSection = async (sectionId: string) => {
+    try {
+      await updateDoc(doc(db, 'teachers', currentUser!.uid), {
+        sections: instructorData!.sections.filter(s => s.id !== sectionId)
+      });
+      Swal.fire('Success', 'Section deleted successfully!', 'success');
+    } catch (error) {
+      Swal.fire('Error', 'Failed to delete section', 'error');
+    }
+  };
+
+  const handleRemoveSchedule = async (scheduleId: string) => {
+    try {
+      await updateDoc(doc(db, 'teachers', currentUser!.uid), {
+        schedules: instructorData!.schedules.filter(s => s.id !== scheduleId)
+      });
+      Swal.fire('Success', 'Schedule deleted successfully!', 'success');
+    } catch (error) {
+      Swal.fire('Error', 'Failed to delete schedule', 'error');
+    }
+  };
+
+  const handleRemoveSubject = async (subjectId: string) => {
+    try {
+      await updateDoc(doc(db, 'teachers', currentUser!.uid), {
+        subjects: instructorData!.subjects.filter(s => s.id !== subjectId)
+      });
+      Swal.fire('Success', 'Subject deleted successfully!', 'success');
+    } catch (error) {
+      Swal.fire('Error', 'Failed to delete subject', 'error');
+    }
+  };
 
   useEffect(() => {
     if (!currentUser) {
@@ -109,28 +173,112 @@ const InstructorDashboard = () => {
       }
     );
 
+    // Fetch recent attendance records
+    const attendanceQuery = query(
+      collection(db, 'attendance'),
+      orderBy('timestamp', 'desc'),
+      limit(5)
+    );
+
+    const unsubscribeAttendance = onSnapshot(attendanceQuery, (snapshot) => {
+      const records = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as AttendanceRecord));
+      setRecentAttendance(records);
+    });
+
+    // Fetch dashboard statistics
+    const fetchStats = async () => {
+      const studentsQuery = query(collection(db, 'users'), where('role', '==', 'student'));
+      const classesQuery = query(collection(db, 'schedules'));
+      const attendanceQuery = query(collection(db, 'attendance'));
+
+      const unsubscribeStats = onSnapshot(studentsQuery, (studentsSnapshot) => {
+        const totalStudents = studentsSnapshot.size;
+
+        onSnapshot(classesQuery, (classesSnapshot) => {
+          const totalClasses = classesSnapshot.size;
+
+          onSnapshot(attendanceQuery, (attendanceSnapshot) => {
+            const attendanceRecords = attendanceSnapshot.docs.map(doc => doc.data());
+            const totalRecords = attendanceRecords.length;
+            const presentRecords = attendanceRecords.filter(record => record.status === 'present').length;
+            const onTimeRecords = attendanceRecords.filter(record => record.status !== 'late').length;
+
+            setStats({
+              totalStudents,
+              totalClasses,
+              attendanceRate: totalRecords > 0 ? (presentRecords / totalRecords) * 100 : 0,
+              onTimeRate: totalRecords > 0 ? (onTimeRecords / totalRecords) * 100 : 0,
+            });
+            setLoading(false);
+          });
+        });
+      });
+
+      return () => {
+        unsubscribeStats();
+      };
+    };
+
+    fetchStats();
     return () => {
       clearInterval(timer);
       unsubscribeInstructor();
       unsubscribeStudents();
+      unsubscribeAttendance();
     };
   }, [currentUser, navigate, selectedSection]);
 
-  const classStatus = useMemo(() => {
-    if (!instructorData?.schedules?.length) return 'No Schedule';
+  const getClassStatus = useMemo(() => {
+    if (!instructorData?.schedules || !instructorData.schedules.length) {
+      return 'No Schedule';
+    }
     
-    const now = currentTime.getDay() * 24 * 60 + currentTime.getHours() * 60 + currentTime.getMinutes();
-    const [startHour, startMinute] = instructorData.schedules[0].startTime.split(':').map(Number);
-    const [endHour, endMinute] = instructorData.schedules[0].endTime.split(':').map(Number);
-    
-    const classDay = instructorData.schedules[0].days.includes(
-      ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][currentTime.getDay()]
+  
+    const currentTime = new Date();
+    const now = currentTime.getHours() * 60 + currentTime.getMinutes(); // Convert current time to minutes in 24-hour format
+  
+    // Find the schedule for today
+    const todaySchedule = instructorData.schedules.find(schedule => 
+      schedule.days.includes(
+        ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][currentTime.getDay()]
+      )
     );
-
-    return classDay && now >= startHour * 60 + startMinute && now <= endHour * 60 + endMinute 
-      ? 'In Session' 
-      : 'Class Ended';
+  
+    if (!todaySchedule) {
+      return 'No Class Today';
+    }
+  
+    // Parse start and end times in 24-hour format
+    const [startHour, startMinute] = todaySchedule.startTime.split(':').map(Number);
+    const [endHour, endMinute] = todaySchedule.endTime.split(':').map(Number);
+  
+    const classStart = startHour * 60 + startMinute; // Convert start time to minutes
+    const classEnd = endHour * 60 + endMinute; // Convert end time to minutes
+  
+    if (now < classStart) {
+      return 'Class Not Started';
+    } else if (now >= classStart && now <= classEnd) {
+      return 'Class In Session';
+    } else {
+      return 'Class Ended';
+    }
   }, [instructorData?.schedules, currentTime]);
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'present':
+        return <CheckCircleIcon className="w-5 h-5 text-green-500" />;
+      case 'absent':
+        return <XCircleIcon className="w-5 h-5 text-red-500" />;
+      case 'late':
+        return <ClockIcon className="w-5 h-5 text-yellow-500" />;
+      default:
+        return null;
+    }
+  };
 
   const handleUpdateAttendance = async (studentId: string, attended: boolean) => {
     try {
@@ -151,6 +299,7 @@ const InstructorDashboard = () => {
       Swal.fire('Logout Error', 'Failed to logout. Please try again.', 'error');
     }
   };
+  
 
   const mainContentStyle = useMemo(() => ({
     marginLeft: isCollapsed ? '5rem' : '16rem',
@@ -171,19 +320,18 @@ const InstructorDashboard = () => {
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-200">
+    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <Sidebar 
         isCollapsed={isCollapsed} 
         setIsCollapsed={setIsCollapsed} 
-        instructor={instructorData}
+
       />
       
       <div style={mainContentStyle} className="transition-all duration-300">
         <NavBar 
           currentTime={currentTime}
-          handleLogout={handleLogout}
           instructor={instructorData}
-          classStatus={classStatus}
+          classStatus={getClassStatus}
         />
         
         <main className="p-6 mt-16">
@@ -199,10 +347,10 @@ const InstructorDashboard = () => {
                     animate={{ scale: 1 }}
                     transition={{ type: 'spring', stiffness: 100 }}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      classStatus === 'In Session' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                      getClassStatus === 'Class In Session' ? 'bg-green-100 text-green-800' : getClassStatus === 'Class Ended' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
                     }`}
                   >
-                    {classStatus}
+                    {getClassStatus}
                   </motion.span>
                   {instructorData.schedules[0] && (
                     <span className="text-gray-600 text-sm">
@@ -231,7 +379,6 @@ const InstructorDashboard = () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
                 className="bg-white p-6 rounded-xl shadow-lg"
               >
                 <div className="flex items-center gap-3 mb-4">
@@ -315,64 +462,192 @@ const InstructorDashboard = () => {
               </motion.div>
             </div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.6 }}
-              className="bg-white p-6 rounded-xl shadow-lg"
-            >
-              <div className="flex items-center gap-3 mb-4">
-                <ClipboardIcon className="w-8 h-8 text-indigo-600" />
-                <h2 className="text-xl font-semibold">Student Attendance</h2>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left border-b">
-                      <th className="pb-3 text-gray-600">Student Name</th>
-                      <th className="pb-3 text-gray-600">Status</th>
-                      <th className="pb-3 text-gray-600">Time In</th>
-                      <th className="pb-3 text-gray-600">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {students.map((student) => (
-                      <motion.tr
-                        key={student.id}
-                        whileHover={{ scale: 1.02 }}
-                        className="border-b hover:bg-gray-50"
-                      >
-                        <td className="py-3 text-gray-800">{student.name}</td>
-                        <td className="py-3">
-                          <span className={`px-3 py-1 rounded-full text-sm ${
-                            student.attendance 
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}>
-                            {student.attendance ? 'Present' : 'Absent'}
-                          </span>
-                        </td>
-                        <td className="py-3 text-gray-600">
-                          {student.timeIn || '--:--'}
-                        </td>
-                        <td className="py-3">
-                          <button
-                            onClick={() => handleUpdateAttendance(student.id, !student.attendance)}
-                            className={`px-3 py-1 rounded-lg text-sm ${
-                              student.attendance 
-                                ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                                : 'bg-green-100 text-green-700 hover:bg-green-200'
-                            }`}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <UsersIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">Total Students</h2>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">{stats.totalStudents}</p>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <CalendarIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">Total Classes</h2>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">{stats.totalClasses}</p>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.4 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <ChartBarIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">Attendance Rate</h2>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">{stats.attendanceRate.toFixed(1)}%</p>
+              </motion.div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <ClockIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">On-time Rate</h2>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">{stats.onTimeRate.toFixed(1)}%</p>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <ClipboardIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">Recent Attendance</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left border-b">
+                        <th className="pb-3 text-gray-600">Student</th>
+                        <th className="pb-3 text-gray-600">Subject</th>
+                        <th className="pb-3 text-gray-600">Date</th>
+                        <th className="pb-3 text-gray-600">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading ? (
+                        <tr>
+                          <td colSpan={4} className="py-4 text-center text-gray-500">
+                            Loading recent activity...
+                          </td>
+                        </tr>
+                      ) : recentAttendance.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-4 text-center text-gray-500">
+                            No recent attendance records
+                          </td>
+                        </tr>
+                      ) : (
+                        recentAttendance.map((record) => (
+                          <motion.tr
+                            key={record.id}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="border-b"
                           >
-                            {student.attendance ? 'Mark Absent' : 'Mark Present'}
-                          </button>
-                        </td>
-                      </motion.tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </motion.div>
+                            <td className="py-3">
+                              <div className="flex items-center gap-3">
+                                <div className="bg-gray-100 p-2 rounded-full">
+                                  <UsersIcon className="w-5 h-5 text-gray-600" />
+                                </div>
+                                <div>
+                                  <p className="font-medium text-gray-900">{record.studentName}</p>
+                                  <p className="text-sm text-gray-500">ID: {record.studentId}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 text-gray-600">{record.subject}</td>
+                            <td className="py-3 text-gray-600">{record.date}</td>
+                            <td className="py-3">
+                              <div className="flex items-center gap-2">
+                                {getStatusIcon(record.status)}
+                                <span className={`capitalize ${
+                                  record.status === 'present' ? 'text-green-600' :
+                                  record.status === 'absent' ? 'text-red-600' :
+                                  'text-yellow-600'
+                                }`}>
+                                  {record.status}
+                                </span>
+                              </div>
+                            </td>
+                          </motion.tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.4 }}
+                className="bg-white p-6 rounded-xl shadow-lg"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <ClipboardIcon className="w-8 h-8 text-indigo-600" />
+                  <h2 className="text-xl font-semibold">Student Attendance</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left border-b">
+                        <th className="pb-3 text-gray-600">Student Name</th>
+                        <th className="pb-3 text-gray-600">Status</th>
+                        <th className="pb-3 text-gray-600">Time In</th>
+                        <th className="pb-3 text-gray-600">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {students.map((student) => (
+                        <motion.tr
+                          key={student.id}
+                          whileHover={{ scale: 1.02 }}
+                          className="border-b hover:bg-gray-50"
+                        >
+                          <td className="py-3 text-gray-800">{student.name}</td>
+                          <td className="py-3">
+                            <span className={`px-3 py-1 rounded-full text-sm ${
+                              student.attendance 
+                                ? 'bg-green-100 text-green-700'
+                                : 'bg-red-100 text-red-700'
+                            }`}>
+                              {student.attendance ? 'Present' : 'Absent'}
+                            </span>
+                          </td>
+                          <td className="py-3 text-gray-600">
+                            {student.timeIn || '--:--'}
+                          </td>
+                          <td className="py-3">
+                            <button
+                              onClick={() => handleUpdateAttendance(student.id, !student.attendance)}
+                              className={`px-3 py-1 rounded-lg text-sm ${
+                                student.attendance 
+                                  ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                  : 'bg-green-100 text-green-700 hover:bg-green-200'
+                              }`}
+                            >
+                              {student.attendance ? 'Mark Absent' : 'Mark Present'}
+                            </button>
+                          </td>
+                        </motion.tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+            </div>
           </div>
         </main>
         <GeminiChatbot />
@@ -570,107 +845,7 @@ const GeminiChatbot: React.FC = () => {
   );
 };
 
-
-const Sidebar = ({ 
-  isCollapsed,  
-  setIsCollapsed, 
-  instructor
-}: { 
-  isCollapsed: boolean; 
-  setIsCollapsed: React.Dispatch<boolean>;
-  instructor: InstructorData;
-}) => {
-  const navigate = useNavigate();
-
-  return (
-    <div className={`${isCollapsed ? 'w-20' : 'w-64'} bg-indigo-800 text-white shadow-lg fixed h-full z-20 transition-all duration-300`}>
-      <div className="p-6">
-        <div className="flex justify-between items-center">
-          {!isCollapsed ? (
-            <div className="flex items-center gap-3">
-              <LockClosedIcon className="w-8 h-8 text-indigo-200" />
-              <h2 className="text-xl font-bold">Smart EcoLock</h2>
-            </div>
-          ) : (
-            <LockClosedIcon className="w-8 h-8 text-indigo-200 mx-auto" />
-          )}
-          <button 
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-2 rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            {isCollapsed ? (
-              <ChevronDoubleRightIcon className="w-5 h-5 text-indigo-200" />
-            ) : (
-              <ChevronDoubleLeftIcon className="w-5 h-5 text-indigo-200" />
-            )}
-          </button>
-        </div>
-      </div>
-      
-      <nav className="mt-8">
-        <ul className="space-y-2 px-4">
-          <SidebarItem 
-            icon={HomeIcon}
-            label="Dashboard"
-            isCollapsed={isCollapsed}
-            onClick={() => navigate('/dashboard')}
-          />
-          <SidebarItem 
-            icon={CalendarIcon}
-            label="Attendance"
-            isCollapsed={isCollapsed}
-            onClick={() => navigate('/attendance')}
-          />
-          <SidebarItem 
-            icon={BookmarkIcon}
-            label="Reports"
-            isCollapsed={isCollapsed}
-            onClick={() => navigate('/reports')}
-          />
-          <SidebarItem 
-            icon={CogIcon}
-            label="Settings"
-            isCollapsed={isCollapsed}
-            onClick={() => navigate('/settings')}
-          />
-        </ul>
-      </nav>
-
-      <div className="absolute bottom-0 w-full p-4 border-t border-indigo-700">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-full">
-            <UserIcon className="w-5 h-5 text-white" />
-          </div>
-          {!isCollapsed && (
-            <div>
-              <p className="text-sm font-medium truncate">{instructor.fullName}</p>
-              <p className="text-xs text-indigo-300">Instructor</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const SidebarItem = ({ icon: Icon, label, isCollapsed, onClick }: any) => (
-  <li>
-    <button
-      onClick={onClick}
-      className={`flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} w-full p-3 rounded-lg hover:bg-indigo-700 transition-colors group`}
-    >
-      <Icon className="w-6 h-6 text-indigo-200" />
-      {!isCollapsed && <span className="text-sm">{label}</span>}
-      {isCollapsed && (
-        <div className="absolute left-20 bg-gray-900 text-white px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity">
-          {label}
-        </div>
-      )}
-    </button>
-  </li>
-);
-
-const NavBar = ({ currentTime, handleLogout, instructor, classStatus }: any) => {
+const NavBar = ({ currentTime, instructor, classStatus }: any) => {
   const formatDate = (date: Date) => date.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -684,7 +859,7 @@ const NavBar = ({ currentTime, handleLogout, instructor, classStatus }: any) => 
   });
 
   return (
-    <nav className="bg-white shadow-md fixed w-full z-10">
+    <nav className="bg-white shadow-md fixed w-full z-10 ">
       <div className="max-w-7xl mx-auto px-6">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
@@ -703,17 +878,10 @@ const NavBar = ({ currentTime, handleLogout, instructor, classStatus }: any) => 
 
           <div className="flex items-center space-x-4">
             <div className={`px-3 py-1 rounded-full text-sm ${
-              classStatus === 'In Session' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              classStatus === 'Class In Session' ? 'bg-green-100 text-green-800' : classStatus === 'Class Ended' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
             }`}>
               {classStatus}
             </div>
-            <button 
-              onClick={handleLogout}
-              className="flex items-center space-x-2 px-3 py-2 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              <ArrowLeftEndOnRectangleIcon className="w-5 h-5" />
-              <span>Logout</span>
-            </button>
           </div>
         </div>
       </div>
