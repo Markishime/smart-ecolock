@@ -105,7 +105,7 @@ const ClassesPage = () => {
   return (
     <div className="flex h-screen bg-gray-100">
       <Sidebar isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
-      <div className="flex-1 overflow-auto">
+      <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8">
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-gray-800 mb-4">My Classes</h1>

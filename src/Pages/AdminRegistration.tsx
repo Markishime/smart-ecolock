@@ -7,6 +7,7 @@ import { LockClosedIcon, CheckIcon } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { useNavigate, Link } from 'react-router-dom';
 
+
 const AdminRegister: React.FC = () => {
   const [formData, setFormData] = useState({
     fullName: '',

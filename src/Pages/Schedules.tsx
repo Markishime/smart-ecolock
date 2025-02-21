@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, onSnapshot, addDoc, deleteDoc, doc, where, getDocs, updateDoc, getDoc } from 'firebase/firestore';
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  updateDoc, 
+  doc, 
+  arrayUnion,
+  QuerySnapshot, 
+  DocumentData,
+  onSnapshot
+} from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -19,6 +30,7 @@ interface Schedule {
   days: string[];
   startTime: string;
   endTime: string;
+  section: string;
   subject?: string;
   subjectCode?: string;
   instructor?: string;
@@ -48,52 +60,80 @@ const Schedules = () => {
   const isAdmin = currentUser?.role === 'admin';
   const isInstructor = currentUser?.role === 'instructor';
 
-  useEffect(() => {
-    // Fetch all schedules from teachers database
-    const fetchAllSchedules = async () => {
-      try {
-        setLoading(true);
-        const teachersQuery = collection(db, 'teachers');
-        const teachersSnapshot = await getDocs(teachersQuery);
+  // Fetch all schedules from teachers database and subjects database
+  const fetchAllSchedules = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch subjects from subjects database
+      const subjectsQuery = collection(db, 'subjects');
+      const subjectsSnapshot = await getDocs(subjectsQuery);
+      const subjectsMap = new Map(
+        subjectsSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return [
+            doc.id, 
+            {
+              id: doc.id,
+              code: data.code || '',
+              name: data.name || ''
+            } as Subject
+          ];
+        })
+      );
 
-        // Collect all schedules from all teachers
-        const allSchedules: Schedule[] = [];
-        const allSubjects: string[] = [];
+      // Fetch teachers and their schedules
+      const teachersQuery = collection(db, 'teachers');
+      const teachersSnapshot = await getDocs(teachersQuery);
 
-        teachersSnapshot.docs.forEach((teacherDoc) => {
-          const teacherData = teacherDoc.data();
-          const teacherSchedules = teacherData.schedules || [];
-          const teacherSubjects = teacherData.subjects || [];
-          
-          // Add teacher name and department to each schedule
-          const teacherSchedulesWithDetails = teacherSchedules.map((schedule: Schedule) => {
-            // Find the corresponding subject for this schedule
-            const relatedSubject = teacherSubjects.find(
-              (subject: Subject) => subject.code === schedule.subjectCode
-            );
+      // Collect all schedules from all teachers
+      const allSchedules: Schedule[] = [];
 
-            return {
-              ...schedule,
-              subject: relatedSubject ? relatedSubject.name : schedule.subject,
-              instructor: teacherData.fullName,
-              department: teacherData.department
-            };
-          });
+      teachersSnapshot.docs.forEach((teacherDoc) => {
+        const teacherData = teacherDoc.data();
+        const teacherSchedules = teacherData.schedules || [];
+        
+        // Add teacher name and department to each schedule
+        const teacherSchedulesWithDetails = teacherSchedules.map((schedule: Schedule, index: number) => {
+          // Find the corresponding subject for this schedule
+          const relatedSubject = schedule.subject 
+            ? subjectsMap.get(schedule.subject) 
+            : null;
 
-          allSchedules.push(...teacherSchedulesWithDetails);
-          allSubjects.push(...teacherSubjects.map((s: Subject) => s.name));
+          return {
+            ...schedule,
+            id: `${teacherDoc.id}-${schedule.section}`, // Unique ID
+            subject: relatedSubject ? relatedSubject.name : schedule.subject,
+            subjectCode: relatedSubject ? relatedSubject.code : schedule.subjectCode,
+            instructor: teacherData.fullName,
+            department: teacherData.department,
+            semester: teacherData.currentSemester || 'Current Semester'
+          };
         });
 
-        setSchedules(allSchedules);
-        setLoading(false);
-      } catch (error) {
-        console.error("Error fetching all schedules:", error);
-        Swal.fire('Error', 'Failed to fetch schedules', 'error');
-        setLoading(false);
-      }
-    };
+        allSchedules.push(...teacherSchedulesWithDetails);
+      });
 
-    // If user is an admin, fetch all schedules
+      // Sort schedules by start time
+      allSchedules.sort((a, b) => {
+        const timeToMinutes = (time: string) => {
+          const [hours, minutes] = time.split(':').map(Number);
+          return hours * 60 + minutes;
+        };
+        return timeToMinutes(a.startTime) - timeToMinutes(b.startTime);
+      });
+
+      setSchedules(allSchedules);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error fetching schedules:", error);
+      Swal.fire('Error', 'Failed to fetch schedules', 'error');
+      setLoading(false);
+    }
+  };
+
+  // Fetch schedules when component mounts or user changes
+  useEffect(() => {
     if (currentUser && currentUser.role === 'admin') {
       fetchAllSchedules();
     } else if (currentUser) {
@@ -103,10 +143,11 @@ const Schedules = () => {
         where('uid', '==', currentUser.uid)
       );
 
-      const unsubscribe = onSnapshot(teacherQuery, async (snapshot) => {
+      const unsubscribe = onSnapshot(teacherQuery, async (snapshot: QuerySnapshot<DocumentData>) => {
         if (!snapshot.empty) {
           const teacherDoc = snapshot.docs[0];
-          const teacherSchedules = teacherDoc.data().schedules || [];
+          const teacherData = teacherDoc.data();
+          const teacherSchedules = teacherData.schedules || [];
 
           setSchedules(teacherSchedules.map((schedule: Schedule, index: number) => ({
             ...schedule,
@@ -114,9 +155,14 @@ const Schedules = () => {
           })));
         }
         setLoading(false);
-      }, (error) => {
+      }, (error: Error) => {
         console.error("Error fetching schedules:", error);
-        Swal.fire('Error', 'Failed to fetch schedules', 'error');
+        Swal.fire({
+          icon: 'error',
+          title: 'Fetch Error',
+          text: error.message || 'Failed to fetch schedules',
+          confirmButtonColor: '#3b82f6'
+        });
         setLoading(false);
       });
 
@@ -126,125 +172,109 @@ const Schedules = () => {
     }
   }, [currentUser]);
 
-  // Derived Data
+  // Enhanced filtering logic
   const filteredSchedules = useMemo(() => {
-    return schedules.filter(schedule => 
-      (filterOptions.department === 'all' || schedule.department === filterOptions.department) &&
-      (filterOptions.day === 'all' || schedule.days.includes(filterOptions.day)) &&
-      (filterOptions.semester === 'all' || schedule.semester === filterOptions.semester) &&
-      (searchQuery === '' || 
+    return schedules.filter((schedule) => {
+      // Search query filter
+      const matchesSearch = 
+        !searchQuery || 
         schedule.subject?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         schedule.instructor?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        schedule.roomNumber.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    );
-  }, [schedules, filterOptions, searchQuery]);
+        schedule.department?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        schedule.roomNumber?.toLowerCase().includes(searchQuery.toLowerCase());
 
-  const departments = useMemo(() => 
-    Array.from(new Set(schedules.map(s => s.department || 'Unassigned'))), 
-    [schedules]
-  );
+      // Department filter
+      const matchesDepartment = 
+        filterOptions.department === 'all' || 
+        schedule.department === filterOptions.department;
 
-  const days = useMemo(() => 
-    Array.from(new Set(schedules.flatMap(s => s.days))), 
-    [schedules]
-  );
+      // Day filter
+      const matchesDay = 
+        filterOptions.day === 'all' || 
+        (schedule.days && schedule.days.includes(filterOptions.day));
 
-  const semesters = useMemo(() => 
-    Array.from(new Set(schedules.map(s => s.semester || 'Unassigned'))), 
-    [schedules]
-  );
+      // Semester filter
+      const matchesSemester = 
+        filterOptions.semester === 'all' || 
+        schedule.semester === filterOptions.semester;
+
+      return matchesSearch && matchesDepartment && matchesDay && matchesSemester;
+    });
+  }, [schedules, searchQuery, filterOptions]);
+
+  // Dynamic filter options
+  const getDynamicFilterOptions = () => {
+    const departments = Array.from(new Set(schedules.map(s => s.department || 'Unassigned')));
+    const days = Array.from(new Set(schedules.flatMap(s => s.days || [])));
+    const semesters = Array.from(new Set(schedules.map(s => s.semester || 'Current Semester')));
+
+    return { departments, days, semesters };
+  };
+
+  const { departments, days, semesters } = getDynamicFilterOptions();
 
   const handleAddSchedule = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     
-    if (!currentUser) {
-      Swal.fire('Error', 'You must be logged in to add a schedule', 'error');
-      return;
-    }
-
-    const form = e.target as HTMLFormElement;
-    const formData = new FormData(form);
-    
-    const selectedDays = Array.from(formData.getAll('days') as string[]);
-
-    // Validate required fields
-    const requiredFields = ['roomNumber', 'startTime', 'endTime', 'subjectCode'];
-    for (const field of requiredFields) {
-      if (!formData.get(field)) {
-        Swal.fire('Error', `${field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())} is required`, 'error');
-        return;
-      }
-    }
-
     try {
-      let teacherDocRef;
-      
-      // If admin, allow selecting a teacher
-      if (isAdmin) {
-        const selectedTeacherId = formData.get('teacherId') as string;
-        if (!selectedTeacherId) {
-          Swal.fire('Error', 'Please select a teacher', 'error');
-          return;
-        }
-        teacherDocRef = doc(db, 'teachers', selectedTeacherId);
-      } else {
-        // Find the current teacher's document
-        const teacherQuery = query(
-          collection(db, 'teachers'), 
-          where('uid', '==', currentUser.uid)
-        );
+      // Validate form data
+      const formData = new FormData(e.currentTarget);
+      const selectedDays = Array.from(
+        e.currentTarget.querySelectorAll('input[name="days"]:checked')
+      ).map(input => (input as HTMLInputElement).value);
 
-        const teacherSnapshot = await getDocs(teacherQuery);
-        if (teacherSnapshot.empty) {
-          throw new Error('Teacher document not found');
-        }
-
-        teacherDocRef = teacherSnapshot.docs[0].ref;
-      }
-
-      // Fetch current teacher data to get existing schedules and subjects
-      const teacherDoc = await getDoc(teacherDocRef);
-      const currentSchedules = teacherDoc.data()?.schedules || [];
-      const teacherSubjects = teacherDoc.data()?.subjects || [];
-
-      // Find the subject to validate subject code
-      const relatedSubject = teacherSubjects.find(
-        (s: Subject) => s.code === formData.get('subjectCode')
-      );
+      // Find related subject
+      const subjectCode = formData.get('subjectCode') as string;
+      const relatedSubject = schedules.find(s => s.subjectCode === subjectCode);
 
       if (!relatedSubject) {
-        Swal.fire('Error', 'Selected subject code does not exist for this teacher', 'error');
+        Swal.fire('Error', 'Subject not found', 'error');
         return;
       }
 
-      // Create new schedule object
+      // Prepare new schedule
       const newSchedule: Schedule = {
-        id: Date.now().toString(),
+        id: '', // Will be set by Firestore
         roomNumber: formData.get('roomNumber') as string,
         days: selectedDays,
         startTime: formData.get('startTime') as string,
         endTime: formData.get('endTime') as string,
-        subjectCode: formData.get('subjectCode') as string,
-        subject: relatedSubject.name,
+        section: formData.get('section') as string || 'N/A', // Ensure section is always present
+        subjectCode: subjectCode,
+        subject: relatedSubject.subject,
         semester: formData.get('semester') as string || '',
-        department: teacherDoc.data()?.department || ''
+        department: currentUser?.department || 'Unassigned'
       };
 
-      // Add new schedule to existing schedules
-      const updatedSchedules = [...currentSchedules, newSchedule];
+      // Add schedule to teacher's document
+      if (currentUser) {
+        const teacherRef = doc(db, 'teachers', currentUser.uid);
+        
+        // Update teacher's schedules
+        await updateDoc(teacherRef, {
+          schedules: arrayUnion(newSchedule)
+        });
 
-      // Update teacher's document with new schedules
-      await updateDoc(teacherDocRef, { schedules: updatedSchedules });
+        // Refresh schedules based on user role
+        if (currentUser.role === 'admin') {
+          await fetchAllSchedules();
+        }
 
-      // Reset form and close modal
-      form.reset();
-      setShowModal(false);
+        // Show success message
+        Swal.fire({
+          icon: 'success',
+          title: 'Schedule Added',
+          text: `Schedule for ${newSchedule.subject} has been added successfully`,
+          timer: 2000,
+          showConfirmButton: false
+        });
 
-      Swal.fire('Success', 'Schedule added successfully', 'success');
+        // Close modal
+        setShowModal(false);
+      }
     } catch (error) {
       console.error('Error adding schedule:', error);
-      Swal.fire('Error', `Failed to add schedule: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+      Swal.fire('Error', 'Failed to add schedule', 'error');
     }
   };
 
@@ -293,140 +323,220 @@ const Schedules = () => {
     }
   };
 
+  const renderScheduleCard = (schedule: Schedule) => {
+    // Color mapping for different departments
+    const departmentColors: { [key: string]: string } = {
+      'Computer Science': 'bg-blue-50 border-blue-200 text-blue-800',
+      'Mathematics': 'bg-green-50 border-green-200 text-green-800',
+      'Physics': 'bg-purple-50 border-purple-200 text-purple-800',
+      'Engineering': 'bg-indigo-50 border-indigo-200 text-indigo-800',
+      'default': 'bg-gray-50 border-gray-200 text-gray-800'
+    };
+
+    const colorClass = departmentColors[schedule.department || 'default'];
+
+    return (
+      <motion.div
+        key={schedule.id}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className={`
+          ${colorClass}
+          rounded-2xl p-6 
+          border 
+          shadow-md 
+          hover:shadow-lg 
+          transition-all 
+          duration-300 
+          transform 
+          hover:-translate-y-2
+          space-y-4
+        `}
+      >
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="text-xl font-bold mb-2">
+              {schedule.subject || 'Unassigned Subject'}
+            </h3>
+            <div className="flex items-center space-x-3 text-sm text-gray-600">
+              <span className="flex items-center">
+                <ClockIcon className="w-4 h-4 mr-1" />
+                {schedule.startTime} - {schedule.endTime}
+              </span>
+              <span className="flex items-center">
+                <CalendarIcon className="w-4 h-4 mr-1" />
+                {schedule.days?.join(', ') || 'N/A'}
+              </span>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-sm font-medium text-gray-500">
+              Room: {schedule.roomNumber || 'TBD'}
+            </p>
+            <p className="text-sm text-gray-600">
+              {schedule.instructor || 'Unassigned'}
+            </p>
+          </div>
+        </div>
+        <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
+          <span className="text-xs font-medium px-3 py-1 rounded-full 
+            bg-gray-100 text-gray-600">
+            {schedule.department || 'Unassigned Department'}
+          </span>
+          <span className="text-xs font-medium px-3 py-1 rounded-full 
+            bg-gray-100 text-gray-600">
+            {schedule.semester || 'Current Semester'}
+          </span>
+        </div>
+      </motion.div>
+    );
+  };
+
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <Sidebar 
         isCollapsed={isSidebarCollapsed} 
         setIsCollapsed={setIsSidebarCollapsed} 
-        userRole={currentUser?.role as 'admin' | 'instructor' | 'student'}
-        profileImage={currentUser?.photoURL || undefined}
       />
       
-      <main className={`
-        flex-1 overflow-x-hidden overflow-y-auto transition-all duration-300
+      <div className={`
+        flex-1 p-8 transition-all duration-300 
         ${isSidebarCollapsed ? 'ml-20' : 'ml-64'}
-        p-6
+        overflow-y-auto
       `}>
-        <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-800">Schedules</h1>
-            <div className="flex items-center space-x-4">
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <h1 className="text-3xl font-bold text-gray-800 mb-4">
+            Course Schedules
+          </h1>
+          <p className="text-gray-600">
+            View and manage course schedules across departments
+          </p>
+        </motion.div>
+
+        {/* Search and Filter Section */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="mb-8 flex flex-wrap gap-4 items-center justify-between"
+        >
+          <div className="flex-grow max-w-md">
+            <div className="relative">
               <input 
-                type="text" 
-                placeholder="Search schedules..." 
+                type="text"
+                placeholder="Search schedules..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="
-                  px-4 py-2 border border-gray-300 rounded-lg 
+                  w-full px-4 py-2 pl-10 
+                  border border-gray-300 rounded-lg 
                   focus:outline-none focus:ring-2 focus:ring-primary-500
                 "
               />
-              <select 
-                value={filterOptions.department}
-                onChange={(e) => setFilterOptions(prev => ({ ...prev, department: e.target.value }))}
-                className="
-                  px-4 py-2 border border-gray-300 rounded-lg 
-                  focus:outline-none focus:ring-2 focus:ring-primary-500
-                "
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                className="h-5 w-5 absolute left-3 top-3 text-gray-400" 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                stroke="currentColor"
               >
-                <option value="all">All Departments</option>
-                {departments.map(dept => (
-                  <option key={dept} value={dept}>{dept}</option>
-                ))}
-              </select>
-              <select 
-                value={filterOptions.day}
-                onChange={(e) => setFilterOptions(prev => ({ ...prev, day: e.target.value }))}
-                className="
-                  px-4 py-2 border border-gray-300 rounded-lg 
-                  focus:outline-none focus:ring-2 focus:ring-primary-500
-                "
-              >
-                <option value="all">All Days</option>
-                {days.map(day => (
-                  <option key={day} value={day}>{day}</option>
-                ))}
-              </select>
-              {isAdmin && (
-                <button 
-                  onClick={() => setShowModal(true)}
-                  className="
-                    bg-primary-500 text-white 
-                    px-4 py-2 rounded-lg 
-                    hover:bg-primary-600 
-                    transition-colors duration-200
-                    flex items-center space-x-2
-                  "
-                >
-                  <PlusIcon className="h-5 w-5" />
-                  <span>Add Schedule</span>
-                </button>
-              )}
+                <path 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round" 
+                  strokeWidth={2} 
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" 
+                />
+              </svg>
             </div>
           </div>
 
-          {loading ? (
-            <div className="flex justify-center items-center h-64">
-              <p className="mt-4 text-primary-700">Loading schedules...</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredSchedules.map((schedule, index) => (
-                <motion.div
-                  key={schedule.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                  className="
-                    bg-white rounded-2xl shadow-md p-6 
-                    border-l-4 border-primary-500 
-                    hover:shadow-xl transition-all duration-300
-                  "
-                >
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-xl font-bold text-gray-800">
-                        {schedule.subject || 'Unassigned Subject'}
-                      </h3>
-                      <p className="text-sm text-gray-600">
-                        Room: {schedule.roomNumber}
-                      </p>
-                    </div>
-                    <CalendarIcon className="h-8 w-8 text-primary-500" />
-                  </div>
-                  <div className="space-y-2">
-                    <p>
-                      <strong>Instructor:</strong> {schedule.instructor || 'Not assigned'}
-                    </p>
-                    <p>
-                      <strong>Days:</strong> {schedule.days.join(', ')}
-                    </p>
-                    <p>
-                      <strong>Time:</strong> {schedule.startTime} - {schedule.endTime}
-                    </p>
-                    <p>
-                      <strong>Department:</strong> {schedule.department || 'Unassigned'}
-                    </p>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          )}
-
-          {filteredSchedules.length === 0 && !loading && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center text-gray-500 py-12"
+          <div className="flex space-x-4">
+            <select 
+              value={filterOptions.department}
+              onChange={(e) => setFilterOptions(prev => ({ ...prev, department: e.target.value }))}
+              className="
+                px-4 py-2 border border-gray-300 rounded-lg 
+                focus:outline-none focus:ring-2 focus:ring-primary-500
+              "
             >
-              <ClockIcon className="h-16 w-16 mx-auto text-primary-500 mb-4" />
-              <p className="text-xl text-neutral-600">
-                No schedules found matching your search criteria.
-              </p>
-            </motion.div>
-          )}
-        </div>
-      </main>
+              <option value="all">All Departments</option>
+              {departments.map(dept => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
+            </select>
+
+            <select 
+              value={filterOptions.day}
+              onChange={(e) => setFilterOptions(prev => ({ ...prev, day: e.target.value }))}
+              className="
+                px-4 py-2 border border-gray-300 rounded-lg 
+                focus:outline-none focus:ring-2 focus:ring-primary-500
+              "
+            >
+              <option value="all">All Days</option>
+              {days.map(day => (
+                <option key={day} value={day}>{day}</option>
+              ))}
+            </select>
+
+            <select 
+              value={filterOptions.semester}
+              onChange={(e) => setFilterOptions(prev => ({ ...prev, semester: e.target.value }))}
+              className="
+                px-4 py-2 border border-gray-300 rounded-lg 
+                focus:outline-none focus:ring-2 focus:ring-primary-500
+              "
+            >
+              <option value="all">All Semesters</option>
+              {semesters.map(semester => (
+                <option key={semester} value={semester}>{semester}</option>
+              ))}
+            </select>
+
+            {isAdmin && (
+              <button 
+                onClick={() => setShowModal(true)}
+                className="
+                  px-4 py-2 bg-primary-500 text-white 
+                  rounded-lg hover:bg-primary-600 
+                  transition-colors flex items-center
+                "
+              >
+                <PlusIcon className="w-5 h-5 mr-2" />
+                Add Schedule
+              </button>
+            )}
+          </div>
+        </motion.div>
+
+        {/* Schedules Grid */}
+        {loading ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-primary-500"></div>
+          </div>
+        ) : filteredSchedules.length === 0 ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center py-16 bg-white rounded-2xl shadow-md"
+          >
+            <p className="text-xl text-gray-600 mb-4">
+              No schedules found
+            </p>
+            <p className="text-gray-500">
+              Try adjusting your search or filter options
+            </p>
+          </motion.div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredSchedules.map(schedule => renderScheduleCard(schedule))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

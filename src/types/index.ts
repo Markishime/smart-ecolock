@@ -1,11 +1,11 @@
 export interface Schedule {
   id: string;
   days: string[];
-  startTime?: string;
-  endTime?: string;
-  roomNumber?: string;
+  startTime: string;
+  endTime: string;
+  roomNumber: string;
   semester?: string;
-  subject?: string;
+  subjectCode: string;
   createdAt?: Date;
   updatedAt?: Date;
   [key: string]: any;
@@ -39,14 +39,16 @@ export interface Subject {
   [key: string]: any;
 }
 
-export interface InstructorData {
-  id: string;
-  fullName: string;
+export interface Instructor {
+  id?: string;
+  name: string;
+  fullName?: string;
   email: string;
-  department: string;
-  subjects: Subject[];
-  schedules: Schedule[];
-  sections: Section[];
+  department?: string;
+  subjects?: Subject[];
+  schedules?: Schedule[];
+  sections?: Section[];
+  [key: string]: any;
 }
 
 export interface Message {

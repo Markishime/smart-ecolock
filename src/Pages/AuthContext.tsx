@@ -14,6 +14,7 @@ interface EnrichedUser extends FirebaseUser {
   role?: 'admin' | 'instructor' | 'student';
   fullName?: string;
   department?: string;
+  adminPermissions?: boolean;
 }
 
 interface AuthContextType {

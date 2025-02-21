@@ -17,16 +17,7 @@ import {
 import Swal from 'sweetalert2';
 import Sidebar from '../components/Sidebar';
 import { useAuth } from './AuthContext';
-
-interface InstructorData {
-  id: string;
-  fullName: string;
-  email: string;
-  department: string;
-  subjects: Subject[];
-  schedules: Schedule[];
-  sections: Section[];
-}
+import { Instructor } from '../types';
 
 interface Subject {
   id: string;
@@ -70,7 +61,7 @@ interface Student {
 
 const AttendancePage: React.FC<{ instructorfullName: string }> = ({ instructorfullName }) => {
   const { currentUser } = useAuth();
-  const [instructor, setInstructor] = useState<InstructorData | null>(null);
+  const [instructor, setInstructor] = useState<Instructor | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>('');
   const [selectedSubject, setSelectedSubject] = useState<string>('');
@@ -88,9 +79,9 @@ const AttendancePage: React.FC<{ instructorfullName: string }> = ({ instructorfu
 
         if (instructorSnapshot.docs.length > 0) {
           const docData = instructorSnapshot.docs[0].data();
-          const instructorData: InstructorData = {
+          const instructorData: Instructor = {
             id: instructorSnapshot.docs[0].id,
-            fullName: docData.fullName,
+            name: docData.fullName,
             email: docData.email,
             department: docData.department,
             subjects: docData.subjects || [],
@@ -170,7 +161,7 @@ const AttendancePage: React.FC<{ instructorfullName: string }> = ({ instructorfu
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
         userRole={currentUser?.role === 'admin' ? 'admin' : 'instructor'} 
-        instructor={instructor?.fullName}
+        instructor={instructor?.name}
         profileImage={currentUser?.photoURL || undefined}
       />
       <div className="ml-64 flex-1">
@@ -180,7 +171,7 @@ const AttendancePage: React.FC<{ instructorfullName: string }> = ({ instructorfu
               <ClipboardDocumentCheckIcon className="w-8 h-8 text-indigo-600" />
               {selectedSubject ? (
                 <>
-                  {instructor?.subjects.find((s) => s.code === selectedSubject)?.name} - Attendance
+                  {instructor?.subjects?.find((s) => s.code === selectedSubject)?.name || 'Subject'} - Attendance
                 </>
               ) : (
                 'Select a Subject'

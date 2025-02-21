@@ -78,16 +78,29 @@ const Sidebar: React.FC<SidebarProps> = ({
       description: 'Manage users'
     },
     {
-      title: 'Departments',
-      path: '/admin/departments',
-      icon: <BuildingOfficeIcon className="w-6 h-6" />,
-      description: 'Manage departments'
-    },
-    {
       title: 'Schedules',
       path: '/admin/schedules',
-      icon: <ClockIcon className="w-6 h-6" />,
-      description: 'Class schedules'
+      icon: <UsersIcon className="w-6 h-6" />,
+      description: 'Manage Schedules'
+    },
+    {
+      title: 'Subjects',
+      path: '/admin/subjects',
+      icon: <UsersIcon className="w-6 h-6" />,
+      description: 'Manage Subjects'
+    },
+    {
+      title: 'Teachers',
+      path: '/admin/teachers',
+      icon: <UsersIcon className="w-6 h-6" />,
+      description: 'Manage Teachers'
+    },
+    
+    {
+      title: 'Students',
+      path: '/admin/students',
+      icon: <UsersIcon className="w-6 h-6" />,
+      description: 'Manage Students'
     },
     {
       title: 'Reports',
@@ -130,10 +143,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       description: 'Your timetable'
     },
     {
-      title: 'Subjects',
-      path: '/instructor/subjects',
-      icon: <BookOpenIcon className="w-6 h-6" />,
-      description: 'Your subjects'
+      title: 'Settings',
+      path: '/instructor/settings',
+      icon: <Cog6ToothIcon className="w-6 h-6" />,
+      description: 'Your settings'
     },
  
   ];

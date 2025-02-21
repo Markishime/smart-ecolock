@@ -23,6 +23,21 @@ import {
 import Swal from 'sweetalert2';
 import { Link, useNavigate } from 'react-router-dom';
 
+interface Subject {
+  id: string;
+  name: string;
+  details: string;
+  department: string;
+  teacherId: string | null;
+  status: 'active' | 'inactive';
+  schedules: Array<{
+    day: string;
+    startTime: string;
+    endTime: string;
+    section: string;
+  }>;
+}
+
 const Register: React.FC = () => {
   const [formData, setFormData] = useState({
     role: 'student',
@@ -32,7 +47,7 @@ const Register: React.FC = () => {
     mobileNumber: '',
     department: '',
     major: '',
-    yearLevel: '1',
+    yearLevel: '',
     yearsOfExperience: '',
     password: '',
     confirmPassword: '',
@@ -41,7 +56,10 @@ const Register: React.FC = () => {
       days: [] as string[],
       startTime: '',
       endTime: ''
-    }
+    },
+    section: '',
+    subject: '',
+    selectedSchedule: null as any
   });
 
   const [availableData, setAvailableData] = useState({
@@ -65,7 +83,9 @@ const Register: React.FC = () => {
     major: false,
     sections: false,
     scheduleDays: false,
-    scheduleTime: false
+    scheduleTime: false,
+    section: false,
+    subject: false
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -75,11 +95,31 @@ const Register: React.FC = () => {
     hasUpper: false,
     hasLower: false,
     hasNumber: false,
-    hasMinLength: false
+    hasMinLength: false,
+    hasSpecial: false
   });
 
   const [currentStep, setCurrentStep] = useState(1);
   const [formProgress, setFormProgress] = useState(0);
+
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [availableSchedules, setAvailableSchedules] = useState<any[]>([]);
+  const [touched, setTouched] = useState({
+    fullName: false,
+    email: false,
+    password: false,
+    confirmPassword: false,
+    mobileNumber: false,
+    department: false,
+    yearLevel: false,
+    role: false,
+    major: false,
+    sections: false,
+    scheduleDays: false,
+    scheduleTime: false,
+    section: false,
+    subject: false
+  });
 
   const navigate = useNavigate();
 
@@ -102,25 +142,18 @@ const Register: React.FC = () => {
   useEffect(() => {
     // Real-time listeners for available data
     const fetchRealTimeData = () => {
-      // Subjects (Teachers) Listener
-      const subjectsQuery = collection(db, 'teachers');
-      const unsubscribeSubjects = onSnapshot(subjectsQuery, (snapshot) => {
-        const subjects = snapshot.docs
-          .map(doc => doc.data().name)
-          .filter(name => name); // Filter out empty names
-        setAvailableData(prev => ({ ...prev, subjects }));
+      // Fetch sections from students collection
+      const studentsRef = collection(db, 'students');
+      const unsubscribeStudents = onSnapshot(studentsRef, (snapshot) => {
+        const sections = new Set<string>();
+        snapshot.forEach((doc) => {
+          const section = doc.data().section;
+          if (section) sections.add(section);
+        });
+        setAvailableData(prev => ({ ...prev, sections: Array.from(sections).sort() }));
       });
 
-      // Sections Listener
-      const sectionsQuery = collection(db, 'sections');
-      const unsubscribeSections = onSnapshot(sectionsQuery, (snapshot) => {
-        const sections = snapshot.docs
-          .map(doc => doc.data().name)
-          .filter(name => name); // Filter out empty names
-        setAvailableData(prev => ({ ...prev, sections }));
-      });
-
-      // Predefined Departments and Courses
+      // Predefined Departments
       const departments = [
         'Computer Science',
         'Information Technology',
@@ -132,43 +165,47 @@ const Register: React.FC = () => {
         'Chemical Engineering'
       ];
 
-      const courses = [
-        'Computer Science',
-        'Electrical Engineering',
-        'Mechanical Engineering',
-        'Civil Engineering',
-        'Chemical Engineering',
-        'Architecture',
-        'Computer Engineering',
-        'Industrial Engineering',
-        'Nursing',
-        'Hospitality Management',
-        'Information Technology',
-        'Accountancy'
-      ];
-
       setAvailableData(prev => ({
         ...prev,
         departments,
-        courses
+        courses: departments
       }));
 
-      // Cleanup function
       return () => {
-        unsubscribeSubjects();
-        unsubscribeSections();
+        unsubscribeStudents();
       };
     };
 
-    const cleanupListener = fetchRealTimeData();
+    fetchRealTimeData();
+  }, []);
 
+  useEffect(() => {
+    const fetchSubjects = async () => {
+      try {
+        const subjectsCollection = collection(db, 'subjects');
+        const subjectsSnapshot = await getDocs(subjectsCollection);
+        const subjectsData = subjectsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Subject[];
+        setSubjects(subjectsData.filter(subject => subject.status === 'active'));
+      } catch (error) {
+        console.error('Error fetching subjects:', error);
+      }
+    };
+
+    fetchSubjects();
+  }, []);
+
+  useEffect(() => {
     // Password validation effect
     const validatePassword = () => {
       const validations = {
         hasUpper: /[A-Z]/.test(formData.password),
         hasLower: /[a-z]/.test(formData.password),
         hasNumber: /\d/.test(formData.password),
-        hasMinLength: formData.password.length >= 8
+        hasMinLength: formData.password.length >= 8,
+        hasSpecial: /[^A-Za-z0-9]/.test(formData.password)
       };
       setPasswordValidations(validations);
     };
@@ -176,11 +213,7 @@ const Register: React.FC = () => {
     validatePassword();
 
     // Cleanup
-    return () => {
-      if (typeof cleanupListener === 'function') {
-        cleanupListener();
-      }
-    };
+    return () => {};
   }, [formData.password]);
 
   const nextStep = () => {
@@ -223,19 +256,43 @@ const Register: React.FC = () => {
     }));
   };
 
+  const handleSubjectChange = (subjectId: string) => {
+    const selectedSubject = subjects.find(s => s.id === subjectId);
+    setFormData(prev => ({
+      ...prev,
+      subject: subjectId,
+      selectedSchedule: null
+    }));
+
+    if (selectedSubject) {
+      setAvailableSchedules(selectedSubject.schedules || []);
+    } else {
+      setAvailableSchedules([]);
+    }
+  };
+
+  const sections = [
+    { value: 'H1', label: 'Section H1' },
+    { value: 'H2', label: 'Section H2' },
+    { value: 'H3', label: 'Section H3' },
+    { value: 'G1', label: 'Section G1' },
+    { value: 'G2', label: 'Section G2' },
+    { value: 'G3', label: 'Section G3' }
+  ];
+
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsLoading(true);
 
     // Validation for role-specific fields
     if (formData.role === 'student') {
-      if (formData.sections.length === 0) {
-        Swal.fire('Error', 'Please select at least one section', 'error');
+      if (!formData.section) {
+        Swal.fire('Error', 'Please select a section', 'error');
         setIsLoading(false);
         return;
       }
-      if (formData.schedule.days.length === 0) {
-        Swal.fire('Error', 'Please select at least one class day', 'error');
+      if (!formData.yearLevel) {
+        Swal.fire('Error', 'Please select a year level', 'error');
         setIsLoading(false);
         return;
       }
@@ -248,6 +305,7 @@ const Register: React.FC = () => {
       if (!passwordValidations.hasLower) unmetRequirements.push('1 lowercase letter');
       if (!passwordValidations.hasNumber) unmetRequirements.push('1 number');
       if (!passwordValidations.hasMinLength) unmetRequirements.push('8 characters minimum');
+      if (!passwordValidations.hasSpecial) unmetRequirements.push('1 special character');
 
       if (unmetRequirements.length > 0) {
         throw new Error(
@@ -311,7 +369,10 @@ const Register: React.FC = () => {
           major: formData.major,
           yearLevel: formData.yearLevel,
           sections: formData.sections,
-          schedule: formData.schedule
+          schedule: formData.schedule,
+          section: formData.section,
+          subject: formData.subject,
+          selectedSchedule: formData.selectedSchedule
         };
         await setDoc(doc(db, 'students', userCredential.user.uid), studentData);
       }
@@ -478,20 +539,73 @@ const Register: React.FC = () => {
                 label: dept
               })))}
               
-              {formData.role === 'student' ? (
+              {formData.role === 'student' && (
                 <>
+                  {renderSelect('yearLevel', 'Year Level', [
+                    { value: '1st Year', label: '1st Year' },
+                    { value: '2nd Year', label: '2nd Year' },
+                    { value: '3rd Year', label: '3rd Year' },
+                    { value: '4th Year', label: '4th Year' }
+                  ])}
+                  
+                  {renderSelect('section', 'Section', [
+                    { value: '', label: 'Select a section' },
+                    { value: 'H1', label: 'Section H1' },
+                    { value: 'H2', label: 'Section H2' },
+                    { value: 'H3', label: 'Section H3' },
+                    { value: 'G1', label: 'Section G1' },
+                    { value: 'G2', label: 'Section G2' },
+                    { value: 'G3', label: 'Section G3' }
+                  ])}
+                  
+            
+
+                  {/* Schedule Selection - Only show if subject is selected */}
+                  {formData.subject && availableSchedules.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Available Schedules
+                      </label>
+                      <div className="space-y-2">
+                        {availableSchedules.map((schedule, index) => (
+                          <div
+                            key={index}
+                            onClick={() => setFormData(prev => ({
+                              ...prev,
+                              selectedSchedule: schedule,
+                              schedule: {
+                                days: [schedule.day],
+                                startTime: schedule.startTime,
+                                endTime: schedule.endTime
+                              },
+                              section: schedule.section
+                            }))}
+                            className={`cursor-pointer p-3 rounded-lg border ${
+                              formData.selectedSchedule === schedule
+                                ? 'border-indigo-500 bg-indigo-50'
+                                : 'border-gray-300 hover:border-indigo-300'
+                            }`}
+                          >
+                            <p className="font-medium">{schedule.day}</p>
+                            <p className="text-sm text-gray-600">
+                              {schedule.startTime} - {schedule.endTime}
+                            </p>
+                            <p className="text-sm text-gray-600">
+                              Section: {schedule.section}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {renderSelect('major', 'Major', availableData.courses.map(course => ({
                     value: course,
                     label: course
                   })))}
-                  {renderSelect('yearLevel', 'Year Level', [
-                    { value: '1', label: '1st Year' },
-                    { value: '2', label: '2nd Year' },
-                    { value: '3', label: '3rd Year' },
-                    { value: '4', label: '4th Year' }
-                  ])}
                 </>
-              ) : (
+              )}
+              {formData.role === 'instructor' && (
                 renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience')
               )}
             </div>
@@ -501,44 +615,79 @@ const Register: React.FC = () => {
       case 4:
         return (
           <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-white mb-4">Security Setup</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="md:col-span-2 relative">
-                {renderInput('password', 'Password', showPassword ? 'text' : 'password', 'Create a strong password',
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="hover:text-white/80 transition-colors"
-                  >
-                    {showPassword ? <EyeSlashIcon className="w-6 h-6" /> : <EyeIcon className="w-6 h-6" />}
-                  </button>
-                )}
+            <h3 className="text-xl font-semibold text-white mb-4">Set Your Password</h3>
+            <div className="space-y-4">
+              <div>
+                <div className="relative">
+                  {renderInput('password', 'Password', showPassword ? 'text' : 'password', 'Enter your password',
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2 top-[38px] hover:text-white/80 transition-colors"
+                    >
+                      {showPassword ? <EyeSlashIcon className="absolute right-1 bottom-[12px] w-6 h-6" /> : <EyeIcon className="absolute right-1 bottom-[12px] w-6 h-6" />}
+                    </button>
+                  )}
+                </div>
                 
-                {/* Password Validation Indicators */}
-                <div className="absolute -bottom-24 left-0 space-y-1">
-                  {Object.entries(passwordValidations).map(([key, isValid]) => (
-                    <div key={key} className="flex items-center space-x-2">
-                      <CheckIcon className={`w-4 h-4 ${isValid ? 'text-green-400' : 'text-white/30'}`} />
-                      <span className={`text-xs ${isValid ? 'text-green-400' : 'text-white/50'}`}>
-                        {key === 'hasUpper' && 'Uppercase letter'}
-                        {key === 'hasLower' && 'Lowercase letter'}
-                        {key === 'hasNumber' && 'Number'}
-                        {key === 'hasMinLength' && 'Minimum 8 characters'}
-                      </span>
-                    </div>
-                  ))}
+                {/* Password Requirements */}
+                <div className="mt-2 space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-400'}`} />
+                    <span className={`text-sm ${passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-300'}`}>
+                      At least 8 characters
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-400'}`} />
+                    <span className={`text-sm ${passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-300'}`}>
+                      One uppercase letter
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasLower ? 'text-green-400' : 'text-gray-400'}`} />
+                    <span className={`text-sm ${passwordValidations.hasLower ? 'text-green-400' : 'text-gray-300'}`}>
+                      One lowercase letter
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-400'}`} />
+                    <span className={`text-sm ${passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-300'}`}>
+                      One number
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-400'}`} />
+                    <span className={`text-sm ${passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-300'}`}>
+                      One special character
+                    </span>
+                  </div>
                 </div>
               </div>
-
-              {renderInput('confirmPassword', 'Confirm Password', showConfirmPassword ? 'text' : 'password', 'Confirm your password',
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  className="hover:text-white/80 transition-colors"
-                >
-                  {showConfirmPassword ? <EyeSlashIcon className="w-6 h-6" /> : <EyeIcon className="w-6 h-6" />}
-                </button>
-              )}
+              
+              <div className="relative">
+                {renderInput('confirmPassword', 'Confirm Password', showConfirmPassword ? 'text' : 'password', 'Confirm your password',
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-2 top-[38px] hover:text-white/80 transition-colors"
+                  >
+                    {showConfirmPassword ? <EyeSlashIcon className="absolute right-1 bottom-[12px]  w-6 h-6" /> : <EyeIcon className="absolute right-1 bottom-[12px]  w-6 h-6" />}
+                  </button>
+                )}
+                {formData.confirmPassword && (
+                  <div className="mt-2 flex items-center space-x-2">
+                    <CheckIcon 
+                      className={`w-4 h-4 ${formData.password === formData.confirmPassword ? 'text-green-400' : 'text-red-400'}`} 
+                    />
+                    <span 
+                      className={`text-sm ${formData.password === formData.confirmPassword ? 'text-green-400' : 'text-red-400'}`}
+                    >
+                      {formData.password === formData.confirmPassword ? 'Passwords match' : 'Passwords do not match'}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         );
