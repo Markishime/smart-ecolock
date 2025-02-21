@@ -1,8 +1,12 @@
 import { useContext } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import React from "react";
 import { useAuth } from '../Pages/AuthContext';
+import { signOut } from 'firebase/auth';
+import { auth } from '../firebase';
+import { ArrowRightStartOnRectangleIcon } from '@heroicons/react/24/outline';
+import Swal from 'sweetalert2';
 
 interface Subject{
     id: string;
@@ -63,6 +67,27 @@ const NavBar: React.FC<NavBarProps> = ({
   instructor, 
   classStatus 
 }) => {
+  const navigate = useNavigate();
+  const { currentUser } = useAuth();
+
+  const handleLogout = async () => {
+    Swal.fire({
+      title: 'Are you sure?',
+      text: "You will be logged out of the application.",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#3085d6',
+      cancelButtonColor: '#d33',
+      confirmButtonText: 'Yes, log out!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        signOut(auth).then(() => {
+          navigate('/login');
+        });
+      }
+    });
+  };
+
   return (
     <nav className="fixed top-0 left-0 right-0 bg-white shadow-md z-50">
       <div className="container mx-auto px-6 py-4 flex justify-between items-center">
@@ -105,6 +130,15 @@ const NavBar: React.FC<NavBarProps> = ({
               })}
             </p>
           </div>
+
+          {/* Logout Button */}
+          <button 
+            className="flex items-center space-x-2 text-gray-600 hover:text-gray-800"
+            onClick={handleLogout}
+          >
+            <ArrowRightStartOnRectangleIcon className="w-5 h-5" />
+            <span>Logout</span>
+          </button>
         </div>
       </div>
     </nav>

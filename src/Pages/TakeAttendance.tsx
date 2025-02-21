@@ -144,13 +144,6 @@ const TakeAttendance: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed} 
-      />
-      
-      <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
-
         
         <main className="container mx-auto px-6 py-8">
           <div className="bg-white rounded-2xl shadow-lg p-6">
@@ -235,7 +228,6 @@ const TakeAttendance: React.FC = () => {
           </div>
         </main>
       </div>
-    </div>
   );
 };
 

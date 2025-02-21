@@ -4,8 +4,18 @@ import { collection, query, where, onSnapshot, doc, updateDoc, orderBy, limit, g
 import { auth, db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { signOut } from 'firebase/auth';
-import { motion, AnimatePresence } from 'framer-motion';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { 
+  BookOpenIcon, 
+  CalendarIcon, 
+  MapPinIcon, 
+  ClockIcon 
+} from '@heroicons/react/24/outline';
+import { 
+  UserGroupIcon, 
+  AcademicCapIcon 
+} from '@heroicons/react/24/solid';
+import { toast } from 'react-toastify';
 import Sidebar from '../components/Sidebar';
 import NavBar from '../components/NavBar';
 import {
@@ -13,7 +23,6 @@ import {
   UserIcon,
   HomeIcon,
   UsersIcon,
-  UserGroupIcon,
   CogIcon,
   ArrowLeftEndOnRectangleIcon,
   ChevronDoubleRightIcon,
@@ -21,20 +30,15 @@ import {
   ChatBubbleLeftRightIcon,
   SparklesIcon,
   ClipboardDocumentCheckIcon,
-  CalendarIcon,
   BookmarkIcon,
   ChartBarIcon,
   XMarkIcon,
   ClipboardIcon,
   CheckCircleIcon,
   XCircleIcon,
-  ClockIcon,
-  PlusIcon,
   ViewfinderCircleIcon,
-  MapPinIcon,
-  AcademicCapIcon,
-  DocumentCheckIcon,
-  BookOpenIcon
+  PlusIcon,
+  DocumentCheckIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 
@@ -320,6 +324,293 @@ const InstructorDashboard = () => {
   }, [currentUser, navigate, selectedSection]);
 
   useEffect(() => {
+    if (!currentUser) return;
+
+    // Fetch subjects based on schedules
+    const fetchSubjectsFromSchedules = async () => {
+      try {
+        if (!instructorData?.schedules || instructorData.schedules.length === 0) return;
+
+        // Extract unique subject codes from schedules
+        const subjectCodes = [...new Set(
+          instructorData.schedules.map(schedule => schedule.subjectCode)
+        )];
+
+        // If no subject codes, return
+        if (subjectCodes.length === 0) return;
+
+        // Query subjects collection based on subject codes
+        const subjectsQuery = query(
+          collection(db, 'subjects'),
+          where('code', 'in', subjectCodes)
+        );
+
+        const subjectsSnapshot = await getDocs(subjectsQuery);
+        
+        const fetchedSubjects: Subject[] = subjectsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          code: doc.data().code || 'N/A',
+          name: doc.data().name || 'Unnamed Subject',
+        }));
+
+        // Update instructor data with fetched subjects
+        setInstructorData(prev => {
+          if (!prev) return null;
+          
+          return {
+            ...prev,
+            subjects: fetchedSubjects
+          };
+        });
+
+      } catch (error) {
+        console.error('Error fetching subjects:', error);
+        toast.error('Failed to fetch subjects');
+      }
+    };
+
+    fetchSubjectsFromSchedules();
+  }, [currentUser, instructorData?.schedules]);
+
+  const getSectionColor = (section: string) => {
+    const colors: { [key: string]: string } = {
+      'default': 'bg-indigo-50 border-indigo-500',
+      'subjects': 'bg-green-50 border-green-500',
+      'schedules': 'bg-blue-50 border-blue-500',
+      'attendance': 'bg-purple-50 border-purple-500'
+    };
+    return colors[section] || colors['default'];
+  };
+
+  const DashboardSection: React.FC<{
+    title: string, 
+    children: React.ReactNode, 
+    section?: string
+  }> = ({ title, children, section = 'default' }) => (
+    <div
+      className={`rounded-xl shadow-md p-6 ${getSectionColor(section)} 
+        border-l-4 hover:shadow-lg transition-all duration-300`}
+    >
+      <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+
+  const renderSubjectsSection = () => {
+    if (!instructorData?.subjects || instructorData.subjects.length === 0) {
+      return (
+        <DashboardSection title="No Subjects Assigned" section="subjects">
+          <AcademicCapIcon className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+          <p className="text-gray-500">
+            Your current schedules don't have any associated subjects.
+          </p>
+        </DashboardSection>
+      );
+    }
+
+    return (
+      <DashboardSection title="Assigned Subjects" section="subjects">
+        {instructorData.subjects.slice(0, 3).map((subject, index) => (
+          <div
+            key={subject.id || index}
+            className="bg-white shadow-sm hover:shadow-md transition-all duration-300 rounded-lg p-4 flex items-center justify-between"
+          >
+            <div>
+              <h4 className="font-semibold text-gray-800">
+                {subject.name || subject.code || 'Unnamed Subject'}
+              </h4>
+              <p className="text-sm text-gray-500">
+                Code: {subject.code || 'N/A'}
+              </p>
+            </div>
+            <DocumentCheckIcon className="h-6 w-6 text-green-500" />
+          </div>
+        ))}
+        
+        {instructorData.subjects.length > 3 && (
+          <p className="text-sm text-gray-500 text-center mt-2">
+            +{instructorData.subjects.length - 3} more subjects
+          </p>
+        )}
+      </DashboardSection>
+    );
+  };
+
+  const renderQuickStats = () => {
+    const stats = [
+      { 
+        title: 'Total Subjects', 
+        value: instructorData?.subjects?.length || 0,
+        icon: <AcademicCapIcon className="w-6 h-6 text-blue-500" />
+      },
+      { 
+        title: 'Active Schedules', 
+        value: instructorData?.schedules?.length || 0,
+        icon: <CalendarIcon className="w-6 h-6 text-green-500" />
+      },
+      { 
+        title: 'Assigned Students', 
+        value: instructorData?.teacherData?.assignedStudents?.length || 0,
+        icon: <UserGroupIcon className="w-6 h-6 text-purple-500" />
+      }
+    ];
+
+    return (
+      <DashboardSection title="Performance Overview">
+        <div className="grid grid-cols-3 gap-4">
+          {stats.map((stat, index) => (
+            <div
+              key={stat.title}
+              className="bg-white rounded-lg shadow-md p-4 flex items-center space-x-4 hover:shadow-lg transition-all"
+            >
+              <div className="bg-gray-100 p-3 rounded-full">
+                {stat.icon}
+              </div>
+              <div>
+                <p className="text-gray-500 text-sm">{stat.title}</p>
+                <p className="text-2xl font-bold text-gray-800">{stat.value}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </DashboardSection>
+    );
+  };
+
+  const renderScheduleCalendar = () => {
+    const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    
+    return (
+      <DashboardSection title="Weekly Schedule" section="schedules">
+        <div className="grid grid-cols-7 gap-2">
+          {daysOfWeek.map((day, index) => {
+            const daySchedules = instructorData?.schedules?.filter(
+              schedule => schedule.days.includes(day)
+            ) || [];
+
+            return (
+              <div
+                key={day}
+                className={`
+                  rounded-lg p-2 text-center 
+                  ${daySchedules.length > 0 
+                    ? 'bg-blue-50 border-2 border-blue-200' 
+                    : 'bg-gray-100 border-2 border-gray-200'}
+                `}
+              >
+                <p className="font-semibold text-sm mb-1">{day}</p>
+                <p className="text-xs text-gray-600">
+                  {daySchedules.length > 0 
+                    ? `${daySchedules.length} class${daySchedules.length > 1 ? 'es' : ''}` 
+                    : 'No classes'}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        
+        {/* Detailed Schedule List */}
+        <div 
+          className="mt-4 space-y-2"
+        >
+          {instructorData?.schedules?.slice(0, 3).map((schedule, index) => (
+            <div
+              key={schedule.id}
+              className="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center hover:shadow-md transition-all"
+            >
+              <div>
+                <h4 className="font-semibold text-gray-800">{schedule.subject}</h4>
+                <p className="text-sm text-gray-500">
+                  {schedule.days.join(', ')} | {schedule.startTime} - {schedule.endTime}
+                </p>
+              </div>
+              <div className="flex items-center space-x-2">
+                <MapPinIcon className="h-5 w-5 text-blue-500" />
+                <span className="text-sm text-gray-600">{schedule.roomNumber}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </DashboardSection>
+    );
+  };
+
+  const renderAttendanceInsights = () => {
+    // Calculate attendance statistics
+    const totalAttendance = recentAttendance.length;
+    const presentCount = recentAttendance.filter(record => record.status === 'present').length;
+    const attendancePercentage = totalAttendance > 0 
+      ? ((presentCount / totalAttendance) * 100).toFixed(1) 
+      : '0.0';
+
+    return (
+      <DashboardSection title="Attendance Insights" section="attendance">
+        <div className="grid grid-cols-2 gap-4">
+          {/* Attendance Overview */}
+          <div
+            className="bg-white rounded-xl p-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-gray-600 text-sm">Total Attendance</h4>
+              <CheckCircleIcon className="h-6 w-6 text-green-500" />
+            </div>
+            <p className="text-2xl font-bold text-gray-800">{attendancePercentage}%</p>
+            <p className="text-xs text-gray-500">
+              {presentCount} / {totalAttendance} students present
+            </p>
+          </div>
+
+          {/* Time Management */}
+          <div
+            className="bg-white rounded-xl p-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-gray-600 text-sm">On-Time Rate</h4>
+              <ClockIcon className="h-6 w-6 text-blue-500" />
+            </div>
+            <p className="text-2xl font-bold text-gray-800">
+              {(stats.onTimeRate * 100).toFixed(1)}%
+            </p>
+            <p className="text-xs text-gray-500">Punctuality metric</p>
+          </div>
+        </div>
+
+        {/* Recent Attendance List */}
+        <div 
+          className="mt-4 space-y-2"
+        >
+          {recentAttendance.slice(0, 5).map((activity, index) => (
+            <div
+              key={index}
+              className={`
+                rounded-lg p-3 flex items-center justify-between
+                ${activity.status === 'present' 
+                  ? 'bg-green-50 border-l-4 border-green-500' 
+                  : 'bg-red-50 border-l-4 border-red-500'}
+              `}
+            >
+              <div>
+                <p className="font-medium text-gray-800">{activity.studentName}</p>
+                <p className="text-sm text-gray-600">{activity.timestamp || 'No time recorded'}</p>
+              </div>
+              <span className={`
+                px-2 py-1 rounded-full text-xs font-medium
+                ${activity.status === 'present' 
+                  ? 'bg-green-100 text-green-800' 
+                  : 'bg-red-100 text-red-800'}
+              `}>
+                {activity.status === 'present' ? 'Present' : 'Absent'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </DashboardSection>
+    );
+  };
+
+  useEffect(() => {
     // Ensure we have a current user
     if (!currentUser) return;
 
@@ -530,39 +821,31 @@ const InstructorDashboard = () => {
     className?: string, 
     onClick?: () => void 
   }) => (
-    <motion.div
+    <div
       className={`bg-white shadow-lg rounded-xl p-6 space-y-4 border border-gray-100 hover:shadow-xl transition-all duration-300 ${className}`}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
       onClick={onClick}
     >
       <div className="flex justify-between items-center">
         <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
         {onClick && (
-          <motion.button
-            whileHover={{ rotate: 90 }}
+          <button 
             className="text-blue-500 hover:text-blue-600"
           >
             <PlusIcon className="h-6 w-6" />
-          </motion.button>
+          </button>
         )}
       </div>
       {children}
-    </motion.div>
+    </div>
   );
 
   const RefreshButton = ({ onRefresh }: { onRefresh: () => void }) => (
-    <motion.button
+    <button
       onClick={onRefresh}
-      whileHover={{ rotate: 180 }}
-      whileTap={{ scale: 0.9 }}
       className="text-gray-500 hover:text-blue-600 transition-colors duration-300"
     >
       <ViewfinderCircleIcon className="h-6 w-6" />
-    </motion.button>
+    </button>
   );
 
   const filteredStudents = useMemo(() => {
@@ -612,11 +895,7 @@ const InstructorDashboard = () => {
   if (!instructorData) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-100">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-12 h-12 border-t-2 border-b-2 border-indigo-500 rounded-full"
-        />
+        <div className="w-12 h-12 border-t-2 border-b-2 border-indigo-500 rounded-full" />
       </div>
     );
   }
@@ -636,7 +915,7 @@ const InstructorDashboard = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {/* Profile and Class Overview */}
             <div className="md:col-span-2 space-y-8">
-              <div className="bg-white rounded-2xl shadow-lg p-6">
+              <DashboardSection title="Welcome, Instructor">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-gray-800">
                     Welcome, {instructorData.fullName.split(' ')[0]}
@@ -680,77 +959,18 @@ const InstructorDashboard = () => {
 
                   <div>
                     <h3 className="text-lg font-semibold text-gray-700 mb-4">Assigned Subjects</h3>
-                    {instructorData.subjects?.length > 0 ? (
-                      <div className="space-y-2">
-                        {instructorData.subjects.slice(0, 3).map(subject => (
-                          <div 
-                            key={subject.id} 
-                            className="bg-gray-100 rounded-lg p-3 flex justify-between items-center"
-                          >
-                            <div>
-                              <p className="font-medium text-gray-800">{subject.code || 'N/A'}</p>
-                              <p className="text-sm text-gray-600">{subject.name || 'Unnamed Subject'}</p>
-                            </div>
-                          </div>
-                        ))}
-                        {instructorData.subjects.length > 3 && (
-                          <p className="text-sm text-gray-500 text-center mt-2">
-                            +{instructorData.subjects.length - 3} more
-                          </p>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-gray-500">No subjects assigned</p>
-                    )}
+                    {renderSubjectsSection()}
                   </div>
                 </div>
-              </div>
+              </DashboardSection>
 
               {/* Quick Stats */}
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Performance Overview</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                  {[
-                    { 
-                      title: 'Total Students', 
-                      value: stats.totalStudents, 
-                      icon: <UserGroupIcon className="w-6 h-6 text-blue-500" /> 
-                    },
-                    { 
-                      title: 'Total Classes', 
-                      value: stats.totalClasses, 
-                      icon: <AcademicCapIcon className="w-6 h-6 text-green-500" /> 
-                    },
-                    { 
-                      title: 'Attendance Rate', 
-                      value: `${stats.attendanceRate.toFixed(1)}%`, 
-                      icon: <CheckCircleIcon className="w-6 h-6 text-purple-500" /> 
-                    },
-                    { 
-                      title: 'On-Time Rate', 
-                      value: `${stats.onTimeRate.toFixed(1)}%`, 
-                      icon: <ClockIcon className="w-6 h-6 text-orange-500" /> 
-                    }
-                  ].map((stat, index) => (
-                    <div 
-                      key={stat.title} 
-                      className="bg-gray-100 rounded-xl p-4 flex items-center gap-4 hover:shadow-md transition-all"
-                    >
-                      {stat.icon}
-                      <div>
-                        <p className="text-sm text-gray-600">{stat.title}</p>
-                        <p className="text-xl font-bold text-gray-800">{stat.value}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {renderQuickStats()}
             </div>
 
             {/* Sidebar with Recent Activities and Attendance Management */}
             <div className="space-y-8">
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Recent Activities</h2>
+              <DashboardSection title="Recent Activities">
                 {recentAttendance.length > 0 ? (
                   <div className="space-y-4">
                     {recentAttendance.slice(0, 5).map((activity) => (
@@ -774,9 +994,9 @@ const InstructorDashboard = () => {
                 ) : (
                   <p className="text-gray-500 text-center">No recent activities</p>
                 )}
-              </div>
+              </DashboardSection>
 
-              <div className="bg-white rounded-2xl shadow-lg p-6">
+              <DashboardSection title="Attendance Management">
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-2xl font-bold text-gray-800">Attendance Management</h2>
                   <button 
@@ -883,8 +1103,11 @@ const InstructorDashboard = () => {
                     </button>
                   </div>
                 </div>
-              </div>
-            </div>
+              </DashboardSection>
+              {renderScheduleCalendar()}
+              {renderAttendanceInsights()}
+              <GeminiChatbot />
+            </div>  
           </div>
         </main>
       </div>
@@ -993,13 +1216,9 @@ const GeminiChatbot: React.FC = () => {
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
-      <AnimatePresence>
+      <div>
         {isOpen && (
-          <motion.div 
-            key="chatbot-container"
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
+          <div 
             className="w-96 h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
           >
             {/* Chatbot Header */}
@@ -1019,11 +1238,8 @@ const GeminiChatbot: React.FC = () => {
             {/* Messages Container */}
             <div className="flex-grow overflow-y-auto p-4 space-y-3">
               {messages.map((msg) => (
-                <motion.div
+                <div
                   key={msg.id}
-                  initial={{ opacity: 0, x: msg.sender === 'user' ? 20 : -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.3 }}
                   className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div 
@@ -1035,7 +1251,7 @@ const GeminiChatbot: React.FC = () => {
                   >
                     {msg.content}
                   </div>
-                </motion.div>
+                </div>
               ))}
               {isLoading && (
                 <div className="text-center text-gray-500 italic">
@@ -1063,19 +1279,17 @@ const GeminiChatbot: React.FC = () => {
                 Send
               </button>
             </div>
-          </motion.div>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
 
       {/* Chatbot Trigger Button */}
-      <motion.button
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
+      <button
         onClick={toggleChatbot}
         className="bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 transition-colors"
       >
         <ChatBubbleLeftRightIcon className="w-6 h-6" />
-      </motion.button>
+      </button>
     </div>
   );
 };
