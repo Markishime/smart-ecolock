@@ -9,7 +9,8 @@ import {
   getDocs, 
   onSnapshot 
 } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { auth, db, rtdb, listenForNewRFIDTag } from '../firebase';
+import { getDatabase, ref, get, set, remove, onValue, off } from 'firebase/database';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LockClosedIcon, 
@@ -18,7 +19,8 @@ import {
   EyeIcon,
   EyeSlashIcon,
   AcademicCapIcon,
-  UserIcon 
+  UserIcon,
+  CreditCardIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { Link, useNavigate } from 'react-router-dom';
@@ -36,6 +38,18 @@ interface Subject {
     endTime: string;
     section: string;
   }>;
+}
+
+interface UserData {
+  uid: string;
+  fullName: string;
+  idNumber: string;
+  email: string;
+  mobileNumber: string;
+  role: string;
+  createdAt: string;
+  rfidUid?: string;
+  [key: string]: string | string[] | undefined; // Allow additional dynamic properties
 }
 
 const Register: React.FC = () => {
@@ -59,7 +73,8 @@ const Register: React.FC = () => {
     },
     section: '',
     subject: '',
-    selectedSchedule: null as any
+    selectedSchedule: null as any,
+    rfidUid: '' // New field for RFID UID
   });
 
   const [availableData, setAvailableData] = useState({
@@ -85,7 +100,8 @@ const Register: React.FC = () => {
     scheduleDays: false,
     scheduleTime: false,
     section: false,
-    subject: false
+    subject: false,
+    rfidUid: false // New field for RFID UID
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -118,8 +134,11 @@ const Register: React.FC = () => {
     scheduleDays: false,
     scheduleTime: false,
     section: false,
-    subject: false
+    subject: false,
+    rfidUid: false // New field for RFID UID
   });
+
+  const [isRegistered, setIsRegistered] = useState(false);
 
   const navigate = useNavigate();
 
@@ -216,6 +235,51 @@ const Register: React.FC = () => {
     return () => {};
   }, [formData.password]);
 
+  useEffect(() => {
+    // Listen for RFID tag updates from Firebase
+    const rfidRef = ref(rtdb, '/NewRFIDTag');
+    
+    const handleRFIDUpdate = (snapshot: any) => {
+      const newUid = snapshot.val();
+      if (newUid) {
+        setFormData(prev => ({
+          ...prev,
+          rfidUid: newUid
+        }));
+      }
+    };
+
+    onValue(rfidRef, handleRFIDUpdate);
+
+    // Cleanup subscription
+    return () => {
+      off(rfidRef);
+    };
+  }, []);
+
+  useEffect(() => {
+    const registerUID = async (newUid: string) => {
+      if (!isRegistered) {
+        const database = getDatabase();
+        const uidRef = ref(database, '/RegisteredUIDs/' + newUid);
+        const snapshot = await get(uidRef);
+        if (!snapshot.exists()) {
+          await set(uidRef, { registered: true });
+          setIsRegistered(true);
+          alert('UID registered successfully!');
+        } else {
+          alert('This UID is already registered.');
+        }
+      } else {
+        alert('This UID has already been registered.');
+      }
+    };
+
+    if (formData.rfidUid) {
+      registerUID(formData.rfidUid);
+    }
+  }, [formData.rfidUid, isRegistered]);
+
   const nextStep = () => {
     if (currentStep < steps.length) {
       setCurrentStep(prev => prev + 1);
@@ -284,119 +348,78 @@ const Register: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Validation for role-specific fields
-    if (formData.role === 'student') {
-      if (!formData.section) {
-        Swal.fire('Error', 'Please select a section', 'error');
-        setIsLoading(false);
-        return;
-      }
-      if (!formData.yearLevel) {
-        Swal.fire('Error', 'Please select a year level', 'error');
-        setIsLoading(false);
-        return;
-      }
+    // Validate form data
+    if (formData.password !== formData.confirmPassword) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Passwords do not match',
+        text: 'Please ensure your passwords are the same.'
+      });
+      setIsLoading(false);
+      return;
     }
 
     try {
-      // Validate password requirements
-      const unmetRequirements = [];
-      if (!passwordValidations.hasUpper) unmetRequirements.push('1 uppercase letter');
-      if (!passwordValidations.hasLower) unmetRequirements.push('1 lowercase letter');
-      if (!passwordValidations.hasNumber) unmetRequirements.push('1 number');
-      if (!passwordValidations.hasMinLength) unmetRequirements.push('8 characters minimum');
-      if (!passwordValidations.hasSpecial) unmetRequirements.push('1 special character');
-
-      if (unmetRequirements.length > 0) {
-        throw new Error(
-          `Password must contain at least:\n${unmetRequirements
-            .map(req => `- ${req}`)
-            .join('\n')}`
-        );
-      }
-
-      if (formData.password !== formData.confirmPassword) {
-        throw new Error('Passwords do not match');
-      }
-
-      if (formData.role === 'instructor' && (isNaN(Number(formData.yearsOfExperience)) || Number(formData.yearsOfExperience) < 0)) {
-        throw new Error('Years of experience must be a valid number');
-      }
-
-      // Check if ID number is already registered in both collections
-      const collections = ['students', 'teachers'];
-      for (const coll of collections) {
-        const idQuery = query(
-          collection(db, coll), 
-          where('idNumber', '==', formData.idNumber)
-        );
-        const idSnapshot = await getDocs(idQuery);
-
-        if (!idSnapshot.empty) {
-          throw new Error('ID number already registered');
-        }
-      }
-
-      // Create user authentication
+      // Create user with email and password
       const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        formData.email,
+        auth, 
+        formData.email, 
         formData.password
       );
+      const user = userCredential.user;
 
-      // Prepare base user data
-      const userData = {
-        uid: userCredential.user.uid,
+      // Prepare user data with a more flexible type
+      const userData: UserData = {
+        uid: user.uid,
         fullName: formData.fullName,
         idNumber: formData.idNumber,
         email: formData.email,
         mobileNumber: formData.mobileNumber,
         role: formData.role,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        rfidUid: formData.rfidUid
       };
 
-      // Add role-specific data
-      if (formData.role === 'instructor') {
-        const instructorData = {
-          ...userData,
-          department: formData.department,
-          yearsOfExperience: Number(formData.yearsOfExperience)
-        };
-        await setDoc(doc(db, 'teachers', userCredential.user.uid), instructorData);
-      } else {
-        const studentData = {
-          ...userData,
-          major: formData.major,
-          yearLevel: formData.yearLevel,
-          sections: formData.sections,
-          schedule: formData.schedule,
-          section: formData.section,
-          subject: formData.subject,
-          selectedSchedule: formData.selectedSchedule
-        };
-        await setDoc(doc(db, 'students', userCredential.user.uid), studentData);
+      // Add role-specific data dynamically
+      if (formData.role === 'student') {
+        userData.department = formData.department;
+        userData.major = formData.major;
+        userData.yearLevel = formData.yearLevel;
+        userData.section = formData.section;
+      } else if (formData.role === 'instructor') {
+        userData.department = formData.department;
+        userData.yearsOfExperience = formData.yearsOfExperience;
+        userData.subject = formData.subject;
       }
 
-      // Success handling
+      // Store user data in Firestore
+      const userRef = doc(db, formData.role + 's', user.uid);
+      await setDoc(userRef, userData);
+
+      // If RFID UID is provided, store it in the UIDs collection
+      if (formData.rfidUid) {
+        const uidRef = doc(db, 'UIDs', formData.rfidUid);
+        await setDoc(uidRef, {
+          uid: user.uid,
+          role: formData.role,
+          fullName: formData.fullName
+        });
+      }
+
       Swal.fire({
         icon: 'success',
         title: 'Registration Successful!',
-        text: `Welcome ${formData.role === 'student' ? 'Student' : 'Instructor'}`,
-        showConfirmButton: false,
-        timer: 2000,
-        background: '#f8fafc',
-        iconColor: '#3b82f6'
+        text: 'Your account has been created.'
       });
 
+      // Navigate to login or dashboard
       navigate('/login');
-    } catch (error) {
-      console.error('Registration error:', error);
+    } catch (error: any) {
+      console.error('Registration Error:', error);
       Swal.fire({
         icon: 'error',
         title: 'Registration Failed',
-        text: error instanceof Error ? error.message : 'An error occurred',
-        confirmButtonColor: '#3b82f6',
-        background: '#f8fafc',
+        text: error.message || 'An error occurred during registration.'
       });
     } finally {
       setIsLoading(false);
@@ -521,10 +544,50 @@ const Register: React.FC = () => {
           <div className="space-y-6">
             <h3 className="text-xl font-semibold text-white mb-4">Personal Information</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* RFID Card Input */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-white/90">
+                  RFID Card
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    name="rfidUid"
+                    value={formData.rfidUid}
+                    readOnly
+                    className={`
+                      w-full px-4 py-3 pl-12
+                      bg-white/10 border border-white/20 rounded-xl
+                      text-white placeholder-white/50
+                      focus:outline-none focus:ring-2 focus:ring-white/30
+                      transition-all duration-200
+                      ${formData.rfidUid ? 'border-green-400' : 'border-white/20'}
+                    `}
+                    placeholder="Tap your RFID card..."
+                  />
+                  <CreditCardIcon 
+                    className={`
+                      absolute left-3 top-3.5 w-5 h-5
+                      transition-colors duration-200
+                      ${formData.rfidUid ? 'text-green-400' : 'text-white/50'}
+                    `}
+                  />
+                  {formData.rfidUid && (
+                    <div className="absolute right-3 top-3.5 flex items-center space-x-1">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                      <span className="text-sm text-green-400">Card detected</span>
+                    </div>
+                  )}
+                </div>
+                <p className="text-sm text-white/60 mt-1">
+                  Place your RFID card near the reader
+                </p>
+              </div>
               {renderInput('fullName', 'Full Name', 'text', 'Enter your full name')}
               {renderInput('idNumber', 'ID Number', 'text', 'Enter your ID number')}
               {renderInput('email', 'Email', 'email', 'Enter your email')}
               {renderInput('mobileNumber', 'Mobile Number', 'tel', 'Enter your mobile number')}
+              
             </div>
           </div>
         );

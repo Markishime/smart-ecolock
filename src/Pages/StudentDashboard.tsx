@@ -3,7 +3,6 @@ import { useAuth } from '../Pages/AuthContext';
 import { db } from '../firebase';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
-import Sidebar from '../components/Sidebar';
 import {
   ChartBarIcon,
   CalendarIcon,
@@ -18,6 +17,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { format, parseISO, startOfWeek, endOfWeek, eachDayOfInterval } from 'date-fns';
+import Sidebar from '../components/Sidebar';
 
 interface Student {
   uid: string;

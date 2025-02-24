@@ -23,7 +23,8 @@ import AdminSchedules from '../Pages/AdminSchedules';
 import Subjects from '../Pages/Subjects';
 import AdminSubjects from '../Pages/AdminSubjects';
 import TakeAttendance from '../Pages/TakeAttendance';
-
+import { handleRFIDRegistration } from '../firebase';
+import RFIDRegistrationPage from '../Pages/Register';
 const App = () => {
   return (
     <Router>
@@ -31,9 +32,10 @@ const App = () => {
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/adminregistration" element={<AdminRegistration />} />
+          <Route path="/rfid-registration" element={<RFIDRegistrationPage />} />
 
           {/* Admin routes */}
           <Route path="/admin/dashboard" element={<PrivateRoute roles={['admin']}><AdminDashboard /></PrivateRoute>} />

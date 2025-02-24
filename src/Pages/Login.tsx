@@ -10,9 +10,18 @@ import {
   EyeSlashIcon,
   CheckIcon,
   NumberedListIcon,
+  AcademicCapIcon,
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { useAuth } from '../Pages/AuthContext';
+
+interface UserData {
+  id: string;
+  fullName: string;
+  email: string;
+  idNumber: string;
+  role?: string;
+}
 
 const Login: React.FC = () => {
   const [idNumber, setIdNumber] = useState('');
@@ -20,6 +29,7 @@ const Login: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [inputFocus, setInputFocus] = useState({
+      
     id: false,
     password: false
   });
@@ -33,10 +43,11 @@ const Login: React.FC = () => {
     try {
       const collections = [
         { name: 'users', role: 'admin' },
-        { name: 'teachers', role: 'instructor' }
+        { name: 'teachers', role: 'instructor' },
+        { name: 'students', role: 'student' }
       ];
 
-      let userData = null;
+      let userData: UserData | null = null;
       let userEmail = '';
       let userRole = '';
 
@@ -47,7 +58,7 @@ const Login: React.FC = () => {
 
         if (!snapshot.empty) {
           const userDoc = snapshot.docs[0];
-          userData = userDoc.data();
+          userData = { id: userDoc.id, ...userDoc.data() } as UserData;
           userEmail = userData.email;
           userRole = col.role;
           break;
@@ -58,10 +69,14 @@ const Login: React.FC = () => {
         throw new Error('No user found with this ID number');
       }
 
-      // Use the login function from AuthContext
+      // Login with email/password
       await login(userEmail, password);
 
-      // Success message
+      // Store user role and data in localStorage or context
+      localStorage.setItem('userRole', userRole);
+      localStorage.setItem('userData', JSON.stringify(userData));
+
+      // Success message with role-specific text
       Swal.fire({
         icon: 'success',
         title: `Welcome, ${userData.fullName}!`,
@@ -71,6 +86,15 @@ const Login: React.FC = () => {
         background: '#f8fafc',
         iconColor: '#3b82f6'
       });
+
+      // Redirect based on role
+      if (userRole === 'student') {
+        navigate('/students/dashboard');
+      } else if (userRole === 'instructor') {
+        navigate('/instructor/dashboard');
+      } else {
+        navigate('/admin');
+      }
 
     } catch (error) {
       console.error("Login Error:", error);
@@ -115,6 +139,20 @@ const Login: React.FC = () => {
 
           {/* Login Form */}
           <form onSubmit={handleLogin} className="space-y-6">
+            <div className="mb-8">
+              <div className="flex items-center justify-center space-x-2">
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-white/10 text-white">
+                  Student
+                </span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-white/10 text-white">
+                  Instructor
+                </span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-white/10 text-white">
+                  Admin
+                </span>
+              </div>
+            </div>
+
             <div>
               <label className="block text-white/90 text-sm font-medium mb-2">
                 ID Number
@@ -136,7 +174,8 @@ const Login: React.FC = () => {
                   placeholder="Enter your ID number"
                   required
                 />
-                <NumberedListIcon className="absolute right-3 top-3 w-6 h-6 text-white/50" />
+                <div className="absolute left-3 top-3">
+                </div>
               </div>
             </div>
 
@@ -210,7 +249,7 @@ const Login: React.FC = () => {
 
             <p className="text-center text-white/80">
               Don't have an account?{' '}
-              <Link to="/register" className="text-white font-medium hover:underline">
+              <Link to="/rfid-registration" className="text-white font-medium hover:underline">
                 Sign up
               </Link>
             </p>
