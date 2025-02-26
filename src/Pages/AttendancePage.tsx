@@ -15,7 +15,6 @@ import {
   ClipboardDocumentCheckIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
-import Sidebar from '../components/Sidebar';
 import { useAuth } from './AuthContext';
 import { Instructor } from '../types';
 
@@ -157,13 +156,6 @@ const AttendancePage: React.FC<{ instructorfullName: string }> = ({ instructorfu
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed}
-        setIsCollapsed={setIsCollapsed}
-        userRole={currentUser?.role === 'admin' ? 'admin' : 'instructor'} 
-        instructor={instructor?.name}
-        profileImage={currentUser?.photoURL || undefined}
-      />
       <div className="ml-64 flex-1">
         <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center mb-8">

@@ -15,7 +15,7 @@ import {
   XCircleIcon, 
   ClockIcon 
 } from '@heroicons/react/24/solid';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';  
 
 interface Student {
   id: string;
@@ -144,7 +144,7 @@ const TakeAttendance: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-        
+      <AdminSidebar />
         <main className="container mx-auto px-6 py-8">
           <div className="bg-white rounded-2xl shadow-lg p-6">
             <div className="flex justify-between items-center mb-6">

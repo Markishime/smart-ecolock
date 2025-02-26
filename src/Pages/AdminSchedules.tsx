@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, doc, updateDoc, getDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import {
   ClockIcon,
   PlusIcon,
@@ -313,11 +313,7 @@ const AdminSchedules = () => {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Sidebar 
-        isCollapsed={isSidebarCollapsed} 
-        setIsCollapsed={setIsSidebarCollapsed} 
-        userRole="admin"
-      />
+      <AdminSidebar />
       
       <div className={`flex-1 transition-all duration-300 ${isSidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
         <div className="p-8">

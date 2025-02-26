@@ -19,7 +19,7 @@ import {
   ChevronDownIcon,
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import { useAuth } from './AuthContext';
 import {
   Chart as ChartJS,
@@ -273,11 +273,7 @@ const Reports: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed} 
-        userRole="admin"
-      />
+      <AdminSidebar />
       
       <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8">

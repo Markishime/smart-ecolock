@@ -20,7 +20,7 @@ import {
   XMarkIcon,
   ClockIcon,
 } from '@heroicons/react/24/solid';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
 import { useAuth } from './AuthContext';
 
@@ -395,10 +395,7 @@ const Schedules = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isSidebarCollapsed} 
-        setIsCollapsed={setIsSidebarCollapsed} 
-      />
+      <AdminSidebar />
       
       <div className={`
         flex-1 p-8 transition-all duration-300 

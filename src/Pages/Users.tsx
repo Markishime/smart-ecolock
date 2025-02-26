@@ -12,8 +12,9 @@ import {
   ViewColumnsIcon,
   CheckIcon
 } from '@heroicons/react/24/solid';
-import Sidebar from '../components/Sidebar';
+import Sidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
+import AdminSidebar from '../components/AdminSidebar';
 
 interface User {
   id: string;
@@ -777,7 +778,7 @@ const Users = () => {
 
   return (
     <div className="flex h-screen bg-gray-100">
-      <Sidebar isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+      <AdminSidebar />
       
       <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8 space-y-8">

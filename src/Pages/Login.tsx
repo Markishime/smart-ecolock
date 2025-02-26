@@ -93,7 +93,7 @@ const Login: React.FC = () => {
       } else if (userRole === 'instructor') {
         navigate('/instructor/dashboard');
       } else {
-        navigate('/admin');
+        navigate('/admin/dashboard');
       }
 
     } catch (error) {

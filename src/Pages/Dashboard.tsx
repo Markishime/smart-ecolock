@@ -17,7 +17,6 @@ import {
   AcademicCapIcon 
 } from '@heroicons/react/24/solid';
 import { toast } from 'react-toastify';
-import Sidebar from '../components/Sidebar';
 import NavBar from '../components/NavBar';
 import {
   LockClosedIcon,

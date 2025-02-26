@@ -16,9 +16,11 @@ import {
 } from '@heroicons/react/24/solid';
 import { collection, query, onSnapshot, where, doc, updateDoc, deleteDoc, addDoc, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
-import Sidebar from '../components/Sidebar';
 import { useAuth } from './AuthContext';
 import Swal from 'sweetalert2';
+import AdminSidebar from '../components/AdminSidebar';
+import UserModal from '../components/UserModal';
+import { theme } from '../styles/theme';
 
 interface Student {
   id: string;
@@ -64,6 +66,8 @@ const StudentsPage: React.FC = () => {
     key: 'name' as keyof Student,
     direction: 'asc' as 'asc' | 'desc'
   });
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
 
   // Real-time data subscription
   useEffect(() => {
@@ -238,14 +242,14 @@ const StudentsPage: React.FC = () => {
     return 'th';
   };
 
+  const openUserModal = (userId: string) => {
+    setSelectedUserId(userId);
+    setIsUserModalOpen(true);
+  };
+
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed} 
-        userRole={currentUser?.role}
-        profileImage={currentUser?.photoURL || undefined}
-      />
+      <AdminSidebar />
       
       <main className={`flex-1 transition-all duration-300 ${isCollapsed ? 'ml-20' : 'ml-64'} p-8 overflow-y-auto`}>
         <div className="max-w-7xl mx-auto">
@@ -439,6 +443,12 @@ const StudentsPage: React.FC = () => {
                               className="text-red-600 hover:text-red-900"
                             >
                               <TrashIcon className="h-5 w-5" />
+                            </button>
+                            <button
+                              onClick={() => openUserModal(student.id)}
+                              className={theme.components.button.secondary}
+                            >
+                              View/Edit Details
                             </button>
                           </div>
                         </td>
@@ -681,6 +691,13 @@ const StudentsPage: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <UserModal
+        isOpen={isUserModalOpen}
+        onClose={() => setIsUserModalOpen(false)}
+        userId={selectedUserId}
+        userType="student"
+      />
     </div>
   );
 };

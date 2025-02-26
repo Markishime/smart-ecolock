@@ -13,7 +13,7 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
 import {
   AcademicCapIcon,
@@ -573,7 +573,7 @@ const AdminDashboard: React.FC = () => {
       <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100 transition-colors duration-300">
 
         {/* Sidebar */}
-        <Sidebar isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+        <AdminSidebar />
        
         <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         

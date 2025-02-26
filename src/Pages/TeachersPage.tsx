@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, deleteDoc, doc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import Modal from '../components/Modal';
 import { UserGroupIcon, PlusIcon, AcademicCapIcon, FunnelIcon } from '@heroicons/react/24/solid';
 import { useAuth } from './AuthContext';
@@ -26,7 +26,6 @@ interface Subject {
 
 const TeachersPage: React.FC = () => {
   const { currentUser } = useAuth();
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [filteredTeachers, setFilteredTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -35,6 +34,7 @@ const TeachersPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  
 
   useEffect(() => {
     const fetchSubjectsAndTeachers = async () => {
@@ -124,14 +124,9 @@ const TeachersPage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed} 
-        userRole="admin"
-        profileImage={currentUser?.photoURL || undefined}
-      />
+      <AdminSidebar />
       
-      <div className={`flex-1 transition-all duration-300 ${isCollapsed ? 'ml-20' : 'ml-64'} p-8 overflow-y-auto`}>
+      <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-8 overflow-y-auto">
         <div className="container mx-auto">
           {/* Header Section */}
           <div className="flex justify-between items-center mb-8">

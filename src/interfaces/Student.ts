@@ -6,7 +6,9 @@ export interface Student {
   department: string;
   section: string;
   year: string;
-  courses: string[];
+  major: string;
+  yearLevel: string;
+  courses?: string[];
   attendance: {
     [courseId: string]: {
       present: number;
@@ -19,4 +21,9 @@ export interface Student {
   };
   rfidUid?: string;
   createdAt: string;
+  schedule?: {
+    days: string[];
+    startTime: string;
+    endTime: string;
+  };
 } 

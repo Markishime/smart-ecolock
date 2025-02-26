@@ -27,7 +27,7 @@ import {
   addDoc 
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
 import { useAuth } from '../Pages/AuthContext';
 import { Subject, Instructor, DepartmentSubjects } from '../types';
@@ -290,11 +290,7 @@ const Subjects: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed}
-        userRole={currentUser?.role}
-      />
+      <AdminSidebar />
       
       <main className={`flex-1 overflow-x-hidden overflow-y-auto transition-all duration-300 ${isCollapsed ? 'ml-20' : 'ml-64'}`}>
         <div className="container mx-auto p-6">

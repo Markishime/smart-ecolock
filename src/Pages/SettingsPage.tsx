@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import { CogIcon, UserIcon, LockClosedIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid';
 import { useAuth } from './AuthContext';
 import { SettingsSection } from '../types';
@@ -82,12 +82,7 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Sidebar 
-        isCollapsed={isCollapsed} 
-        setIsCollapsed={setIsCollapsed} 
-        userRole={currentUser?.role}
-        profileImage={currentUser?.photoURL || undefined}
-      />
+      <AdminSidebar />
       
       <div className={`flex-1 transition-all duration-300 ${isCollapsed ? 'ml-20' : 'ml-64'} p-8 overflow-y-auto`}>
         <div className="container mx-auto">

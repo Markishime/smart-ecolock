@@ -25,6 +25,9 @@ import AdminSubjects from '../Pages/AdminSubjects';
 import TakeAttendance from '../Pages/TakeAttendance';
 import { handleRFIDRegistration } from '../firebase';
 import RFIDRegistrationPage from '../Pages/Register';
+import AdminSections from '../Pages/AdminSectionPage';
+import AdminSidebar from '../components/AdminSidebar';
+import RoomsPage from '../Pages/RoomsPage';
 const App = () => {
   return (
     <Router>
@@ -48,7 +51,8 @@ const App = () => {
           <Route path="/admin/energyusage" element={<PrivateRoute roles={['admin']}><EnergyUsagePage /></PrivateRoute>} />
           <Route path="/admin/schedules" element={<PrivateRoute roles={['admin']}><AdminSchedules /></PrivateRoute>} />
           <Route path="/admin/subjects" element={<PrivateRoute roles={['admin']}><AdminSubjects /></PrivateRoute>} />
-
+          <Route path="/admin/sections" element={<PrivateRoute roles={['admin']}><AdminSections /></PrivateRoute>} />
+          <Route path="/admin/rooms" element={<PrivateRoute roles={['admin']}><RoomsPage /></PrivateRoute>} />
           {/* Instructor routes */}
           <Route path="/instructor/dashboard" element={<PrivateRoute roles={['instructor']}><Dashboard /></PrivateRoute>} />
           <Route path="/instructor/attendance" element={<PrivateRoute roles={['instructor']}><AttendancePage instructorfullName='' /></PrivateRoute>} />

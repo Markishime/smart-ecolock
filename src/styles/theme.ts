@@ -1,44 +1,47 @@
 export const theme = {
   colors: {
     primary: {
-      light: '#3B82F6',  // Soft Blue
-      main: '#2563EB',   // Deeper Blue
-      dark: '#1D4ED8',   // Dark Blue
+      light: 'bg-blue-50',
+      DEFAULT: 'bg-blue-600',
+      dark: 'bg-blue-700',
+      text: 'text-blue-600',
+      hover: 'hover:bg-blue-700'
     },
     secondary: {
-      light: '#10B981',  // Soft Green
-      main: '#059669',   // Deeper Green
-      dark: '#047857',   // Dark Green
+      light: 'bg-purple-50',
+      DEFAULT: 'bg-purple-600',
+      dark: 'bg-purple-700',
+      text: 'text-purple-600'
     },
-    background: {
-      light: '#F3F4F6',  // Light Gray
-      main: '#E5E7EB',   // Medium Gray
-      dark: '#D1D5DB',   // Dark Gray
+    accent: {
+      light: 'bg-rose-50',
+      DEFAULT: 'bg-rose-600',
+      dark: 'bg-rose-700',
+      text: 'text-rose-600'
+    }
+  },
+  components: {
+    button: {
+      primary: "flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors",
+      secondary: "flex items-center px-4 py-2 border border-purple-200 text-purple-700 rounded-lg hover:bg-purple-50 transition-colors",
+      danger: "flex items-center px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors"
     },
-    text: {
-      primary: '#111827', // Almost Black
-      secondary: '#4B5563', // Dark Gray
-      tertiary: '#6B7280', // Light Gray
-    },
-    error: {
-      light: '#F87171',  // Soft Red
-      main: '#EF4444',   // Deeper Red
-      dark: '#DC2626',   // Dark Red
-    },
-    success: {
-      light: '#34D399',  // Soft Green
-      main: '#10B981',   // Deeper Green
-      dark: '#059669',   // Dark Green
+    card: "bg-white rounded-xl shadow-sm border border-blue-100/50 p-6",
+    input: "w-full p-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent",
+    badge: {
+      success: "bg-green-100 text-green-800",
+      error: "bg-rose-100 text-rose-800",
+      warning: "bg-amber-100 text-amber-800",
+      info: "bg-blue-100 text-blue-800"
     }
   },
   typography: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: {
-      small: '0.75rem',
-      base: '1rem',
-      large: '1.25rem',
-      heading: '1.5rem'
-    }
+    h1: 'text-4xl font-bold',
+    h2: 'text-3xl font-bold',
+    h3: 'text-2xl font-bold',
+    h4: 'text-xl font-bold',
+    body: 'text-base',
+    small: 'text-sm'
   },
   spacing: {
     xs: '0.25rem',
@@ -50,7 +53,7 @@ export const theme = {
   borderRadius: {
     sm: '0.25rem',
     md: '0.5rem',
-    lg: '0.75rem',
+    lg: '1rem',
     full: '9999px'
   }
 };
@@ -88,7 +91,25 @@ export const darkTheme = {
       dark: '#10B981',   // Dark Green
     }
   },
-  typography: theme.typography,
-  spacing: theme.spacing,
-  borderRadius: theme.borderRadius
+  typography: {
+    h1: 'text-4xl font-bold',
+    h2: 'text-3xl font-bold',
+    h3: 'text-2xl font-bold',
+    h4: 'text-xl font-bold',
+    body: 'text-base',
+    small: 'text-sm'
+  },
+  spacing: {
+    xs: '0.25rem',
+    sm: '0.5rem',
+    md: '1rem',
+    lg: '1.5rem',
+    xl: '2rem'
+  },
+  borderRadius: {
+    sm: '0.25rem',
+    md: '0.5rem',
+    lg: '1rem',
+    full: '9999px'
+  }
 };

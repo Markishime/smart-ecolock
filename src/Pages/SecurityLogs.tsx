@@ -11,7 +11,7 @@ import {
   FunnelIcon,
   XMarkIcon
 } from '@heroicons/react/24/solid';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
 
 // Define interface for security logs
@@ -109,11 +109,7 @@ const SecurityLogsPage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gray-100">
-      <Sidebar 
-        userRole="admin"
-        isCollapsed={isCollapsed}
-        setIsCollapsed={setIsCollapsed}
-      />
+      <AdminSidebar />
       <div className="flex-1 overflow-hidden">
         <div className="p-8 h-full flex flex-col">
           <div className="flex justify-between items-center mb-6">

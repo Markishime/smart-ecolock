@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion } from 'framer-motion';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import { 
   BoltIcon,
   ChartBarIcon,
@@ -197,7 +197,7 @@ const EnergyUsagePage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-       <Sidebar isCollapsed={sidebarCollapsed} setIsCollapsed={setSidebarCollapsed} userRole="admin" />
+       <AdminSidebar />
       
        <div className={`flex-1 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8">

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
-import Sidebar from '../components/Sidebar';
+import AdminSidebar from '../components/AdminSidebar';
 import { format } from 'date-fns';
 
 interface Class {
@@ -92,7 +92,7 @@ const ClassesPage = () => {
   if (loading) {
     return (
       <div className="flex h-screen">
-        <Sidebar isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+        <AdminSidebar />
         <div className="flex-1 p-8">
           <div className="flex justify-center items-center h-full">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
@@ -104,7 +104,7 @@ const ClassesPage = () => {
 
   return (
     <div className="flex h-screen bg-gray-100">
-      <Sidebar isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+      <AdminSidebar />
       <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8">
           <div className="mb-6">
