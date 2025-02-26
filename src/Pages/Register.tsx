@@ -10,7 +10,7 @@ import {
   onSnapshot 
 } from 'firebase/firestore';
 import { auth, db, rtdb, listenForNewRFIDTag } from '../firebase';
-import { getDatabase, ref, get, set, remove, onValue, off } from 'firebase/database';
+import { getDatabase, ref, get, set, remove, onValue, off, DataSnapshot  } from 'firebase/database';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LockClosedIcon, 
@@ -237,18 +237,22 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     // Listen for RFID tag updates from Firebase
-    const rfidRef = ref(rtdb, '/NewRFIDTag');
+    const rfidRef = ref(rtdb, '/UnregisteredUIDs');
     
-    const handleRFIDUpdate = (snapshot: any) => {
-      const newUid = snapshot.val();
-      if (newUid) {
-        setFormData(prev => ({
-          ...prev,
-          rfidUid: newUid
-        }));
+    const handleRFIDUpdate = (snapshot: DataSnapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const firstKey = Object.keys(data)[0];
+        const uidData = data[firstKey];
+        if (uidData && uidData.uid) {
+          setFormData(prev => ({
+            ...prev,
+            rfidUid: uidData.uid
+          }));
+        }
       }
     };
-
+  
     onValue(rfidRef, handleRFIDUpdate);
 
     // Cleanup subscription
@@ -300,49 +304,6 @@ const Register: React.FC = () => {
         : value
     }));
   };
-
-  const handleSectionSelect = (section: string) => {
-    setFormData(prev => ({
-      ...prev,
-      sections: prev.sections.includes(section)
-        ? prev.sections.filter(s => s !== section)
-        : [...prev.sections, section]
-    }));
-  };
-
-  const handleScheduleChange = (field: string, value: string | string[]) => {
-    setFormData(prev => ({
-      ...prev,
-      schedule: {
-        ...prev.schedule,
-        [field]: value
-      }
-    }));
-  };
-
-  const handleSubjectChange = (subjectId: string) => {
-    const selectedSubject = subjects.find(s => s.id === subjectId);
-    setFormData(prev => ({
-      ...prev,
-      subject: subjectId,
-      selectedSchedule: null
-    }));
-
-    if (selectedSubject) {
-      setAvailableSchedules(selectedSubject.schedules || []);
-    } else {
-      setAvailableSchedules([]);
-    }
-  };
-
-  const sections = [
-    { value: 'H1', label: 'Section H1' },
-    { value: 'H2', label: 'Section H2' },
-    { value: 'H3', label: 'Section H3' },
-    { value: 'G1', label: 'Section G1' },
-    { value: 'G2', label: 'Section G2' },
-    { value: 'G3', label: 'Section G3' }
-  ];
 
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
