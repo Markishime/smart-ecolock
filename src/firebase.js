@@ -52,7 +52,7 @@ export const handleRFIDRegistration = async (uid) => {
   }
 };
 
-export const listenForNewRFIDTag = (callback: (uid: string) => void): (() => void) => {
+export const listenForNewRFIDTag = (callback) => {
   const rfidRef = ref(rtdb, 'NewRFIDTag');
   
   const unsubscribe = onValue(rfidRef, (snapshot) => {
