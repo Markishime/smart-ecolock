@@ -23,6 +23,7 @@ interface AuthContextType {
   register: (email: string, password: string, userData: any) => Promise<void>;
   logout: () => Promise<void>;
   loading: boolean;
+  setUser: (user: { uid: string; email: string; role: string }) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -105,16 +106,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const enrichedUser = await getUserData(user) as EnrichedUser;
       setCurrentUser(enrichedUser);
       
-      if (enrichedUser.role) {
-        const roleRoutes = {
-          admin: '/admin/dashboard',
-          instructor: '/instructor/dashboard',
-          student: '/students/dashboard'
-        };
-        console.log('Redirecting to:', roleRoutes[enrichedUser.role]); // Debug log
-        navigate(roleRoutes[enrichedUser.role], { replace: true });
-      } else {
-        throw new Error('User role not found');
+      const userRole = localStorage.getItem('userRole');
+      const routes = {
+        admin: '/admin/dashboard',
+        instructor: '/instructor/dashboard',
+        student: '/student/dashboard'
+      };
+
+      if (userRole) {
+        navigate(routes[userRole as keyof typeof routes], { replace: true });
       }
     } catch (error: any) {
       console.error("Login error:", error);
@@ -143,12 +143,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const setUser = (user: { uid: string; email: string; role: string }) => {
+    // Implementation of setUser method
+  };
+
   const value = {
     currentUser,
     login,
     register,
     logout,
-    loading
+    loading,
+    setUser
   };
 
   return (

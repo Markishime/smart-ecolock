@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { db, auth } from '../firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 import {
   LockClosedIcon,
   ArrowPathIcon,
@@ -21,6 +21,14 @@ interface UserData {
   email: string;
   idNumber: string;
   role?: string;
+  department?: string;
+}
+
+interface TeacherData {
+  idNumber: string;
+  fullName: string;
+  department: string;
+  email: string;
 }
 
 const Login: React.FC = () => {
@@ -33,7 +41,7 @@ const Login: React.FC = () => {
     id: false,
     password: false
   });
-  const { login } = useAuth();
+  const { login, setUser } = useAuth();
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -41,20 +49,22 @@ const Login: React.FC = () => {
     setIsLoading(true);
 
     try {
+      // First find the user by ID number
+      let userEmail = '';
+      let userRole = '';
+      let userData: UserData | null = null;
+
+      // Check each collection for the ID number
       const collections = [
         { name: 'users', role: 'admin' },
         { name: 'teachers', role: 'instructor' },
         { name: 'students', role: 'student' }
       ];
 
-      let userData: UserData | null = null;
-      let userEmail = '';
-      let userRole = '';
-
       for (const col of collections) {
         const collectionRef = collection(db, col.name);
-        const userQuery = query(collectionRef, where("idNumber", "==", idNumber));
-        const snapshot = await getDocs(userQuery);
+        const q = query(collectionRef, where("idNumber", "==", idNumber));
+        const snapshot = await getDocs(q);
 
         if (!snapshot.empty) {
           const userDoc = snapshot.docs[0];
@@ -69,41 +79,37 @@ const Login: React.FC = () => {
         throw new Error('No user found with this ID number');
       }
 
-      // Login with email/password
+      // Login with email/password and wait for it to complete
       await login(userEmail, password);
 
-      // Store user role and data in localStorage or context
+      // Store user data
       localStorage.setItem('userRole', userRole);
       localStorage.setItem('userData', JSON.stringify(userData));
 
-      // Success message with role-specific text
-      Swal.fire({
-        icon: 'success',
-        title: `Welcome, ${userData.fullName}!`,
-        text: `Logged in as ${userRole}`,
-        showConfirmButton: false,
-        timer: 1500,
-        background: '#f8fafc',
-        iconColor: '#3b82f6'
-      });
-
-      // Redirect based on role
-      if (userRole === 'student') {
-        navigate('/students/dashboard');
-      } else if (userRole === 'instructor') {
-        navigate('/instructor/dashboard');
-      } else {
-        navigate('/admin/dashboard');
+      if (userRole === 'instructor') {
+        localStorage.setItem('teacherData', JSON.stringify({
+          idNumber: userData.idNumber,
+          fullName: userData.fullName,
+          department: userData.department,
+          email: userData.email
+        }));
       }
 
+      Swal.fire({
+        icon: 'success',
+        title: 'Login Successful',
+        text: `Welcome back, ${userData.fullName}!`,
+        showConfirmButton: false,
+        timer: 1500
+      });
+
+      // Let the AuthContext handle the navigation
     } catch (error) {
-      console.error("Login Error:", error);
+      console.error('Login error:', error);
       Swal.fire({
         icon: 'error',
         title: 'Login Failed',
-        text: error instanceof Error ? error.message : 'Invalid credentials',
-        background: '#f8fafc',
-        confirmButtonColor: '#3b82f6'
+        text: error instanceof Error ? error.message : 'Invalid credentials'
       });
     } finally {
       setIsLoading(false);
