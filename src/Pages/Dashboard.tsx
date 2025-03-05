@@ -47,21 +47,13 @@ import {
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
+import { Student } from '../interfaces/Student';
 
 interface Message {
   id: string;
   content: string;
   sender: 'user' | 'ai';
   timestamp: Date;
-}
-
-interface Student {
-  id: string;
-  name: string;
-  section: string;
-  attendance: boolean;
-  timeIn?: string;
-  status?: 'present' | 'absent' | 'late';
 }
 
 interface Schedule {
@@ -348,6 +340,13 @@ const InstructorDashboard = () => {
   const [lastAccess, setLastAccess] = useState<string | null>(null);
   const [currentDaySchedule, setCurrentDaySchedule] = useState<ProcessedSchedule[]>([]);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(true);
+  const [selectedStudent, setSelectedStudent] = useState<string>('');
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
+    totalStudents: 0,
+    totalClasses: 0,
+    attendanceRate: 0,
+    onTimeRate: 0
+  });
 
   const handleRemoveSection = async (sectionId: string) => {
     try {
@@ -479,11 +478,19 @@ const InstructorDashboard = () => {
       (snapshot) => {
         const studentsList = snapshot.docs.map(doc => ({
           id: doc.id,
-          name: doc.data().name || '',
+          fullName: doc.data().fullName || doc.data().name || '',
+          idNumber: doc.data().idNumber || '',
+          email: doc.data().email || '',
+          department: doc.data().department || '',
           section: doc.data().section || '',
+          major: doc.data().major || '',
+          yearLevel: doc.data().yearLevel || '',
+          grades: doc.data().grades || [],
+          createdAt: doc.data().createdAt || new Date(),
           attendance: doc.data().attendance || false,
-          timeIn: doc.data().timeIn,
+          timeIn: doc.data().timeIn || null,
           lastAttendance: doc.data().attendanceHistory?.[0] || null,
+          year: doc.data().yearLevel || '',
           ...doc.data()
         })) as Student[];
         setStudents(studentsList);
@@ -522,6 +529,13 @@ const InstructorDashboard = () => {
             const presentRecords = attendanceRecords.filter(record => record.status === 'present').length;
             const onTimeRecords = attendanceRecords.filter(record => record.status !== 'late').length;
 
+            setDashboardStats({
+              totalStudents,
+              totalClasses,
+              attendanceRate: totalRecords > 0 ? (presentRecords / totalRecords) * 100 : 0,
+              onTimeRate: totalRecords > 0 ? (onTimeRecords / totalRecords) * 100 : 0
+            });
+
             setLoading(false);
           });
         });
@@ -533,157 +547,13 @@ const InstructorDashboard = () => {
     };
 
     fetchStats();
+
     return () => {
       clearInterval(timer);
       unsubscribeStudents();
       unsubscribeAttendance();
     };
   }, [currentUser, navigate, selectedSection]);
-
-  useEffect(() => {
-    if (!currentUser) return;
-
-    // Fetch subjects based on schedules
-    const fetchSubjectsFromSchedules = async () => {
-      try {
-        if (!instructorData?.schedules || instructorData.schedules.length === 0) return;
-
-        // Extract unique subject codes from schedules
-        const subjectCodes = [...new Set(
-          instructorData.schedules.map(schedule => schedule.subject)
-        )];
-
-        // If no subject codes, return
-        if (subjectCodes.length === 0) return;
-
-        // Query subjects collection based on subject codes
-        const subjectsQuery = query(
-          collection(db, 'subjects'),
-          where('code', 'in', subjectCodes)
-        );
-
-        const subjectsSnapshot = await getDocs(subjectsQuery);
-        
-        const subjects = subjectsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          code: doc.data().code || '',
-          name: doc.data().name || '',
-          ...doc.data()
-        })) as Subject[];
-
-        // Update instructor data with fetched subjects
-        setInstructorData(prev => {
-          if (!prev) return null;
-          
-          return {
-            ...prev,
-            subjects: subjects
-          };
-        });
-
-      } catch (error) {
-        console.error('Error fetching subjects:', error);
-        toast.error('Failed to fetch subjects');
-      }
-    };
-
-    fetchSubjectsFromSchedules();
-  }, [currentUser, instructorData?.schedules]);
-
-  useEffect(() => {
-    const fetchSchedules = async () => {
-      if (!currentUser?.email) return;
-
-      const schedulesRef = collection(db, 'schedules');
-      const q = query(
-        schedulesRef,
-        where('teacherId', '==', currentUser.email)
-      );
-
-      const querySnapshot = await getDocs(q);
-      const scheduleList = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        day: doc.data().day,
-        subject: doc.data().subject,
-        classes: doc.data().classes || [],
-        room: doc.data().room || 'TBA',
-        timestamp: doc.data().timestamp || new Date().getTime()
-      }));
-
-      setSchedules(processSchedules(scheduleList).sort((a, b) => a.timestamp - b.timestamp));
-    };
-    fetchSchedules();
-  }, [currentUser, db]);
-
-  useEffect(() => {
-    const fetchAccessLogs = async () => {
-      try {
-        const accessLogsQuery = query(collection(db, 'accessLogs'));
-        const accessLogsSnapshot = await getDocs(accessLogsQuery);
-        const logs = accessLogsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          timestamp: doc.data().timestamp,
-          type: doc.data().type,
-          room: doc.data().room,
-          userId: doc.data().userId,
-          status: doc.data().status,
-          location: doc.data().location,
-          deviceId: doc.data().deviceId
-        }));
-        setAccessLogs(logs);
-        setLastAccess(logs[0]?.timestamp || null);
-      } catch (error) {
-        console.error('Error fetching access logs:', error);
-      }
-    };
-    fetchAccessLogs();
-  }, [db]);
-
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-
-    const fetchSchedules = () => {
-      const today = new Date().toLocaleString('en-US', { weekday: 'short' });
-      const teacherSchedulesRef = collection(db, 'schedules');
-      
-      const scheduleQuery = query(
-        teacherSchedulesRef,
-        where('teacherId', '==', currentUser.uid)
-      );
-
-      const unsubscribe = onSnapshot(scheduleQuery, (snapshot) => {
-        const allSchedules = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as TeacherSchedule[];
-
-        const todaySchedules = allSchedules
-          .filter(schedule => schedule.day === today)
-          .map(schedule => {
-            const [hours, minutes] = schedule.classes[0].time.split(':').map(Number);
-            const scheduleTime = new Date();
-            scheduleTime.setHours(hours, minutes, 0, 0);
-            
-            return {
-              ...schedule,
-              timestamp: scheduleTime.getTime(),
-              status: getClassStatus(scheduleTime, schedule.classes[0].duration || 60)
-            } as ProcessedSchedule;
-          })
-          .sort((a, b) => a.timestamp - b.timestamp);
-
-setCurrentDaySchedule(todaySchedules);
-        setIsLoadingSchedule(false);
-      }, (error) => {
-        console.error("Error fetching schedules:", error);
-        setIsLoadingSchedule(false);
-      });
-
-      return unsubscribe;
-    };
-
-    return fetchSchedules();
-  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -699,11 +569,19 @@ setCurrentDaySchedule(todaySchedules);
       const unsubscribe = onSnapshot(studentsQuery, (snapshot) => {
         const studentsList = snapshot.docs.map(doc => ({
           id: doc.id,
-          name: doc.data().name || '',
+          fullName: doc.data().name || '',
+          idNumber: doc.data().idNumber || '',
+          email: doc.data().email || '',
+          department: doc.data().department || '',
           section: doc.data().section || '',
+          major: doc.data().major || '',
+          yearLevel: doc.data().yearLevel || '',
+          grades: doc.data().grades || [],
+          createdAt: doc.data().createdAt || new Date(),
           attendance: doc.data().attendance || false,
           timeIn: doc.data().timeIn,
           lastAttendance: doc.data().attendanceHistory?.[0] || null,
+          year: doc.data().yearLevel || '',
           ...doc.data()
         })) as Student[];
         setStudents(studentsList);
@@ -1383,6 +1261,47 @@ setCurrentDaySchedule(todaySchedules);
     return () => unsubscribe();
   }, [currentUser]);
 
+  const markAttendance = async (studentId: string, status: 'present' | 'absent' | 'late') => {
+    try {
+      const studentRef = doc(db, 'students', studentId);
+      const student = students.find(s => s.id === studentId);
+      
+      if (!student) return;
+
+      // Get the current course ID or use a default one
+      const courseId = selectedSection || 'default';
+      
+      const updatedAttendance = {
+        ...student.attendance,
+        [courseId]: {
+          ...student.attendance[courseId],
+          [status]: (student.attendance[courseId]?.[status] || 0) + 1
+        }
+      };
+
+      await updateDoc(studentRef, {
+        attendance: updatedAttendance
+      });
+
+      Swal.fire({
+        icon: 'success',
+        title: 'Attendance Marked',
+        text: `${student.fullName} marked as ${status}`,
+        timer: 1500,
+        showConfirmButton: false
+      });
+
+      // Remove fetchStudents() call since we have real-time updates
+    } catch (error) {
+      console.error('Error marking attendance:', error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: 'Failed to mark attendance'
+      });
+    }
+  };
+
   if (!instructorData) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-100">
@@ -1543,40 +1462,6 @@ setCurrentDaySchedule(todaySchedules);
                   </div>
                 </div>
               </motion.section>
-
-              {/* Quick Actions */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                {[
-                  {
-                    title: "Take Attendance",
-                    icon: <ClipboardDocumentCheckIcon className="h-6 w-6" />,
-                    color: "bg-blue-500 hover:bg-blue-600"
-                  },
-                  {
-                    title: "Generate Report",
-                    icon: <DocumentArrowDownIcon className="h-6 w-6" />,
-                    color: "bg-green-500 hover:bg-green-600"
-                  },
-                  {
-                    title: "Room Control",
-                    icon: <MapPinIcon className="h-6 w-6" />,
-                    color: "bg-purple-500 hover:bg-purple-600"
-                  },
-                  {
-                    title: "View Analytics",
-                    icon: <ChartBarIcon className="h-6 w-6" />,
-                    color: "bg-orange-500 hover:bg-orange-600"
-                  }
-                ].map((action) => (
-                  <button
-                    key={action.title}
-                    className={`${action.color} text-white rounded-xl p-4 flex flex-col items-center justify-center transition-colors`}
-                  >
-                    {action.icon}
-                    <span className="text-sm mt-2">{action.title}</span>
-                  </button>
-                ))}
-              </div>
 
               {/* Weekly Schedule Overview */}
               <motion.section
@@ -1823,7 +1708,7 @@ setCurrentDaySchedule(todaySchedules);
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center">
                               <div>
-                                <div className="text-sm font-medium text-gray-900">{student.name}</div>
+                                <div className="text-sm font-medium text-gray-900">{student.fullName}</div>
                                 <div className="text-sm text-gray-500">ID: {student.id}</div>
                               </div>
                             </div>

@@ -14,6 +14,7 @@ import {
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { useAuth } from '../Pages/AuthContext';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 
 interface UserData {
   id: string;
@@ -52,26 +53,41 @@ const Login: React.FC = () => {
       // First find the user by ID number
       let userEmail = '';
       let userRole = '';
-      let userData: UserData | null = null;
+      let userData = null;
 
-      // Check each collection for the ID number
-      const collections = [
-        { name: 'users', role: 'admin' },
-        { name: 'teachers', role: 'instructor' },
-        { name: 'students', role: 'student' }
-      ];
+      // Check users collection for admin
+      const usersRef = collection(db, 'users');
+      const adminQuery = query(usersRef, where("idNumber", "==", idNumber));
+      const adminSnapshot = await getDocs(adminQuery);
 
-      for (const col of collections) {
-        const collectionRef = collection(db, col.name);
-        const q = query(collectionRef, where("idNumber", "==", idNumber));
-        const snapshot = await getDocs(q);
+      if (!adminSnapshot.empty) {
+        const userDoc = adminSnapshot.docs[0];
+        userData = { id: userDoc.id, ...userDoc.data() } as UserData;
+        userEmail = userData.email;
+        userRole = 'admin';
+      } else {
+        // Check teachers collection
+        const teachersRef = collection(db, 'teachers');
+        const teacherQuery = query(teachersRef, where("idNumber", "==", idNumber));
+        const teacherSnapshot = await getDocs(teacherQuery);
 
-        if (!snapshot.empty) {
-          const userDoc = snapshot.docs[0];
+        if (!teacherSnapshot.empty) {
+          const userDoc = teacherSnapshot.docs[0];
           userData = { id: userDoc.id, ...userDoc.data() } as UserData;
           userEmail = userData.email;
-          userRole = col.role;
-          break;
+          userRole = 'instructor';
+        } else {
+          // Check students collection
+          const studentsRef = collection(db, 'students');
+          const studentQuery = query(studentsRef, where("idNumber", "==", idNumber));
+          const studentSnapshot = await getDocs(studentQuery);
+
+          if (!studentSnapshot.empty) {
+            const userDoc = studentSnapshot.docs[0];
+            userData = { id: userDoc.id, ...userDoc.data() } as UserData;
+            userEmail = userData.email;
+            userRole = 'student';
+          }
         }
       }
 
@@ -79,10 +95,10 @@ const Login: React.FC = () => {
         throw new Error('No user found with this ID number');
       }
 
-      // Login with email/password and wait for it to complete
-      await login(userEmail, password);
+      // Login with email/password
+      await signInWithEmailAndPassword(auth, userEmail, password);
 
-      // Store user data
+      // Store user role and data
       localStorage.setItem('userRole', userRole);
       localStorage.setItem('userData', JSON.stringify(userData));
 
@@ -103,7 +119,15 @@ const Login: React.FC = () => {
         timer: 1500
       });
 
-      // Let the AuthContext handle the navigation
+      // Navigate based on role
+      const routes = {
+        admin: '/admin/dashboard',
+        instructor: '/instructor/dashboard',
+        student: '/student/dashboard'
+      };
+
+      navigate(routes[userRole as keyof typeof routes], { replace: true });
+
     } catch (error) {
       console.error('Login error:', error);
       Swal.fire({

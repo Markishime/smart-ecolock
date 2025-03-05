@@ -19,6 +19,7 @@ export interface Student {
   grades: {
     [courseId: string]: number;
   };
+  status?: 'present' | 'absent' | 'late';
   rfidUid?: string;
   createdAt: string;
   schedule?: {
