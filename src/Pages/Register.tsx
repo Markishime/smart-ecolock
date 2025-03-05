@@ -382,13 +382,13 @@ const Register: React.FC = () => {
         email: formData.email,
         idNumber: formData.idNumber,
         department: formData.department,
-        role: isAdmin ? 'admin' : 'instructor',
+        role: formData.role, // Will be either 'instructor' or 'student'
         rfidUid: rfidTag,
         createdAt: new Date().toISOString()
       };
 
-      // Store in Firestore
-      const collectionRef = collection(db, isAdmin ? 'users' : 'teachers');
+      // Store in Firestore - use 'teachers' collection for instructors, 'students' for students
+      const collectionRef = collection(db, formData.role === 'instructor' ? 'teachers' : 'students');
       await setDoc(doc(collectionRef, user.uid), userData);
 
       // Store RFID data in RTDB
@@ -396,7 +396,7 @@ const Register: React.FC = () => {
         const rfidRef = ref(rtdb, `rfid/${rfidTag}`);
         await set(rfidRef, {
           uid: user.uid,
-          role: isAdmin ? 'admin' : 'instructor',
+          role: formData.role,
           timestamp: serverTimestamp()
         });
       }
@@ -404,7 +404,7 @@ const Register: React.FC = () => {
       Swal.fire({
         icon: 'success',
         title: 'Registration Successful',
-        text: `Registered as ${isAdmin ? 'Admin' : 'Instructor'}`,
+        text: `Registered as ${formData.role === 'instructor' ? 'Instructor' : 'Student'}`,
         showConfirmButton: false,
         timer: 1500
       });
@@ -832,32 +832,6 @@ const Register: React.FC = () => {
                 ))}
               </select>
             </div>
-
-            {/* Add role selection */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700">Register as</label>
-              <select
-                value={isAdmin ? 'admin' : 'instructor'}
-                onChange={(e) => setIsAdmin(e.target.value === 'admin')}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-              >
-                <option value="instructor">Instructor</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-
-            {/* Add RFID input field */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700">RFID Tag</label>
-              <input
-                type="text"
-                value={rfidTag}
-                onChange={(e) => setRfidTag(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-                placeholder="Enter RFID tag"
-              />
-            </div>
-
             {renderStepContent()}
 
             {/* Navigation Buttons */}
