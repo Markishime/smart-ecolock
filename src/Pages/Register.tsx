@@ -7,11 +7,10 @@ import {
   query, 
   where, 
   getDocs, 
-  onSnapshot,
-  updateDoc
+  onSnapshot 
 } from 'firebase/firestore';
 import { auth, db, rtdb, listenForNewRFIDTag } from '../firebase';
-import { getDatabase, ref, get, set, remove, onValue, off, DataSnapshot, update } from 'firebase/database';
+import { getDatabase, ref, get, set, remove, onValue, off, DataSnapshot  } from 'firebase/database';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LockClosedIcon, 
@@ -25,7 +24,6 @@ import {
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { Link, useNavigate } from 'react-router-dom';
-import { serverTimestamp } from 'firebase/firestore';
 
 interface Subject {
   id: string;
@@ -52,12 +50,6 @@ interface UserData {
   createdAt: string;
   rfidUid?: string;
   [key: string]: string | string[] | undefined; // Allow additional dynamic properties
-}
-
-// Update the RFID tag interface
-interface RFIDTag {
-  uid: string;
-  timestamp: string;
 }
 
 const Register: React.FC = () => {
@@ -147,9 +139,6 @@ const Register: React.FC = () => {
   });
 
   const [isRegistered, setIsRegistered] = useState(false);
-
-  const [rfidTags, setRfidTags] = useState<RFIDTag[]>([]);
-  const [selectedUid, setSelectedUid] = useState<string>('');
 
   const navigate = useNavigate();
 
@@ -256,14 +245,14 @@ const Register: React.FC = () => {
         const firstKey = Object.keys(data)[0];
         const uidData = data[firstKey];
         if (uidData && uidData.uid) {
-        setFormData(prev => ({
-          ...prev,
+          setFormData(prev => ({
+            ...prev,
             rfidUid: uidData.uid
-        }));
+          }));
         }
       }
     };
-
+  
     onValue(rfidRef, handleRFIDUpdate);
 
     // Cleanup subscription
@@ -281,9 +270,12 @@ const Register: React.FC = () => {
         if (!snapshot.exists()) {
           await set(uidRef, { registered: true });
           setIsRegistered(true);
+          alert('UID registered successfully!');
         } else {
+          alert('This UID is already registered.');
         }
       } else {
+        alert('This UID has already been registered.');
       }
     };
 
@@ -291,58 +283,6 @@ const Register: React.FC = () => {
       registerUID(formData.rfidUid);
     }
   }, [formData.rfidUid, isRegistered]);
-
-  useEffect(() => {
-    const fetchUnregisteredTags = async () => {
-      try {
-        const tagsRef = collection(db, 'rfidTags');
-        const q = query(tagsRef, where('isRegistered', '==', false));
-        
-        // Set up real-time listener
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-          const tags = snapshot.docs.map(doc => ({
-            uid: doc.id,
-            ...doc.data()
-          })) as RFIDTag[];
-          setRfidTags(tags);
-        });
-
-        return () => unsubscribe();
-      } catch (error) {
-        console.error('Error fetching RFID tags:', error);
-      }
-    };
-
-    fetchUnregisteredTags();
-  }, []);
-
-  useEffect(() => {
-    const unregisteredUidsRef = ref(rtdb, 'UnregisteredUIDs');
-    
-    const unsubscribe = onValue(unregisteredUidsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const tags: RFIDTag[] = Object.entries(data)
-          .map(([key, value]: [string, any]) => ({
-            uid: value.uid,
-            timestamp: value.timestamp
-          }))
-          // Filter out UIDs that are already in RegisteredUIDs
-          .filter(tag => !data.RegisteredUIDs?.[tag.uid]?.registered);
-
-        setRfidTags(tags);
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    setFormData(prev => ({
-      ...prev,
-      rfidUid: selectedUid
-    }));
-  }, [selectedUid]);
 
   const nextStep = () => {
     if (currentStep < steps.length) {
@@ -365,58 +305,82 @@ const Register: React.FC = () => {
     }));
   };
 
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [rfidTag, setRfidTag] = useState('');
-
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsLoading(true);
 
-    try {
-      // Create auth user
-      const { user } = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+    // Validate form data
+    if (formData.password !== formData.confirmPassword) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Passwords do not match',
+        text: 'Please ensure your passwords are the same.'
+      });
+      setIsLoading(false);
+      return;
+    }
 
-      // Prepare user data
-      const userData = {
+    try {
+      // Create user with email and password
+      const userCredential = await createUserWithEmailAndPassword(
+        auth, 
+        formData.email, 
+        formData.password
+      );
+      const user = userCredential.user;
+
+      // Prepare user data with a more flexible type
+      const userData: UserData = {
+        uid: user.uid,
         fullName: formData.fullName,
-        email: formData.email,
         idNumber: formData.idNumber,
-        department: formData.department,
-        role: isAdmin ? 'admin' : 'instructor',
-        rfidUid: rfidTag,
-        createdAt: new Date().toISOString()
+        email: formData.email,
+        mobileNumber: formData.mobileNumber,
+        role: formData.role,
+        createdAt: new Date().toISOString(),
+        rfidUid: formData.rfidUid
       };
 
-      // Store in Firestore
-      const collectionRef = collection(db, isAdmin ? 'users' : 'teachers');
-      await setDoc(doc(collectionRef, user.uid), userData);
+      // Add role-specific data dynamically
+      if (formData.role === 'student') {
+        userData.department = formData.department;
+        userData.major = formData.major;
+        userData.yearLevel = formData.yearLevel;
+        userData.section = formData.section;
+      } else if (formData.role === 'instructor') {
+        userData.department = formData.department;
+        userData.yearsOfExperience = formData.yearsOfExperience;
+        userData.subject = formData.subject;
+      }
 
-      // Store RFID data in RTDB
-      if (rfidTag) {
-        const rfidRef = ref(rtdb, `rfid/${rfidTag}`);
-        await set(rfidRef, {
+      // Store user data in Firestore
+      const userRef = doc(db, formData.role + 's', user.uid);
+      await setDoc(userRef, userData);
+
+      // If RFID UID is provided, store it in the UIDs collection
+      if (formData.rfidUid) {
+        const uidRef = doc(db, 'UIDs', formData.rfidUid);
+        await setDoc(uidRef, {
           uid: user.uid,
-          role: isAdmin ? 'admin' : 'instructor',
-          timestamp: serverTimestamp()
+          role: formData.role,
+          fullName: formData.fullName
         });
       }
 
       Swal.fire({
         icon: 'success',
-        title: 'Registration Successful',
-        text: `Registered as ${isAdmin ? 'Admin' : 'Instructor'}`,
-        showConfirmButton: false,
-        timer: 1500
+        title: 'Registration Successful!',
+        text: 'Your account has been created.'
       });
 
+      // Navigate to login or dashboard
       navigate('/login');
-
-    } catch (error) {
-      console.error('Registration error:', error);
+    } catch (error: any) {
+      console.error('Registration Error:', error);
       Swal.fire({
         icon: 'error',
         title: 'Registration Failed',
-        text: error instanceof Error ? error.message : 'Registration failed'
+        text: error.message || 'An error occurred during registration.'
       });
     } finally {
       setIsLoading(false);
@@ -546,38 +510,38 @@ const Register: React.FC = () => {
                 <label className="block text-sm font-medium text-white/90">
                   RFID Card
                 </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  name="rfidUid"
-                    value={selectedUid}
-                  readOnly
+                <div className="relative">
+                  <input
+                    type="text"
+                    name="rfidUid"
+                    value={formData.rfidUid}
+                    readOnly
                     className={`
                       w-full px-4 py-3 pl-12
                       bg-white/10 border border-white/20 rounded-xl
                       text-white placeholder-white/50
                       focus:outline-none focus:ring-2 focus:ring-white/30
                       transition-all duration-200
-                      ${selectedUid ? 'border-green-400' : 'border-white/20'}
+                      ${formData.rfidUid ? 'border-green-400' : 'border-white/20'}
                     `}
-                    placeholder="Select RFID from dropdown..."
+                    placeholder="Tap your RFID card..."
                   />
                   <CreditCardIcon 
                     className={`
                       absolute left-3 top-3.5 w-5 h-5
                       transition-colors duration-200
-                      ${selectedUid ? 'text-green-400' : 'text-white/50'}
+                      ${formData.rfidUid ? 'text-green-400' : 'text-white/50'}
                     `}
                   />
-                  {selectedUid && (
+                  {formData.rfidUid && (
                     <div className="absolute right-3 top-3.5 flex items-center space-x-1">
                       <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                      <span className="text-sm text-green-400">Card selected</span>
+                      <span className="text-sm text-green-400">Card detected</span>
                     </div>
                   )}
                 </div>
                 <p className="text-sm text-white/60 mt-1">
-                  {selectedUid ? 'RFID card selected' : 'Select an RFID card from the dropdown above'}
+                  Place your RFID card near the reader
                 </p>
               </div>
               {renderInput('fullName', 'Full Name', 'text', 'Enter your full name')}
@@ -807,57 +771,6 @@ const Register: React.FC = () => {
 
           {/* Form Content */}
           <form onSubmit={handleRegister} className="space-y-6">
-            {/* Add RFID UID selection before other fields */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                RFID Tag
-              </label>
-              <select
-                value={selectedUid}
-                onChange={(e) => setSelectedUid(e.target.value)}
-                className={`
-                  w-full px-4 py-3 rounded-xl
-                  bg-white border border-gray-200
-                  text-gray-900
-                  focus:outline-none focus:ring-2 focus:ring-blue-500
-                  transition-all duration-200
-                `}
-                required
-              >
-                <option value="" className="text-gray-900">Select RFID Tag</option>
-                {rfidTags.map(tag => (
-                  <option key={tag.uid} value={tag.uid} className="text-gray-900">
-                    {tag.uid} - Scanned at {tag.timestamp}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Add role selection */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700">Register as</label>
-              <select
-                value={isAdmin ? 'admin' : 'instructor'}
-                onChange={(e) => setIsAdmin(e.target.value === 'admin')}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-              >
-                <option value="instructor">Instructor</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-
-            {/* Add RFID input field */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700">RFID Tag</label>
-              <input
-                type="text"
-                value={rfidTag}
-                onChange={(e) => setRfidTag(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-                placeholder="Enter RFID tag"
-              />
-            </div>
-
             {renderStepContent()}
 
             {/* Navigation Buttons */}
