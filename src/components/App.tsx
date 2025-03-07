@@ -1,11 +1,9 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { AuthProvider, useAuth, } from '../Pages/AuthContext';
 import Login from '../Pages/Login';
-import Register from '../Pages/Register';
 import Dashboard from '../Pages/Dashboard';
 import ResetPassword from '../Pages/ResetPassword';
 import AdminDashboard from '../Pages/AdminDashboard';
-import AdminRoute from '../Pages/AdminRoute';
 import PrivateRoute from '../Pages/PrivateRoute';
 import AdminRegistration from '../Pages/AdminRegistration';
 import AttendancePage from '../Pages/AttendancePage';
@@ -23,11 +21,10 @@ import AdminSchedules from '../Pages/AdminSchedules';
 import Subjects from '../Pages/Subjects';
 import AdminSubjects from '../Pages/AdminSubjects';
 import TakeAttendance from '../Pages/TakeAttendance';
-import { handleRFIDRegistration } from '../firebase';
 import RFIDRegistrationPage from '../Pages/Register';
 import AdminSections from '../Pages/AdminSectionPage';
-import AdminSidebar from '../components/AdminSidebar';
 import RoomsPage from '../Pages/RoomsPage';
+import AttendanceManagement from '../Pages/AttendanceManagement';
 const App = () => {
   return (
     <Router>
@@ -35,7 +32,6 @@ const App = () => {
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
-
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/adminregistration" element={<AdminRegistration />} />
           <Route path="/rfid-registration" element={<RFIDRegistrationPage />} />
@@ -68,9 +64,17 @@ const App = () => {
               </PrivateRoute>
             } 
           />
+          <Route 
+            path="/instructor/attendance-management" 
+            element={
+              <PrivateRoute roles={['instructor']}>
+                <AttendanceManagement />
+              </PrivateRoute>
+            } 
+          />
           {/* Student routes */}
-          <Route path="/students/dashboard" element={<PrivateRoute roles={['student']}><StudentDashboard /></PrivateRoute>} />
-          <Route path="/students/attendance" element={<PrivateRoute roles={['student']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
+          <Route path="/student/dashboard" element={<PrivateRoute roles={['student']}><StudentDashboard /></PrivateRoute>} />
+          <Route path="/student/attendance" element={<PrivateRoute roles={['student']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
 
           {/* Redirect root to login */}
           <Route path="/" element={<Navigate to="/login" replace />} />

@@ -44,6 +44,7 @@ const Login: React.FC = () => {
   });
   const { login, setUser } = useAuth();
   const navigate = useNavigate();
+  let userRole = '';
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -52,7 +53,6 @@ const Login: React.FC = () => {
     try {
       // First find the user by ID number
       let userEmail = '';
-      let userRole = '';
       let userData = null;
 
       // Check users collection for admin
@@ -94,6 +94,9 @@ const Login: React.FC = () => {
       if (!userData) {
         throw new Error('No user found with this ID number');
       }
+
+      // Set user role
+      userRole = userRole;
 
       // Login with email/password
       await signInWithEmailAndPassword(auth, userEmail, password);
@@ -138,6 +141,10 @@ const Login: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleAdminLogin = () => {
+    window.location.href = '/admin/login';
   };
 
   return (
@@ -276,7 +283,6 @@ const Login: React.FC = () => {
                 </>
               )}
             </button>
-
             <p className="text-center text-white/80">
               Don't have an account?{' '}
               <Link to="/rfid-registration" className="text-white font-medium hover:underline">

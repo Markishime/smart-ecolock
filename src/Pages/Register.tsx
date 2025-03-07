@@ -21,7 +21,9 @@ import {
   EyeSlashIcon,
   AcademicCapIcon,
   UserIcon,
-  CreditCardIcon
+  CreditCardIcon,
+  CalendarIcon,
+  ClockIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { Link, useNavigate } from 'react-router-dom';
@@ -51,13 +53,29 @@ interface UserData {
   role: string;
   createdAt: string;
   rfidUid?: string;
-  [key: string]: string | string[] | undefined; // Allow additional dynamic properties
+  isAdmin?: boolean;
+  section?: string;
+  sectionId?: string;
+  [key: string]: string | string[] | boolean | undefined;
 }
 
 // Update the RFID tag interface
 interface RFIDTag {
   uid: string;
   timestamp: string;
+}
+
+interface Section {
+  id: string;
+  name: string;
+  instructorId: string;
+  schedule: {
+    day: string;
+    startTime: string;
+    endTime: string;
+    room: string;
+    subject: string;
+  };
 }
 
 const Register: React.FC = () => {
@@ -68,7 +86,6 @@ const Register: React.FC = () => {
     email: '',
     mobileNumber: '',
     department: '',
-    major: '',
     yearLevel: '',
     yearsOfExperience: '',
     password: '',
@@ -82,7 +99,8 @@ const Register: React.FC = () => {
     section: '',
     subject: '',
     selectedSchedule: null as any,
-    rfidUid: '' // New field for RFID UID
+    rfidUid: '',
+    isAdmin: false
   });
 
   const [availableData, setAvailableData] = useState({
@@ -103,13 +121,12 @@ const Register: React.FC = () => {
     confirmPassword: false,
     yearLevel: false,
     role: false,
-    major: false,
     sections: false,
     scheduleDays: false,
     scheduleTime: false,
     section: false,
     subject: false,
-    rfidUid: false // New field for RFID UID
+    rfidUid: false
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -137,19 +154,21 @@ const Register: React.FC = () => {
     department: false,
     yearLevel: false,
     role: false,
-    major: false,
     sections: false,
     scheduleDays: false,
     scheduleTime: false,
     section: false,
     subject: false,
-    rfidUid: false // New field for RFID UID
+    rfidUid: false
   });
 
   const [isRegistered, setIsRegistered] = useState(false);
 
   const [rfidTags, setRfidTags] = useState<RFIDTag[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
+
+  const [sections, setSections] = useState<Section[]>([]);
+  const [selectedSection, setSelectedSection] = useState<Section | null>(null);
 
   const navigate = useNavigate();
 
@@ -344,6 +363,26 @@ const Register: React.FC = () => {
     }));
   }, [selectedUid]);
 
+  useEffect(() => {
+    const fetchSections = async () => {
+      try {
+        const sectionsRef = collection(db, 'sections');
+        const sectionsSnapshot = await getDocs(sectionsRef);
+        const sectionsData = sectionsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Section[];
+        setSections(sectionsData);
+      } catch (error) {
+        console.error('Error fetching sections:', error);
+      }
+    };
+
+    if (formData.role === 'student') {
+      fetchSections();
+    }
+  }, [formData.role]);
+
   const nextStep = () => {
     if (currentStep < steps.length) {
       setCurrentStep(prev => prev + 1);
@@ -373,30 +412,43 @@ const Register: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Create auth user
       const { user } = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
 
-      // Prepare user data
-      const userData = {
+      const isAdmin = formData.idNumber === '123';
+
+      const userData: UserData = {
+        uid: user.uid,
         fullName: formData.fullName,
         email: formData.email,
         idNumber: formData.idNumber,
         department: formData.department,
-        role: formData.role, // Will be either 'instructor' or 'student'
-        rfidUid: rfidTag,
-        createdAt: new Date().toISOString()
+        role: formData.role,
+        mobileNumber: formData.mobileNumber,
+        rfidUid: formData.rfidUid,
+        createdAt: new Date().toISOString(),
+        isAdmin: isAdmin,
+        ...(formData.role === 'student' && selectedSection && {
+          section: selectedSection.name,
+          sectionId: selectedSection.id
+        })
       };
 
-      // Store in Firestore - use 'teachers' collection for instructors, 'students' for students
-      const collectionRef = collection(db, formData.role === 'instructor' ? 'teachers' : 'students');
+      let collectionName = 'students';
+      if (formData.role === 'instructor') {
+        collectionName = 'teachers';
+      } else if (isAdmin) {
+        collectionName = 'admins';
+      }
+
+      const collectionRef = collection(db, collectionName);
       await setDoc(doc(collectionRef, user.uid), userData);
 
-      // Store RFID data in RTDB
-      if (rfidTag) {
-        const rfidRef = ref(rtdb, `rfid/${rfidTag}`);
+      if (formData.rfidUid) {
+        const rfidRef = ref(rtdb, `rfid/${formData.rfidUid}`);
         await set(rfidRef, {
           uid: user.uid,
           role: formData.role,
+          isAdmin: isAdmin,
           timestamp: serverTimestamp()
         });
       }
@@ -404,12 +456,16 @@ const Register: React.FC = () => {
       Swal.fire({
         icon: 'success',
         title: 'Registration Successful',
-        text: `Registered as ${formData.role === 'instructor' ? 'Instructor' : 'Student'}`,
+        text: `Registered as ${isAdmin ? 'Admin' : formData.role === 'instructor' ? 'Instructor' : 'Student'}`,
         showConfirmButton: false,
         timer: 1500
       });
 
-      navigate('/login');
+      if (isAdmin) {
+        navigate('/admin-dashboard');
+      } else {
+        navigate('/login');
+      }
 
     } catch (error) {
       console.error('Registration error:', error);
@@ -608,61 +664,54 @@ const Register: React.FC = () => {
                     { value: '4th Year', label: '4th Year' }
                   ])}
                   
-                  {renderSelect('section', 'Section', [
-                    { value: '', label: 'Select a section' },
-                    { value: 'H1', label: 'Section H1' },
-                    { value: 'H2', label: 'Section H2' },
-                    { value: 'H3', label: 'Section H3' },
-                    { value: 'G1', label: 'Section G1' },
-                    { value: 'G2', label: 'Section G2' },
-                    { value: 'G3', label: 'Section G3' }
-                  ])}
-                  
-            
-
-                  {/* Schedule Selection - Only show if subject is selected */}
-                  {formData.subject && availableSchedules.length > 0 && (
-                    <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Available Schedules
-                      </label>
-                      <div className="space-y-2">
-                        {availableSchedules.map((schedule, index) => (
-                          <div
-                            key={index}
-                            onClick={() => setFormData(prev => ({
+                  <div>
+                    <label className="block text-white/90 text-sm font-medium mb-2">
+                      Section
+                    </label>
+                    <div className="space-y-3">
+                      {sections.map((section) => (
+                        <motion.div
+                          key={section.id}
+                          onClick={() => {
+                            setSelectedSection(section);
+                            setFormData(prev => ({
                               ...prev,
-                              selectedSchedule: schedule,
-                              schedule: {
-                                days: [schedule.day],
-                                startTime: schedule.startTime,
-                                endTime: schedule.endTime
-                              },
-                              section: schedule.section
-                            }))}
-                            className={`cursor-pointer p-3 rounded-lg border ${
-                              formData.selectedSchedule === schedule
-                                ? 'border-indigo-500 bg-indigo-50'
-                                : 'border-gray-300 hover:border-indigo-300'
-                            }`}
-                          >
-                            <p className="font-medium">{schedule.day}</p>
-                            <p className="text-sm text-gray-600">
-                              {schedule.startTime} - {schedule.endTime}
-                            </p>
-                            <p className="text-sm text-gray-600">
-                              Section: {schedule.section}
-                            </p>
+                              section: section.name
+                            }));
+                          }}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className={`
+                            p-4 rounded-xl cursor-pointer transition-all duration-200
+                            ${selectedSection?.id === section.id
+                              ? 'bg-white text-indigo-600'
+                              : 'bg-white/10 text-white hover:bg-white/20'
+                            }
+                          `}
+                        >
+                          <div className="flex flex-col space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="font-medium">{section.name}</span>
+                              <span className="text-sm opacity-80">{section.schedule.room}</span>
+                            </div>
+                            <div className="flex items-center space-x-4 text-sm opacity-80">
+                              <div className="flex items-center space-x-1">
+                                <CalendarIcon className="w-4 h-4" />
+                                <span>{section.schedule.day}</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <ClockIcon className="w-4 h-4" />
+                                <span>{section.schedule.startTime} - {section.schedule.endTime}</span>
+                              </div>
+                            </div>
+                            <div className="text-sm opacity-80">
+                              {section.schedule.subject}
+                            </div>
                           </div>
-                        ))}
-                      </div>
+                        </motion.div>
+                      ))}
                     </div>
-                  )}
-
-                  {renderSelect('major', 'Major', availableData.courses.map(course => ({
-                    value: course,
-                    label: course
-                  })))}
+                  </div>
                 </>
               )}
               {formData.role === 'instructor' && (

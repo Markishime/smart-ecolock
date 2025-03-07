@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { collection, query, getDocs, addDoc, updateDoc, doc, where, getDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, doc, arrayUnion, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion } from 'framer-motion';
 import {
   UserGroupIcon,
-  AcademicCapIcon,
   PlusIcon,
   UserIcon,
   TrashIcon,
@@ -12,21 +11,22 @@ import {
 import Swal from 'sweetalert2';
 import AdminSidebar from '../components/AdminSidebar';
 import AddSectionModal from '../components/AddSectionModal';
-import AddStudentToSectionModal from '../components/AddStudentToSectionModal';
 import { theme } from '../styles/theme';
 
+// Define interfaces for Firestore data structure
 interface Section {
   id: string;
   name: string;
-  code: string;
+  students: string[]; // Array of student IDs
   instructorId: string;
-  studentIds: string[];
   schedule: {
-    days: string[];
+    day: string;
     startTime: string;
     endTime: string;
+    room: string;
+    section: string;
+    subject: string;
   };
-  createdAt: string;
 }
 
 interface Instructor {
@@ -42,6 +42,7 @@ interface Student {
 }
 
 const AdminSectionPage = () => {
+  // State declarations
   const [sections, setSections] = useState<Section[]>([]);
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -50,10 +51,12 @@ const AdminSectionPage = () => {
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
   const [selectedSection, setSelectedSection] = useState<Section | null>(null);
 
+  // Fetch data on component mount
   useEffect(() => {
     fetchData();
   }, []);
 
+  // Fetch sections, instructors, and students from Firestore
   const fetchData = async () => {
     try {
       // Fetch sections
@@ -87,47 +90,57 @@ const AdminSectionPage = () => {
     }
   };
 
+  // Handle adding a new section
   const handleAddSection = async (sectionData: any) => {
     try {
-      if (sectionData.type === 'existing') {
-        // Update existing schedule
-        const teacherRef = doc(db, 'teachers', sectionData.instructorId);
-        const teacher = await getDoc(teacherRef);
-        const schedules = teacher.data()?.schedules || [];
-        
-        const updatedSchedules = schedules.map((schedule: any) => {
-          if (schedule.id === sectionData.existingScheduleId) {
-            return {
-              ...schedule,
-              sections: [...(schedule.sections || []), {
-                code: sectionData.code,
-                name: sectionData.name,
-                days: sectionData.schedule.days,
-                startTime: sectionData.schedule.startTime,
-                endTime: sectionData.schedule.endTime,
-                room: sectionData.schedule.room,
-                studentIds: sectionData.studentIds
-              }]
-            };
-          }
-          return schedule;
-        });
-
-        await updateDoc(teacherRef, { schedules: updatedSchedules });
-      } else {
-        // Create new schedule
-        await addDoc(collection(db, 'sections'), {
-          ...sectionData,
-          createdAt: new Date().toISOString()
-        });
+      // Get instructor's schedule
+      const teacherRef = doc(db, 'teachers', sectionData.instructorId);
+      const teacherDoc = await getDoc(teacherRef);
+      const teacherData = teacherDoc.data();
+      
+      if (!teacherData?.schedule) {
+        throw new Error('Teacher schedule not found');
       }
+
+      // Find matching schedule based on day and time
+      const matchingSchedule = teacherData.schedule.find((schedule: any) => 
+        schedule.day === sectionData.schedule.day &&
+        schedule.startTime === sectionData.schedule.startTime &&
+        schedule.endTime === sectionData.schedule.endTime
+      );
+
+      if (!matchingSchedule) {
+        throw new Error('No matching schedule found for the teacher');
+      }
+
+      // Add section to Firestore with synchronized schedule
+      const sectionRef = await addDoc(collection(db, 'sections'), {
+        name: sectionData.name,
+        students: sectionData.students || [],
+        instructorId: sectionData.instructorId,
+        schedule: {
+          day: matchingSchedule.day,
+          startTime: matchingSchedule.startTime,
+          endTime: matchingSchedule.endTime,
+          room: matchingSchedule.room,
+          section: matchingSchedule.section,
+          subject: matchingSchedule.subject
+        }
+      });
+      const sectionId = sectionRef.id;
+
+      // Update instructor's assignedSections
+      await updateDoc(teacherRef, {
+        assignedSections: arrayUnion(sectionId)
+      });
 
       setIsModalOpen(false);
       fetchData();
-      
+
       Swal.fire({
         icon: 'success',
         title: 'Section Added Successfully',
+        text: `Section synchronized with teacher's schedule`,
         showConfirmButton: false,
         timer: 1500
       });
@@ -136,54 +149,32 @@ const AdminSectionPage = () => {
       Swal.fire({
         icon: 'error',
         title: 'Error',
-        text: 'Failed to add section'
+        text: error instanceof Error ? error.message : 'Failed to add section'
       });
     }
   };
 
-  const handleAddStudentToSection = async (sectionId: string, studentId: string) => {
-    try {
-      const sectionRef = doc(db, 'sections', sectionId);
-      const section = sections.find(s => s.id === sectionId);
-      
-      if (section) {
-        await updateDoc(sectionRef, {
-          studentIds: [...section.studentIds, studentId]
-        });
-
-        // Update student's section
-        const studentRef = doc(db, 'students', studentId);
-        await updateDoc(studentRef, {
-          section: section.code
-        });
-
-        fetchData();
-      }
-    } catch (error) {
-      console.error('Error adding student to section:', error);
-    }
-  };
-
+  // Handle adding students to a section
   const handleAddStudentsToSection = async (studentIds: string[]) => {
     try {
       if (!selectedSection) return;
 
       const sectionRef = doc(db, 'sections', selectedSection.id);
       await updateDoc(sectionRef, {
-        studentIds: [...selectedSection.studentIds, ...studentIds]
+        students: [...selectedSection.students, ...studentIds]
       });
 
-      // Update students' section
+      // Update each student's sectionId
       for (const studentId of studentIds) {
         const studentRef = doc(db, 'students', studentId);
         await updateDoc(studentRef, {
-          section: selectedSection.code
+          sectionId: selectedSection.id
         });
       }
 
       setIsStudentModalOpen(false);
       fetchData();
-      
+
       Swal.fire({
         icon: 'success',
         title: 'Students Added Successfully',
@@ -200,24 +191,24 @@ const AdminSectionPage = () => {
     }
   };
 
+  // Handle removing a student from a section
   const handleRemoveStudent = async (sectionId: string, studentId: string) => {
     try {
       const sectionRef = doc(db, 'sections', sectionId);
       const section = sections.find(s => s.id === sectionId);
-      
+
       if (section) {
-        // Remove student ID from section
+        // Remove student from section
         await updateDoc(sectionRef, {
-          studentIds: section.studentIds.filter(id => id !== studentId)
+          students: section.students.filter(id => id !== studentId)
         });
 
-        // Update student's section to null
+        // Clear student's sectionId
         const studentRef = doc(db, 'students', studentId);
         await updateDoc(studentRef, {
-          section: null
+          sectionId: null
         });
 
-        // Show success message
         Swal.fire({
           icon: 'success',
           title: 'Student Removed',
@@ -225,7 +216,6 @@ const AdminSectionPage = () => {
           timer: 1500
         });
 
-        // Refresh data
         fetchData();
       }
     } catch (error) {
@@ -238,6 +228,7 @@ const AdminSectionPage = () => {
     }
   };
 
+  // Render UI
   return (
     <div className="min-h-screen bg-gray-50">
       <AdminSidebar />
@@ -267,7 +258,6 @@ const AdminSectionPage = () => {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h2 className="text-lg font-semibold text-gray-900">{section.name}</h2>
-                    <p className="text-sm text-gray-500">Code: {section.code}</p>
                   </div>
                   <div className="bg-indigo-100 p-2 rounded-lg">
                     <UserGroupIcon className="w-6 h-6 text-indigo-600" />
@@ -289,7 +279,7 @@ const AdminSectionPage = () => {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium text-gray-700">
-                      Students ({section.studentIds?.length || 0})
+                      Students ({section.students?.length || 0})
                     </h3>
                     <button
                       onClick={() => {
@@ -302,7 +292,7 @@ const AdminSectionPage = () => {
                     </button>
                   </div>
                   <div className="space-y-2">
-                    {section.studentIds?.map(studentId => {
+                    {section.students?.map(studentId => {
                       const student = students.find(s => s.id === studentId);
                       return (
                         <div key={studentId} className="flex items-center justify-between bg-gray-50 p-2 rounded-lg">
@@ -334,15 +324,11 @@ const AdminSectionPage = () => {
                   </div>
                 </div>
 
-                {/* Schedule */}
+                {/* Start Time */}
                 <div className="mt-4 pt-4 border-t border-gray-200">
-                  <h3 className="text-sm font-medium text-gray-700 mb-2">Schedule</h3>
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Start Time</h3>
                   <div className="text-sm text-gray-500">
-                    {section.schedule?.days?.join(', ') || 'No days set'} <br />
-                    {section.schedule?.startTime && section.schedule?.endTime 
-                      ? `${section.schedule.startTime} - ${section.schedule.endTime}`
-                      : 'No time set'
-                    }
+                    {section.schedule.startTime || 'Not set'}
                   </div>
                 </div>
               </motion.div>
@@ -350,25 +336,8 @@ const AdminSectionPage = () => {
           </div>
         </div>
       </div>
-
-      <AddSectionModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSubmit={handleAddSection}
-      />
-
-      <AddStudentToSectionModal
-        isOpen={isStudentModalOpen}
-        onClose={() => {
-          setIsStudentModalOpen(false);
-          setSelectedSection(null);
-        }}
-        onSubmit={handleAddStudentsToSection}
-        currentStudentIds={selectedSection?.studentIds || []}
-        sectionName={selectedSection?.name || ''}
-      />
     </div>
   );
 };
 
-export default AdminSectionPage; 
+export default AdminSectionPage;

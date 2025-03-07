@@ -12,7 +12,6 @@ import {
   ViewColumnsIcon,
   CheckIcon
 } from '@heroicons/react/24/solid';
-import Sidebar from '../components/AdminSidebar';
 import Swal from 'sweetalert2';
 import AdminSidebar from '../components/AdminSidebar';
 

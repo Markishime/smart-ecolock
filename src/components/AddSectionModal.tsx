@@ -4,25 +4,27 @@ import { db } from '../firebase';
 import { motion } from 'framer-motion';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { theme } from '../styles/theme';
-import { ClockIcon, CalendarIcon, BuildingOfficeIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
+import { ClockIcon, CalendarIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
+import { toast } from 'react-toastify';
 
 interface AddSectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (sectionData: any) => void;
+  onSubmit: (data: any) => void;
 }
 
 interface Teacher {
   id: string;
   fullName: string;
-  department: string;
-}
-
-interface Student {
-  id: string;
-  fullName: string;
-  idNumber: string;
-  department: string;
+  email: string;
+  schedule?: {
+    day: string;
+    startTime: string;
+    endTime: string;
+    room: string;
+    section: string;
+    subject: string;
+  }[];
 }
 
 interface TeacherSchedule {
@@ -43,84 +45,106 @@ interface TeacherWithSchedule extends Teacher {
 }
 
 const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSubmit }) => {
-  const [teachers, setTeachers] = useState<TeacherWithSchedule[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
-  const [selectedInstructorSchedules, setSelectedInstructorSchedules] = useState<TeacherSchedule[]>([]);
+  const [sectionName, setSectionName] = useState('');
+  const [selectedInstructor, setSelectedInstructor] = useState('');
+  const [selectedSchedule, setSelectedSchedule] = useState<any>(null);
+  const [instructors, setInstructors] = useState<Teacher[]>([]);
+  const [availableSchedules, setAvailableSchedules] = useState<any[]>([]);
   const [scheduleConflict, setScheduleConflict] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    code: '',
-    instructorId: '',
-    schedule: {
-      days: [] as string[],
-      startTime: '',
-      endTime: ''
-    }
-  });
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    fetchTeachersAndStudents();
-  }, []);
+    if (isOpen) {
+      fetchInstructors();
+    }
+  }, [isOpen]);
 
-  const fetchTeachersAndStudents = async () => {
+  useEffect(() => {
+    if (selectedInstructor) {
+      const instructor = instructors.find(i => i.id === selectedInstructor);
+      setAvailableSchedules(instructor?.schedule || []);
+      setSelectedSchedule(null);
+    } else {
+      setAvailableSchedules([]);
+      setSelectedSchedule(null);
+    }
+  }, [selectedInstructor, instructors]);
+
+  const fetchInstructors = async () => {
     try {
-      // Fetch teachers with their schedules
-      const teachersSnapshot = await getDocs(collection(db, 'teachers'));
-      const teachersData = await Promise.all(teachersSnapshot.docs.map(async doc => {
-        const teacherData = doc.data();
-        const schedules = teacherData.schedules || [];
-        
-        return {
-          id: doc.id,
-          ...teacherData,
-          schedules: schedules.map((schedule: any) => ({
-            id: schedule.id || '',
-            days: Array.isArray(schedule.days) ? schedule.days : [],
-            startTime: schedule.startTime || '',
-            endTime: schedule.endTime || '',
-            sectionCode: schedule.sectionCode || '',
-            subject: schedule.subject || '',
-            room: schedule.room || '',
-            status: schedule.status || 'active',
-            semester: schedule.semester || '',
-            academicYear: schedule.academicYear || ''
-          }))
-        } as TeacherWithSchedule;
-      }));
+      setIsLoading(true);
+      const instructorsRef = collection(db, 'teachers');
+      const instructorsSnapshot = await getDocs(instructorsRef);
       
-      setTeachers(teachersData);
-
-      // Fetch students
-      const studentsSnapshot = await getDocs(collection(db, 'students'));
-      const studentsData = studentsSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Student[];
-      setStudents(studentsData);
+      if (instructorsSnapshot.empty) {
+        console.log('No instructors found in the database');
+        setInstructors([]);
+        setIsLoading(false);
+        return;
+      }
+      
+      console.log(`Found ${instructorsSnapshot.docs.length} instructors in the database`);
+      
+      const instructorsWithSchedules = await Promise.all(
+        instructorsSnapshot.docs.map(async (doc) => {
+          const data = doc.data();
+          const instructorId = doc.id;
+          
+          const schedulesRef = collection(db, 'schedules');
+          const schedulesQuery = query(
+            schedulesRef,
+            where('instructorId', '==', instructorId)
+          );
+          
+          const schedulesSnapshot = await getDocs(schedulesQuery);
+          const schedules = schedulesSnapshot.docs.map(scheduleDoc => ({
+            id: scheduleDoc.id,
+            ...scheduleDoc.data()
+          })) as TeacherSchedule[];
+          
+          console.log(`Instructor ${data.fullName || 'Unknown'} has ${schedules.length} schedules`);
+          
+          return {
+            id: instructorId,
+            fullName: data.fullName || 'Unknown',
+            email: data.email || '',
+            schedule: data.schedule || [],
+            schedules: schedules
+          } as TeacherWithSchedule;
+        })
+      );
+      
+      setInstructors(instructorsWithSchedules);
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching instructors:', error);
+      toast.error('Failed to load instructors. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedSchedule) {
+      alert('Please select a schedule');
+      return;
+    }
     onSubmit({
-      ...formData,
-      studentIds: selectedStudents
+      name: sectionName,
+      instructorId: selectedInstructor,
+      schedule: selectedSchedule
     });
+    resetForm();
   };
 
-  const toggleStudent = (studentId: string) => {
-    setSelectedStudents(prev => 
-      prev.includes(studentId)
-        ? prev.filter(id => id !== studentId)
-        : [...prev, studentId]
-    );
+  const resetForm = () => {
+    setSectionName('');
+    setSelectedInstructor('');
+    setSelectedSchedule(null);
   };
 
   const checkScheduleConflict = (schedule: { days: string[]; startTime: string; endTime: string }) => {
-    return selectedInstructorSchedules.some(existingSchedule => {
+    return availableSchedules.some(existingSchedule => {
       if (!existingSchedule.days || !schedule.days) return false;
       
       const hasCommonDays = schedule.days.some(day => 
@@ -142,27 +166,10 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSu
   };
 
   useEffect(() => {
-    if (formData.instructorId) {
-      const selectedTeacher = teachers.find(t => t.id === formData.instructorId);
-      setSelectedInstructorSchedules(selectedTeacher?.schedules || []);
-    } else {
-      setSelectedInstructorSchedules([]);
+    if (selectedSchedule) {
+      setScheduleConflict(checkScheduleConflict(selectedSchedule));
     }
-  }, [formData.instructorId, teachers]);
-
-  useEffect(() => {
-    if (formData.schedule.days.length && formData.schedule.startTime && formData.schedule.endTime) {
-      setScheduleConflict(checkScheduleConflict(formData.schedule));
-    }
-  }, [formData.schedule, selectedInstructorSchedules]);
-
-  const formatScheduleTime = (schedule: TeacherSchedule) => {
-    const days = schedule.days?.join(', ') || 'No days set';
-    const time = schedule.startTime && schedule.endTime 
-      ? `${schedule.startTime} - ${schedule.endTime}`
-      : 'No time set';
-    return `${days} | ${time}`;
-  };
+  }, [selectedSchedule, availableSchedules]);
 
   if (!isOpen) return null;
 
@@ -177,7 +184,7 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSu
         initial={{ scale: 0.95 }}
         animate={{ scale: 1 }}
         exit={{ scale: 0.95 }}
-        className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden"
+        className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden"
       >
         <div className="flex justify-between items-center p-6 border-b">
           <h2 className={theme.typography.h3}>Add New Section</h2>
@@ -187,224 +194,75 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSu
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-          {/* Basic Section Info */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Section Name
-              </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className={theme.components.input}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Section Code
-              </label>
-              <input
-                type="text"
-                value={formData.code}
-                onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                className={theme.components.input}
-                required
-              />
-            </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Section Name
+            </label>
+            <input
+              type="text"
+              value={sectionName}
+              onChange={(e) => setSectionName(e.target.value)}
+              className={theme.components.input}
+              required
+            />
           </div>
 
-          {/* Instructor Selection with Schedule Display */}
-          <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Instructor
+            </label>
+            <select
+              value={selectedInstructor}
+              onChange={(e) => setSelectedInstructor(e.target.value)}
+              className={theme.components.input}
+              required
+            >
+              <option value="">Select Instructor</option>
+              {instructors.map(instructor => (
+                <option key={instructor.id} value={instructor.id}>
+                  {instructor.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedInstructor && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Assign Instructor
+                Schedule
               </label>
               <select
-                value={formData.instructorId}
-                onChange={(e) => setFormData({ ...formData, instructorId: e.target.value })}
+                value={selectedSchedule ? JSON.stringify(selectedSchedule) : ''}
+                onChange={(e) => setSelectedSchedule(e.target.value ? JSON.parse(e.target.value) : null)}
                 className={theme.components.input}
                 required
               >
-                <option value="">Select an instructor</option>
-                {teachers.map(teacher => (
-                  <option key={teacher.id} value={teacher.id}>
-                    {teacher.fullName} - {teacher.department}
+                <option value="">Select Schedule</option>
+                {availableSchedules.map((schedule, index) => (
+                  <option key={index} value={JSON.stringify(schedule)}>
+                    {schedule.subject} - {schedule.day} ({schedule.startTime} - {schedule.endTime})
                   </option>
                 ))}
               </select>
             </div>
+          )}
 
-            {/* Enhanced Schedule Display */}
-            {formData.instructorId && (
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-                  <h4 className="font-medium text-gray-900">Current Teaching Load</h4>
-                </div>
-                
-                {selectedInstructorSchedules.length > 0 ? (
-                  <div className="divide-y divide-gray-200">
-                    {selectedInstructorSchedules.map((schedule, index) => (
-                      <div 
-                        key={index}
-                        className="p-4 hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="space-y-1">
-                            <div className="flex items-center space-x-2">
-                              <h5 className="font-medium text-gray-900">
-                                {schedule.subject || 'Untitled Subject'}
-                              </h5>
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                schedule.status === 'active'
-                                  ? 'bg-green-100 text-green-800'
-                                  : 'bg-gray-100 text-gray-600'
-                              }`}>
-                                {schedule.status || 'active'}
-                              </span>
-                            </div>
-                            <p className="text-sm text-gray-600">
-                              Section: {schedule.sectionCode || 'No Code'}
-                            </p>
-                            <div className="flex items-center text-sm text-gray-500 space-x-3">
-                              <span className="flex items-center">
-                                <ClockIcon className="w-4 h-4 mr-1" />
-                                {schedule.startTime && schedule.endTime 
-                                  ? `${schedule.startTime} - ${schedule.endTime}`
-                                  : 'No time set'}
-                              </span>
-                              <span className="flex items-center">
-                                <CalendarIcon className="w-4 h-4 mr-1" />
-                                {Array.isArray(schedule.days) && schedule.days.length > 0
-                                  ? schedule.days.join(', ')
-                                  : 'No days set'}
-                              </span>
-                              {schedule.room && (
-                                <span className="flex items-center">
-                                  <BuildingOfficeIcon className="w-4 h-4 mr-1" />
-                                  {schedule.room}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1">
-                              {[schedule.semester, schedule.academicYear]
-                                .filter(Boolean)
-                                .join(' | ') || 'No term info'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-4 text-center text-gray-500">
-                    No current teaching schedules
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Schedule Selection */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-              <h4 className="font-medium text-gray-900">Schedule Details</h4>
+          {scheduleConflict && (
+            <div className="mt-4 flex items-center p-3 bg-red-50 text-red-700 rounded-lg">
+              <ExclamationCircleIcon className="w-5 h-5 mr-2" />
+              <span className="text-sm">
+                This schedule conflicts with the instructor's existing schedule
+              </span>
             </div>
-            <div className="p-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Days
-                  </label>
-                  <select
-                    multiple
-                    value={formData.schedule.days}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      schedule: {
-                        ...formData.schedule,
-                        days: Array.from(e.target.selectedOptions, option => option.value)
-                      }
-                    })}
-                    className={`${theme.components.input} h-32`}
-                  >
-                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => (
-                      <option key={day} value={day}>{day}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Start Time
-                  </label>
-                  <input
-                    type="time"
-                    value={formData.schedule.startTime}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      schedule: { ...formData.schedule, startTime: e.target.value }
-                    })}
-                    className={theme.components.input}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    End Time
-                  </label>
-                  <input
-                    type="time"
-                    value={formData.schedule.endTime}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      schedule: { ...formData.schedule, endTime: e.target.value }
-                    })}
-                    className={theme.components.input}
-                    required
-                  />
-                </div>
-              </div>
+          )}
 
-              {scheduleConflict && (
-                <div className="mt-4 flex items-center p-3 bg-red-50 text-red-700 rounded-lg">
-                  <ExclamationCircleIcon className="w-5 h-5 mr-2" />
-                  <span className="text-sm">
-                    This schedule conflicts with the instructor's existing schedule
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Student Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Add Students
-            </label>
-            <div className="border rounded-lg max-h-48 overflow-y-auto p-2">
-              {students.map(student => (
-                <label
-                  key={student.id}
-                  className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedStudents.includes(student.id)}
-                    onChange={() => toggleStudent(student.id)}
-                    className="mr-3"
-                  />
-                  <span>{student.fullName} - {student.idNumber}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end space-x-4 pt-4 border-t">
+          <div className="flex justify-end space-x-4 pt-6 mt-6 border-t">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                onClose();
+                resetForm();
+              }}
               className={theme.components.button.secondary}
             >
               Cancel
@@ -412,6 +270,7 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSu
             <button
               type="submit"
               className={theme.components.button.primary}
+              disabled={!sectionName || !selectedInstructor || !selectedSchedule || scheduleConflict}
             >
               Create Section
             </button>
@@ -422,4 +281,4 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSu
   );
 };
 
-export default AddSectionModal; 
+export default AddSectionModal;

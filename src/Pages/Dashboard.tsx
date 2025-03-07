@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, onSnapshot, doc, updateDoc, orderBy, limit, getDocs, addDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { ref, onValue, off, Database, DataSnapshot } from 'firebase/database';
+import { auth, db, rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
 import { signOut } from 'firebase/auth';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -48,6 +49,7 @@ import {
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
 import { Student } from '../interfaces/Student';
+
 
 interface Message {
   id: string;
@@ -191,6 +193,15 @@ interface DetailedSchedule {
   courseCode: string;
   students: number;
   isActive: boolean;
+}
+
+interface RoomStatus {
+  lights: boolean;
+  ac: boolean;
+  temperature: number;
+  humidity: number;
+  occupancy: boolean;
+  energyUsage: number;
 }
 
 const travelThemeColors = {
@@ -347,6 +358,7 @@ const InstructorDashboard = () => {
     attendanceRate: 0,
     onTimeRate: 0
   });
+  const [roomStatus, setRoomStatus] = useState<{[key: string]: RoomStatus}>({});
 
   const handleRemoveSection = async (sectionId: string) => {
     try {
@@ -600,7 +612,7 @@ const InstructorDashboard = () => {
 
       const unsubscribe = onSnapshot(sectionsQuery, (snapshot) => {
         const sectionsList = snapshot.docs.map(doc => ({
-          id: doc.id,
+        id: doc.id,
           name: doc.data().name || '',
           code: doc.data().code || '',
           studentCount: doc.data().students?.length || 0,
@@ -621,8 +633,8 @@ const InstructorDashboard = () => {
       const present = students.filter(s => s.status === 'present').length;
       const late = students.filter(s => s.status === 'late').length;
       const absent = total - present - late;
-
-      return {
+            
+            return {
         presentPercentage: ((present / total) * 100).toFixed(1),
         latePercentage: ((late / total) * 100).toFixed(1),
         absentPercentage: ((absent / total) * 100).toFixed(1),
@@ -870,6 +882,17 @@ const InstructorDashboard = () => {
               </span>
             </div>
           ))}
+        </div>
+        
+        {/* View All Attendance Link */}
+        <div className="mt-4 text-right">
+          <Link 
+            to="/instructor/attendance-management" 
+            className="inline-flex items-center text-indigo-600 hover:text-indigo-800"
+          >
+            <span>View All Attendance Records</span>
+            <ChevronDoubleRightIcon className="w-4 h-4 ml-1" />
+          </Link>
         </div>
       </DashboardSection>
     );
@@ -1302,6 +1325,23 @@ const InstructorDashboard = () => {
     }
   };
 
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    // Subscribe to real-time room status updates
+    const roomsRef = ref(rtdb, 'rooms');
+    const unsubscribe = onValue(roomsRef, (snapshot: DataSnapshot) => {
+      if (snapshot.exists()) {
+        setRoomStatus(snapshot.val());
+      }
+    });
+
+    return () => {
+      // Unsubscribe from the listener when component unmounts
+      unsubscribe();
+    };
+  }, [currentUser]);
+
   if (!instructorData) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-100">
@@ -1314,17 +1354,16 @@ const InstructorDashboard = () => {
     <div className={`min-h-screen bg-gradient-to-br ${travelThemeColors.background}`}>
       <NavBar
         currentTime={currentTime}
-        instructor={{
-          fullName: instructorData?.fullName || 'Instructor',
-          department: instructorData?.department || 'Department'
-        }}
         classStatus={{
           status: scheduleStatus.status,
           color: scheduleStatus.color,
           details: scheduleStatus.details,
           fullName: instructorData?.fullName || 'Instructor'
-        }}
-      />
+        }} user={{
+          role: 'instructor',
+          fullName: instructorData?.fullName || 'Instructor',
+          department: instructorData?.department || 'Department'
+        }}      />
       
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -1764,78 +1803,113 @@ const InstructorDashboard = () => {
               animate={{ opacity: 1, x: 0 }}
               className="backdrop-blur-lg bg-white/80 rounded-3xl shadow-xl p-6 border border-white/20"
             >
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Smart Room Control</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-800">Smart Room Control</h3>
+                <Link
+                  to="/instructor/take-attendance"
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  <ClipboardDocumentCheckIcon className="w-5 h-5" />
+                  Take Attendance
+                </Link>
+              </div>
               <div className="space-y-4">
                 {/* Room Status Cards */}
-                {instructorData?.schedules?.map((schedule) => (
-                  <div 
-                    key={schedule.id}
-                    className="bg-white rounded-lg shadow-sm p-4"
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <h4 className="font-medium text-gray-900">Room {schedule.room}</h4>
-                        <p className="text-sm text-gray-500">{schedule.subject}</p>
-                      </div>
-                      <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        schedule.status === 'ongoing' 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {schedule.status === 'ongoing' ? 'In Use' : 'Available'}
-                      </div>
-                    </div>
+                {instructorData?.schedules?.map((schedule) => {
+                  const room = roomStatus[schedule.room || ''] || {
+                    lights: false,
+                    ac: false,
+                    temperature: 25,
+                    humidity: 50,
+                    occupancy: false,
+                    energyUsage: 0
+                  };
 
-                    {/* Room Controls */}
-                    <div className="grid grid-cols-2 gap-2 mt-3">
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-600">Lights</span>
-                          <button className="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-200 transition-colors focus:outline-none hover:bg-gray-300">
-                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1" />
-                          </button>
+                  return (
+                    <div 
+                      key={schedule.id}
+                      className="bg-white rounded-lg shadow-sm p-4"
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h4 className="font-medium text-gray-900">Room {schedule.room}</h4>
+                          <p className="text-sm text-gray-500">{schedule.subject}</p>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">Energy: 45W</p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-600">AC</span>
-                          <button className="relative inline-flex h-6 w-11 items-center rounded-full bg-green-200 transition-colors focus:outline-none hover:bg-green-300">
-                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-6" />
-                          </button>
+                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          room.occupancy
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {room.occupancy ? 'Occupied' : 'Vacant'}
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">Temp: 23°C</p>
+                      </div>
+
+                      {/* Room Controls and Status */}
+                      <div className="grid grid-cols-2 gap-2 mt-3">
+                        <div className="bg-gray-50 rounded-lg p-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-600">Lights</span>
+                            <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              room.lights ? 'bg-green-200' : 'bg-gray-200'
+                            }`}>
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                room.lights ? 'translate-x-6' : 'translate-x-1'
+                              }`} />
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">Energy: {room.energyUsage.toFixed(1)}W</p>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-600">AC</span>
+                            <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              room.ac ? 'bg-green-200' : 'bg-gray-200'
+                            }`}>
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                room.ac ? 'translate-x-6' : 'translate-x-1'
+                              }`} />
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">Temp: {room.temperature}°C</p>
+                        </div>
+                      </div>
+
+                      {/* Environmental Data */}
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        <div className="bg-gray-50 rounded-lg p-3">
+                          <span className="text-sm text-gray-600">Temperature</span>
+                          <div className="flex items-center mt-1">
+                            <span className="text-lg font-medium text-gray-900">{room.temperature}°C</span>
+                            <span className="text-xs text-gray-500 ml-2">Humidity: {room.humidity}%</span>
+                          </div>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3">
+                          <span className="text-sm text-gray-600">Energy Usage</span>
+                          <div className="flex items-center mt-1">
+                            <span className="text-lg font-medium text-gray-900">{(room.energyUsage / 1000).toFixed(2)} kWh</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Energy Usage Progress */}
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between text-sm mb-2">
+                          <span className="text-gray-600">Energy Efficiency</span>
+                          <span className="text-gray-900 font-medium">
+                            {Math.round((1 - (room.energyUsage / 3000)) * 100)}%
+                          </span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full">
+                          <div 
+                            className="h-2 bg-green-500 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.round((1 - (room.energyUsage / 3000)) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Based on typical usage patterns</p>
                       </div>
                     </div>
-
-                    {/* Energy Usage */}
-                    <div className="mt-4">
-                      <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="text-gray-600">Energy Usage</span>
-                        <span className="text-gray-900 font-medium">2.4 kWh</span>
-                      </div>
-                      <div className="h-2 bg-gray-100 rounded-full">
-                        <div 
-                          className="h-2 bg-green-500 rounded-full"
-                          style={{ width: '65%' }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">65% efficiency rate</p>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Quick Controls */}
-                <div className="grid grid-cols-2 gap-3 mt-6">
-                  <button className="flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg p-3 transition-colors">
-                    <MapPinIcon className="h-5 w-5" />
-                    <span className="text-sm">Access Log</span>
-                  </button>
-                  <button className="flex items-center justify-center gap-2 bg-green-50 hover:bg-green-100 text-green-700 rounded-lg p-3 transition-colors">
-                    <ChartBarIcon className="h-5 w-5" />
-                    <span className="text-sm">Energy Report</span>
-                  </button>
-                </div>
+                  );
+                })}
               </div>
             </motion.section>
 
@@ -1888,14 +1962,40 @@ const InstructorDashboard = () => {
 };
 
 const GeminiChatbot: React.FC = () => {
-  const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [input, setInput] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const messagesEndRef = useRef<null | HTMLDivElement>(null);
+  const { currentUser } = useAuth();
 
-  // Replace with your actual Gemini API key
+  // Initialize Gemini with API key
   const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY || '');
+
+  const fetchGeminiResponse = async (query: string): Promise<string> => {
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      
+      // Add context about the user
+      const prompt = `You are a helpful AI assistant that can answer any questions accurately, can answer about Mark Lloyd Cuizon, Clarence Emmanuel Jamora and Jean Ricka Rosalita - Creators of Smart EcoLock. 
+      They are 4rth year BS Computer Engineering Students   from CIT-U and for Smart EcoLock, addresses energy management, attendance control, and security for CIT-U's rooms and offices. 
+        It uses an ESP32 microcontroller for efficient sensor handling and low power consumption. With occupancy recognition, it turns off lights and electronics 
+        in unoccupied rooms, reducing energy waste. LDR sensors are used to automatically control lighting based on natural light levels in classrooms, optimizing 
+        energy use. Attendance is tracked through access control data, with real-time monitoring in a unified database. Security is enhanced via RFID or biometric 
+        access control, ensuring only authorized individuals enter. Weight sensors in chairs add precision to attendance tracking. A React.js website with Firebase 
+        backend allows system monitoring and control. This system boosts sustainability, management efficiency, and security at CIT-U. 
+        Provide complete answers, ensuring clarity and professionalism. Always include full code implementations when relevant and internet sources 
+        for additional information, even if the question is unrelated to Smart EcoLock. Format responses to facilitate prompt chatbot replies. As an AI assistant helping ${currentUser?.fullName || 'a user'} 
+                     who is an ${currentUser?.role || 'user'} at the institution, 
+                     Respond professionally and concisely to the following query: ${query}.`;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      return response.text();
+    } catch (error) {
+      console.error('Error generating response:', error);
+      return 'Sorry, I encountered an error. Please try again.';
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1908,36 +2008,27 @@ const GeminiChatbot: React.FC = () => {
   const generateId = () => Math.random().toString(36).substr(2, 9);
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return;
+    if (!input.trim()) return;
   
     // Add user message to chat
     const userMessage: Message = {
       id: generateId(),
-      content: inputMessage,
+      content: input,
       sender: 'user',
       timestamp: new Date()
     };
   
     setMessages(prev => [...prev, userMessage]);
-    setInputMessage('');
-    setIsLoading(true);
+    setInput('');
   
     try {
       // Fetch AI response
-      const response = await fetchGeminiResponse(inputMessage);
-  
-      // Extract structured sections from response
-      const responseSections = response.split("\n\n");
-  
-      const answer = responseSections[0] || "I'm sorry, but I couldn't generate an answer.";
-      const reasoning = responseSections[1] || "";
-      const source = responseSections[2] || "";
-      const confidence = responseSections[3] || "";
+      const aiResponse = await fetchGeminiResponse(input);
   
       // Construct AI response message
       const aiMessage: Message = {
         id: generateId(),
-        content: `${answer}\n\n${reasoning}\n\n${source}\n\n${confidence}`,
+        content: aiResponse,
         sender: 'ai',
         timestamp: new Date()
       };
@@ -1955,33 +2046,6 @@ const GeminiChatbot: React.FC = () => {
       };
   
       setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  
-
-  const fetchGeminiResponse = async (query: string): Promise<string> => {
-    try {
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-      const result = await model.generateContent(
-      `You are a helpful AI assistant that can answer any questions accurately, can answer about Mark Lloyd Cuizon, Clarence Emmanuel Jamora and Jean Ricka Rosalita - Creators of Smart EcoLock. 
-      They are 4rth year BS Computer Engineering Students   from CIT-U and for Smart EcoLock, addresses energy management, attendance control, and security for CIT-U's rooms and offices. 
-        It uses an ESP32 microcontroller for efficient sensor handling and low power consumption. With occupancy recognition, it turns off lights and electronics 
-        in unoccupied rooms, reducing energy waste. LDR sensors are used to automatically control lighting based on natural light levels in classrooms, optimizing 
-        energy use. Attendance is tracked through access control data, with real-time monitoring in a unified database. Security is enhanced via RFID or biometric 
-        access control, ensuring only authorized individuals enter. Weight sensors in chairs add precision to attendance tracking. A React.js website with Firebase 
-        backend allows system monitoring and control. This system boosts sustainability, management efficiency, and security at CIT-U. 
-        Provide complete answers, ensuring clarity and professionalism. Always include full code implementations when relevant and internet sources 
-        for additional information, even if the question is unrelated to Smart EcoLock. Format responses to facilitate prompt chatbot replies.
-
-        Respond professionally and concisely to the following query: ${query}.`
-      );
-      return result.response.text();
-    } catch (error) {
-      console.error('Gemini API call failed:', error);
-      throw error;
     }
   };
 
@@ -2026,11 +2090,6 @@ const GeminiChatbot: React.FC = () => {
                   </div>
                 </div>
               ))}
-              {isLoading && (
-                <div className="text-center text-gray-500 italic">
-                  Smart Ecolock Assistant is thinking...
-                </div>
-              )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -2038,15 +2097,14 @@ const GeminiChatbot: React.FC = () => {
             <div className="p-4 border-t border-gray-200 flex space-x-2">
               <input
                 type="text"
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                 placeholder="Ask me anything..."
                 className="flex-grow px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               />
               <button 
                 onClick={handleSendMessage}
-                disabled={isLoading}
                 className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
               >
                 Send

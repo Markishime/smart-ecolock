@@ -5,7 +5,7 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from 'firebase/firestore';
 import { getDatabase, ref, onValue, off } from 'firebase/database';
 
-const firebaseConfig = {
+export const firebaseConfig = {
     apiKey: "AIzaSyDQIMqO4bJ-k4-pjjGnHGwCbCYUFUQe7Hw",
     authDomain: "smartecolock.firebaseapp.com",
     projectId: "smartecolock",

@@ -49,8 +49,9 @@ interface Instructor {
 }
 
 interface NavBarProps {
-  currentTime: Date;
-  instructor: {
+  currentTime?: Date;
+  user: {
+    role: 'admin' | 'instructor' | 'student';
     fullName: string;
     department: string;
   };
@@ -62,7 +63,7 @@ interface NavBarProps {
   };
 }
 
-const NavBar: React.FC<NavBarProps> = ({ currentTime, instructor, classStatus }) => {
+const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classStatus }) => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -117,8 +118,17 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime, instructor, classStatus })
             </div>
             <div className="ml-4">
               <h1 className="text-xl font-semibold">Smart EcoLock</h1>
-              <p className="text-sm text-indigo-200">{instructor.department}</p>
+              <p className="text-sm text-indigo-200">{user.department}</p>
             </div>
+            <Link
+              to={`/${user.role}/dashboard`}
+              className="ml-6 flex items-center px-4 py-2 text-sm font-medium text-indigo-100 hover:text-white hover:bg-indigo-500/20 rounded-lg transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+              </svg>
+              Back to Dashboard
+            </Link>
           </div>
 
           {/* Center Status Section */}
@@ -172,8 +182,8 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime, instructor, classStatus })
                 className="flex items-center space-x-3 focus:outline-none hover:opacity-80 transition-opacity"
               >
                 <div className="flex flex-col items-end">
-                  <span className="text-sm font-medium">{instructor.fullName}</span>
-                  <span className="text-xs text-indigo-200">Instructor</span>
+                  <span className="text-sm font-medium">{user.fullName}</span>
+                  <span className="text-xs text-indigo-200">{user.role.charAt(0).toUpperCase() + user.role.slice(1)}</span>
                 </div>
                 <div className="h-10 w-10 rounded-full bg-indigo-500/30 flex items-center justify-center">
                   <UserIcon className="h-6 w-6 text-indigo-200" />
