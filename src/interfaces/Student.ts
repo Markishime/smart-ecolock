@@ -22,6 +22,12 @@ export interface Student {
   status?: 'present' | 'absent' | 'late';
   rfidUid?: string;
   createdAt: string;
+  attendancePercentage?: number;
+  completedAssignments?: number;
+  totalAssignments?: number;
+  currentGrade?: number;
+  lastActivity?: string;
+  performanceTrend?: number;
   schedule?: {
     days: string[];
     startTime: string;

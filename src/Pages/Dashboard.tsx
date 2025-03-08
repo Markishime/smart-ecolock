@@ -15,7 +15,10 @@ import {
 } from '@heroicons/react/24/outline';
 import { 
   UserGroupIcon, 
-  AcademicCapIcon 
+  AcademicCapIcon, 
+  ArrowDownIcon,
+  ArrowUpIcon,
+  MinusIcon
 } from '@heroicons/react/24/solid';
 import { toast } from 'react-toastify';
 import NavBar from '../components/NavBar';
@@ -504,7 +507,7 @@ const InstructorDashboard = () => {
           lastAttendance: doc.data().attendanceHistory?.[0] || null,
           year: doc.data().yearLevel || '',
           ...doc.data()
-        })) as Student[];
+        })) as unknown as Student[];
         setStudents(studentsList);
       }
     );
@@ -595,7 +598,7 @@ const InstructorDashboard = () => {
           lastAttendance: doc.data().attendanceHistory?.[0] || null,
           year: doc.data().yearLevel || '',
           ...doc.data()
-        })) as Student[];
+        })) as unknown as Student[];
         setStudents(studentsList);
       });
 
@@ -1359,11 +1362,13 @@ const InstructorDashboard = () => {
           color: scheduleStatus.color,
           details: scheduleStatus.details,
           fullName: instructorData?.fullName || 'Instructor'
-        }} user={{
+        }}
+        user={{
           role: 'instructor',
           fullName: instructorData?.fullName || 'Instructor',
           department: instructorData?.department || 'Department'
-        }}      />
+        }}
+      />
       
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -1698,221 +1703,112 @@ const InstructorDashboard = () => {
                 ))}
                   </div>
 
-              {/* Attendance Management Section */}
+              {/* Quick Attendance Action */}
               <motion.section
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="backdrop-blur-lg bg-white/80 rounded-3xl shadow-xl p-8 border border-white/20"
               >
                 <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-2xl font-bold text-gray-800">Attendance Management</h2>
-                  <div className="flex gap-3">
-                    <select
-                      className="px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      value={selectedSection}
-                      onChange={(e) => setSelectedSection(e.target.value)}
-                    >
-                      <option value="">All Sections</option>
-                      {instructorData?.sections?.map((section) => (
-                        <option key={section.id} value={section.id}>{section.name}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => {/* Add export function */}}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
-                    >
-                      <DocumentArrowDownIcon className="w-5 h-5" />
-                      Export
-                    </button>
-                  </div>
+                  <h2 className="text-2xl font-bold text-gray-800">Attendance Actions</h2>
                 </div>
-
-                {/* Student Attendance Tracking */}
-                <div className="bg-white rounded-xl shadow-sm overflow-hidden mt-6">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Student Name</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Section</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time In</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {students.filter(student => 
-                        !selectedSection || student.section === selectedSection
-                      ).map((student) => (
-                        <tr key={student.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center">
-                              <div>
-                                <div className="text-sm font-medium text-gray-900">{student.fullName}</div>
-                                <div className="text-sm text-gray-500">ID: {student.id}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-800">
-                              {student.section}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <select
-                              value={student.status || 'absent'}
-                              onChange={(e) => handleUpdateAttendance(student.id, e.target.value as 'present' | 'absent' | 'late')}
-                              className={`text-sm rounded-lg border-gray-200 focus:ring-2 focus:ring-offset-2 ${
-                                student.status === 'present' ? 'text-green-800 bg-green-50 focus:ring-green-500' :
-                                student.status === 'late' ? 'text-yellow-800 bg-yellow-50 focus:ring-yellow-500' :
-                                'text-red-800 bg-red-50 focus:ring-red-500'
-                              }`}
-                            >
-                              <option value="present">Present</option>
-                              <option value="absent">Absent</option>
-                              <option value="late">Late</option>
-                            </select>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {student.status === 'present' || student.status === 'late' 
-                              ? new Date().toLocaleTimeString() 
-                              : '-'
-                            }
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <button
-                              onClick={() => handleAddNotes(student.id)}
-                              className="text-indigo-600 hover:text-indigo-900 mr-3"
-                            >
-                              Add Notes
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-              </div>
-            </motion.section>
+                <div className="bg-indigo-50 rounded-xl p-6 text-center">
+                  <ClipboardDocumentCheckIcon className="h-12 w-12 text-indigo-600 mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Take Attendance Now</h3>
+                  <p className="text-gray-600 mb-4">Redirect to the attendance taking interface</p>
+                  <Link
+                    to="/instructor/take-attendance"
+                    className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                  >
+                    <ClipboardDocumentCheckIcon className="h-5 w-5 mr-2" />
+                    Go to Attendance Page
+                  </Link>
+                </div>
+              </motion.section>
             </motion.section>
           </div>
 
-          {/* Right Sidebar */}
-          <div className="lg:col-span-4 space-y-6">
-            {/* Room Control & Energy Monitoring */}
+           {/* Right Sidebar */}
+           <div className="lg:col-span-4 space-y-6">
+            {/* Student Progress Tracker */}
             <motion.section
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               className="backdrop-blur-lg bg-white/80 rounded-3xl shadow-xl p-6 border border-white/20"
             >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-800">Smart Room Control</h3>
-                <Link
-                  to="/instructor/take-attendance"
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                <h3 className="text-lg font-semibold text-gray-800">Student Progress Tracker</h3>
+                <select
+                  className="px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={selectedSection}
+                  onChange={(e) => setSelectedSection(e.target.value)}
                 >
-                  <ClipboardDocumentCheckIcon className="w-5 h-5" />
-                  Take Attendance
-                </Link>
+                  <option value="">All Sections</option>
+                  {instructorData?.sections?.map((section) => (
+                    <option key={section.id} value={section.id}>{section.name}</option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-4">
-                {/* Room Status Cards */}
-                {instructorData?.schedules?.map((schedule) => {
-                  const room = roomStatus[schedule.room || ''] || {
-                    lights: false,
-                    ac: false,
-                    temperature: 25,
-                    humidity: 50,
-                    occupancy: false,
-                    energyUsage: 0
-                  };
+                {students.slice(0, 5).map((student) => (
+                  <div 
+                    key={student.id}
+                    className="bg-white rounded-lg shadow-sm p-4"
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="font-medium text-gray-900">{student.fullName}</h4>
+                        <p className="text-sm text-gray-500">{student.section}</p>
+                      </div>
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                        {student.attendancePercentage || 0}% Attendance
+                      </span>
+                    </div>
 
-                  return (
-                    <div 
-                      key={schedule.id}
-                      className="bg-white rounded-lg shadow-sm p-4"
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <h4 className="font-medium text-gray-900">Room {schedule.room}</h4>
-                          <p className="text-sm text-gray-500">{schedule.subject}</p>
-                        </div>
-                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          room.occupancy
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {room.occupancy ? 'Occupied' : 'Vacant'}
-                        </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Assignment Completion</span>
+                        <span className="text-gray-900">{(student.completedAssignments || 0)}/{(student.totalAssignments || 0)}</span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full">
+                        <div 
+                          className="h-2 bg-green-500 rounded-full" 
+                          style={{ width: `${((student.completedAssignments || 0)/(student.totalAssignments || 1)*100)}%` }}
+                        />
                       </div>
 
-                      {/* Room Controls and Status */}
-                      <div className="grid grid-cols-2 gap-2 mt-3">
-                        <div className="bg-gray-50 rounded-lg p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-600">Lights</span>
-                            <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                              room.lights ? 'bg-green-200' : 'bg-gray-200'
-                            }`}>
-                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                room.lights ? 'translate-x-6' : 'translate-x-1'
-                              }`} />
-                            </div>
-                          </div>
-                          <p className="text-xs text-gray-500 mt-1">Energy: {room.energyUsage.toFixed(1)}W</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-600">AC</span>
-                            <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                              room.ac ? 'bg-green-200' : 'bg-gray-200'
-                            }`}>
-                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                room.ac ? 'translate-x-6' : 'translate-x-1'
-                              }`} />
-                            </div>
-                          </div>
-                          <p className="text-xs text-gray-500 mt-1">Temp: {room.temperature}°C</p>
-                        </div>
-                      </div>
-
-                      {/* Environmental Data */}
-                      <div className="mt-4 grid grid-cols-2 gap-2">
-                        <div className="bg-gray-50 rounded-lg p-3">
-                          <span className="text-sm text-gray-600">Temperature</span>
-                          <div className="flex items-center mt-1">
-                            <span className="text-lg font-medium text-gray-900">{room.temperature}°C</span>
-                            <span className="text-xs text-gray-500 ml-2">Humidity: {room.humidity}%</span>
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-3">
-                          <span className="text-sm text-gray-600">Energy Usage</span>
-                          <div className="flex items-center mt-1">
-                            <span className="text-lg font-medium text-gray-900">{(room.energyUsage / 1000).toFixed(2)} kWh</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Energy Usage Progress */}
-                      <div className="mt-4">
-                        <div className="flex items-center justify-between text-sm mb-2">
-                          <span className="text-gray-600">Energy Efficiency</span>
-                          <span className="text-gray-900 font-medium">
-                            {Math.round((1 - (room.energyUsage / 3000)) * 100)}%
-                          </span>
-                        </div>
-                        <div className="h-2 bg-gray-100 rounded-full">
-                          <div 
-                            className="h-2 bg-green-500 rounded-full transition-all duration-500"
-                            style={{ width: `${Math.round((1 - (room.energyUsage / 3000)) * 100)}%` }}
-                          />
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">Based on typical usage patterns</p>
+                      <div className="flex items-center justify-between text-sm mt-2">
+                        <span className="text-gray-600">Current Grade</span>
+                        <span className="text-gray-900 font-medium">
+                          {student.currentGrade ? `${student.currentGrade}%` : 'N/A'}
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-600">Last Activity</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {student.lastActivity || 'No recent activity'}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-600">Performance Trend</p>
+                        {student.performanceTrend && student.performanceTrend > 0 ? (
+                          <ArrowUpIcon className="h-4 w-4 text-green-500 mx-auto" />
+                        ) : student.performanceTrend && student.performanceTrend < 0 ? (
+                          <ArrowDownIcon className="h-4 w-4 text-red-500 mx-auto" />
+                        ) : (
+                          <MinusIcon className="h-4 w-4 text-gray-500 mx-auto" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </motion.section>
 
+          
             {/* Real-time Occupancy */}
             <motion.section
               initial={{ opacity: 0, x: 20 }}
@@ -1969,24 +1865,26 @@ const GeminiChatbot: React.FC = () => {
   const { currentUser } = useAuth();
 
   // Initialize Gemini with API key
-  const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY || '');
+  const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API || '');
 
   const fetchGeminiResponse = async (query: string): Promise<string> => {
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       
       // Add context about the user
-      const prompt = `You are a helpful AI assistant that can answer any questions accurately, can answer about Mark Lloyd Cuizon, Clarence Emmanuel Jamora and Jean Ricka Rosalita - Creators of Smart EcoLock. 
-      They are 4rth year BS Computer Engineering Students   from CIT-U and for Smart EcoLock, addresses energy management, attendance control, and security for CIT-U's rooms and offices. 
-        It uses an ESP32 microcontroller for efficient sensor handling and low power consumption. With occupancy recognition, it turns off lights and electronics 
-        in unoccupied rooms, reducing energy waste. LDR sensors are used to automatically control lighting based on natural light levels in classrooms, optimizing 
-        energy use. Attendance is tracked through access control data, with real-time monitoring in a unified database. Security is enhanced via RFID or biometric 
-        access control, ensuring only authorized individuals enter. Weight sensors in chairs add precision to attendance tracking. A React.js website with Firebase 
-        backend allows system monitoring and control. This system boosts sustainability, management efficiency, and security at CIT-U. 
-        Provide complete answers, ensuring clarity and professionalism. Always include full code implementations when relevant and internet sources 
-        for additional information, even if the question is unrelated to Smart EcoLock. Format responses to facilitate prompt chatbot replies. As an AI assistant helping ${currentUser?.fullName || 'a user'} 
-                     who is an ${currentUser?.role || 'user'} at the institution, 
-                     Respond professionally and concisely to the following query: ${query}.`;
+      const prompt = `You are a helpful AI assistant that can answer any questions accurately, including about Mark Lloyd Cuizon, Clarence Emmanuel Jamora, and Jean Ricka Rosalita - Creators of Smart EcoLock.
+
+They are 4th-year BS Computer Engineering students from Cebu Institute of Technology - University (CIT-U). Their project, Smart EcoLock, addresses energy management, attendance control, and security for CIT-U's rooms and offices.
+
+Smart EcoLock utilizes an ESP32 microcontroller for efficient sensor handling and low power consumption, leveraging its dual-core architecture and built-in Wi-Fi capabilities. With occupancy recognition, it detects room usage through a combination of PZEM for power monitoring and weight sensors, automatically turning off lights and electronics in unoccupied rooms to reduce energy waste. LDR (Light-Dependent Resistor) sensors measure ambient light levels, adjusting classroom lighting dynamically to optimize energy use based on natural daylight availability.
+
+Attendance tracking is achieved through a multi-layered approach. Access control data from RFID (Radio-Frequency Identification) tags ensures only authorized individuals enter, logging entry times into a unified database. Additionally, weight sensors embedded in chairs provide precise occupancy detection by measuring the presence of individuals (e.g., detecting weights above a threshold like 20 kg to confirm a person is seated). This data cross-references RFID logs to validate attendance, reducing errors from manual tracking or proxy entries. The system uploads real-time updates to a Firebase Realtime Database, enabling administrators to monitor occupancy and attendance seamlessly.
+
+Security is enhanced via RFID authentication, restricting access to authorized personnel and students, while weight sensors add an extra layer of verification by confirming physical presence. The system features a React.js website with a Firebase backend, offering an intuitive interface for monitoring room status, controlling devices, and generating attendance reports.
+
+This system boosts sustainability by minimizing energy consumption, improves management efficiency with automated tracking, and enhances security at CIT-U through integrated technology.
+
+Provide complete answers, ensuring clarity and professionalism. Always include full code implementations when relevant and internet sources for additional information, even if the question is unrelated to Smart EcoLock. Format responses to facilitate prompt chatbot replies. As an AI assistant helping ${currentUser?.fullName || 'a user'} who is an ${currentUser?.role || 'user'} at the institution, respond professionally and concisely to the following query: ${query}.`;
 
       const result = await model.generateContent(prompt);
       const response = await result.response;

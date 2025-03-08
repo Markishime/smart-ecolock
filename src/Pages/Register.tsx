@@ -293,16 +293,14 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     const registerUID = async (newUid: string) => {
-      if (!isRegistered) {
+      if (!isRegistered && isFormComplete()) {
         const database = getDatabase();
         const uidRef = ref(database, '/RegisteredUIDs/' + newUid);
         const snapshot = await get(uidRef);
         if (!snapshot.exists()) {
           await set(uidRef, { registered: true });
           setIsRegistered(true);
-        } else {
         }
-      } else {
       }
     };
 
@@ -310,6 +308,20 @@ const Register: React.FC = () => {
       registerUID(formData.rfidUid);
     }
   }, [formData.rfidUid, isRegistered]);
+
+  const isFormComplete = () => {
+    return (
+      formData.fullName &&
+      formData.idNumber &&
+      formData.email &&
+      formData.mobileNumber &&
+      formData.department &&
+      formData.yearLevel &&
+      formData.password &&
+      formData.confirmPassword &&
+      formData.rfidUid
+    );
+  };
 
   useEffect(() => {
     const fetchUnregisteredTags = async () => {
