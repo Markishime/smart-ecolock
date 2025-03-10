@@ -34,6 +34,11 @@ const AdminSidebar = () => {
       path: '/admin/schedules'
     },
     {
+      name: 'Subjects',
+      icon: UserGroupIcon,
+      path: '/admin/subjects-management'
+    },
+    {
       name: 'Sections',
       icon: UserGroupIcon,
       path: '/admin/sections'
@@ -54,9 +59,9 @@ const AdminSidebar = () => {
       path: '/admin/rooms'
     },
     {
-      name: 'Reports',
+      name: 'Insights',
       icon: UserGroupIcon,
-      path: '/admin/reports'
+      path: '/admin/insights'
     },
     {
       name: 'Energy Usage',

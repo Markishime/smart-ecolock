@@ -307,7 +307,7 @@ const TakeAttendance: React.FC = () => {
   useEffect(() => {
     if (!selectedSection || !roomId) return;
 
-    const weightSensorsRef = ref(rtdb, `rooms/${roomId}/weightSensors`);
+    const weightSensorsRef = ref(rtdb, `Students`);
 
     const unsubscribe = onValue(weightSensorsRef, (snapshot) => {
       const weightData = snapshot.val();

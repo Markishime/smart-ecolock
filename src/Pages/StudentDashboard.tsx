@@ -1,36 +1,22 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import StudentNavbar from '../components/StudentNavbar';
 import { Student } from '../interfaces/Student';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   ChartBarIcon,
   CalendarIcon,
-  UserGroupIcon,
   BookOpenIcon,
   ClockIcon,
-  BuildingOfficeIcon,
   UserCircleIcon,
-  AcademicCapIcon,
   BellIcon,
-  ClipboardDocumentListIcon,
   UserIcon,
 } from '@heroicons/react/24/solid';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { format, parseISO, startOfWeek, endOfWeek, eachDayOfInterval, isToday } from 'date-fns';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  orderBy, 
-  limit,
-  doc,
-  getDoc,
-} from 'firebase/firestore';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { format, parseISO, isToday } from 'date-fns';
+import { collection, query, where, getDocs, orderBy, limit, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { theme } from '../styles/theme';
 
 interface AttendanceRecord {
   id: string;
@@ -81,6 +67,7 @@ interface Instructor {
 
 interface EnhancedStudent extends Student {
   section: string;
+  enrolledSubjects?: string[];
 }
 
 const StudentDashboard = () => {
@@ -106,11 +93,8 @@ const StudentDashboard = () => {
 
     const fetchStudentData = async () => {
       if (!currentUser) return;
-
       try {
         setIsLoading(true);
-
-        // Fetch student document
         const studentQuery = query(
           collection(db, 'students'),
           where('uid', '==', currentUser.uid)
@@ -122,15 +106,13 @@ const StudentDashboard = () => {
           const studentData = { id: studentDoc.id, ...studentDoc.data() } as EnhancedStudent;
           setStudentData(studentData);
 
-          // Fetch attendance
           const attendanceQuery = query(
             collection(db, 'attendance'),
             where('studentId', '==', studentData.id)
           );
           const attendanceSnapshot = await getDocs(attendanceQuery);
-          setAttendance(attendanceSnapshot.docs.map(d => d.data() as AttendanceRecord));
+          setAttendance(attendanceSnapshot.docs.map((d) => d.data() as AttendanceRecord));
 
-          // Fetch notifications
           const notificationsQuery = query(
             collection(db, 'notifications'),
             where('studentId', '==', studentData.id),
@@ -138,23 +120,23 @@ const StudentDashboard = () => {
             limit(5)
           );
           const notificationsSnapshot = await getDocs(notificationsQuery);
-          setNotifications(notificationsSnapshot.docs.map(d => d.data() as Notification));
+          setNotifications(notificationsSnapshot.docs.map((d) => d.data() as Notification));
 
-          // Fetch section data
           if (studentData.section) {
-            const sectionsRef = collection(db, 'sections');
-            const sectionQuery = query(sectionsRef, where('code', '==', studentData.section));
+            const sectionQuery = query(
+              collection(db, 'sections'),
+              where('code', '==', studentData.section)
+            );
             const sectionSnapshot = await getDocs(sectionQuery);
 
             if (!sectionSnapshot.empty) {
               const sectionData = {
                 id: sectionSnapshot.docs[0].id,
                 ...sectionSnapshot.docs[0].data(),
-                schedules: sectionSnapshot.docs[0].data().schedule ? [sectionSnapshot.docs[0].data().schedule] : [],
+                schedules: sectionSnapshot.docs[0].data().schedules || [],
               } as Section;
               setSection(sectionData);
 
-              // Fetch instructor data
               if (sectionData.instructorId) {
                 const instructorDoc = await getDoc(doc(db, 'teachers', sectionData.instructorId));
                 if (instructorDoc.exists()) {
@@ -164,16 +146,14 @@ const StudentDashboard = () => {
                   } as Instructor;
                   setInstructor(instructorData);
 
-                  // Fetch subjects assigned to instructor
                   const subjectsRef = collection(db, 'subjects');
                   const subjectsSnapshot = await getDocs(subjectsRef);
-                  const allSubjects = subjectsSnapshot.docs.map(doc => ({
+                  const allSubjects = subjectsSnapshot.docs.map((doc) => ({
                     id: doc.id,
                     ...doc.data(),
                   } as Subject));
 
-                  // Filter subjects assigned to instructor
-                  const instructorSubjects = allSubjects.filter(subject =>
+                  const instructorSubjects = allSubjects.filter((subject) =>
                     instructorData.subjects?.includes(subject.name)
                   );
                   setSubjects(instructorSubjects);
@@ -181,8 +161,6 @@ const StudentDashboard = () => {
               }
             }
           }
-        } else {
-          console.error('Student record not found');
         }
       } catch (error) {
         console.error('Error fetching student data:', error);
@@ -196,21 +174,16 @@ const StudentDashboard = () => {
 
   const getFilteredAttendance = () => {
     if (!section) return [];
-    const filtered = attendance.filter(a => a.sectionId === section.id);
+    const filtered = attendance.filter((a) => a.sectionId === section.id);
     const now = new Date();
-
-    return filtered.filter(a => {
-      const date = parseISO(a.date);
-      return format(date, 'yyyy-MM') === format(now, 'yyyy-MM'); // Monthly by default
-    });
+    return filtered.filter((a) => format(parseISO(a.date), 'yyyy-MM') === format(now, 'yyyy-MM'));
   };
 
   const getAttendanceStats = () => {
     const filtered = getFilteredAttendance();
-    const total = filtered.length;
-    const present = filtered.filter(a => a.status === 'present').length;
-    const late = filtered.filter(a => a.status === 'late').length;
-    const absent = filtered.filter(a => a.status === 'absent').length;
+    const present = filtered.filter((a) => a.status === 'present').length;
+    const late = filtered.filter((a) => a.status === 'late').length;
+    const absent = filtered.filter((a) => a.status === 'absent').length;
 
     return [
       { name: 'Present', value: present },
@@ -237,11 +210,16 @@ const StudentDashboard = () => {
     return <div className="p-8 text-center text-gray-500">No student data found.</div>;
   }
 
-  const overallAttendance = attendance.length > 0
-    ? ((attendance.filter(a => a.status === 'present').length / attendance.length) * 100).toFixed(1)
-    : '0';
-
-  const todaySchedule = instructor?.schedules?.filter(s => isToday(new Date(s.day))) || [];
+  const overallAttendance =
+    attendance.length > 0
+      ? ((attendance.filter((a) => a.status === 'present').length / attendance.length) * 100).toFixed(1)
+      : '0';
+  const enrolledSubjects = studentData.enrolledSubjects || [];
+  const totalSubjects = enrolledSubjects.length;
+  const todaySchedule =
+    instructor?.schedules?.filter(
+      (s) => enrolledSubjects.includes(s.subject || '') && isToday(new Date(s.day))
+    ) || [];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -256,10 +234,7 @@ const StudentDashboard = () => {
         >
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-6">
-              <motion.div
-                whileHover={{ scale: 1.1 }}
-                className="bg-white/20 p-4 rounded-full"
-              >
+              <motion.div whileHover={{ scale: 1.1 }} className="bg-white/20 p-4 rounded-full">
                 <UserCircleIcon className="h-12 w-12 text-white" />
               </motion.div>
               <div>
@@ -289,7 +264,7 @@ const StudentDashboard = () => {
             },
             {
               title: 'Total Subjects',
-              value: subjects.length || 0,
+              value: totalSubjects,
               icon: <BookOpenIcon className="h-6 w-6" />,
               color: 'bg-indigo-500',
             },
@@ -327,7 +302,7 @@ const StudentDashboard = () => {
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column: Profile and Schedule */}
+          {/* Left Column: Profile, Schedule, Enrolled Subjects, and Enrollment */}
           <div className="space-y-8 lg:col-span-2">
             {/* Student Profile */}
             <motion.div
@@ -335,12 +310,10 @@ const StudentDashboard = () => {
               animate={{ opacity: 1, y: 0 }}
               className="bg-white rounded-2xl shadow-lg p-6"
             >
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                  <UserCircleIcon className="h-7 w-7 text-indigo-600" />
-                  Your Profile
-                </h2>
-              </div>
+              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <UserCircleIcon className="h-7 w-7 text-indigo-600" />
+                Your Profile
+              </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <div>
@@ -373,6 +346,35 @@ const StudentDashboard = () => {
               </div>
             </motion.div>
 
+            {/* Enrolled Subjects */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-lg p-6"
+            >
+              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <BookOpenIcon className="h-7 w-7 text-indigo-600" />
+                Enrolled Subjects
+              </h2>
+              {enrolledSubjects.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {enrolledSubjects.map((subject, index) => (
+                    <motion.span
+                      key={index}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: index * 0.1 }}
+                      className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
+                    >
+                      {subject}
+                    </motion.span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 text-center">No subjects enrolled yet.</p>
+              )}
+            </motion.div>
+
             {/* Current Schedule */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -383,44 +385,68 @@ const StudentDashboard = () => {
                 <CalendarIcon className="h-7 w-7 text-indigo-600" />
                 Your Schedule
               </h2>
-              {instructor?.schedules && instructor.schedules.length > 0 ? (
+              {enrolledSubjects.length > 0 && instructor?.schedules && instructor.schedules.length > 0 ? (
                 <div className="space-y-4">
-                  {instructor.schedules.map((schedule, index) => (
-                    <motion.div
-                      key={index}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                      className={`p-4 rounded-xl ${
-                        isToday(new Date(schedule.day)) ? 'bg-indigo-50 border-indigo-200 border' : 'bg-gray-50'
-                      } hover:bg-gray-100 transition-colors`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="bg-indigo-100 p-3 rounded-xl">
-                            <ClockIcon className="h-6 w-6 text-indigo-600" />
+                  {instructor.schedules
+                    .filter((s) => enrolledSubjects.includes(s.subject || ''))
+                    .map((schedule, index) => (
+                      <motion.div
+                        key={index}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className={`p-4 rounded-xl ${
+                          isToday(new Date(schedule.day))
+                            ? 'bg-indigo-50 border-indigo-200 border'
+                            : 'bg-gray-50'
+                        } hover:bg-gray-100 transition-colors`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div className="bg-indigo-100 p-3 rounded-xl">
+                              <ClockIcon className="h-6 w-6 text-indigo-600" />
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900">
+                                {schedule.day} • {schedule.subject || 'N/A'}
+                              </p>
+                              <p className="text-sm text-gray-500">
+                                {schedule.startTime} - {schedule.endTime} • Room: {schedule.room || 'TBD'}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-medium text-gray-900">
-                              {schedule.day} • {schedule.subject || 'N/A'}
-                            </p>
-                            <p className="text-sm text-gray-500">
-                              {schedule.startTime} - {schedule.endTime} • Room: {schedule.room || 'TBD'}
-                            </p>
-                          </div>
+                          {isToday(new Date(schedule.day)) && (
+                            <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-sm font-medium">
+                              Today
+                            </span>
+                          )}
                         </div>
-                        {isToday(new Date(schedule.day)) && (
-                          <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-sm font-medium">
-                            Today
-                          </span>
-                        )}
-                      </div>
-                    </motion.div>
-                  ))}
+                      </motion.div>
+                    ))}
                 </div>
               ) : (
-                <p className="text-gray-500 text-center">No schedule available.</p>
+                <p className="text-gray-500 text-center">
+                  {enrolledSubjects.length === 0
+                    ? 'Please select subjects to view your schedule.'
+                    : 'No schedule available.'}
+                </p>
               )}
+            </motion.div>
+
+            {/* Manage Enrollment */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-lg p-6"
+            >
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">Manage Enrollment</h2>
+              <p className="text-gray-600 mb-4">Choose the subjects you want to enroll in.</p>
+              <Link
+                to="/student/subject-selection"
+                className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                Select Subjects
+              </Link>
             </motion.div>
           </div>
 
@@ -448,9 +474,9 @@ const StudentDashboard = () => {
                       paddingAngle={5}
                       dataKey="value"
                     >
-                      {getAttendanceStats().map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
+                      <Cell fill="#4F46E5" />
+                      <Cell fill="#F59E0B" />
+                      <Cell fill="#EF4444" />
                     </Pie>
                     <Tooltip />
                   </PieChart>
@@ -466,7 +492,6 @@ const StudentDashboard = () => {
               </div>
             </motion.div>
 
-            {/* Instructor Details */}
             {instructor && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
@@ -489,20 +514,20 @@ const StudentDashboard = () => {
                 </div>
                 <div className="mt-4">
                   <p className="text-sm font-medium text-gray-700 mb-2">Assigned Subjects</p>
-                  <div className="flex flex-wrap gap-2">
-                    {subjects.length > 0 ? (
-                      subjects.map(subject => (
+                  {instructor.subjects && instructor.subjects.filter((subject) => enrolledSubjects.includes(subject)).length > 0 ? (
+                    instructor.subjects
+                      .filter((subject) => enrolledSubjects.includes(subject))
+                      .map((subject, index) => (
                         <span
-                          key={subject.id}
+                          key={index}
                           className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
                         >
-                          {subject.name}
+                          {subject}
                         </span>
                       ))
-                    ) : (
-                      <p className="text-sm text-gray-500">No subjects assigned.</p>
-                    )}
-                  </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No matching subjects assigned.</p>
+                  )}
                 </div>
               </motion.div>
             )}

@@ -1364,9 +1364,9 @@ const InstructorDashboard = () => {
           fullName: instructorData?.fullName || 'Instructor'
         }}
         user={{
-          role: 'instructor',
-          fullName: instructorData?.fullName || 'Instructor',
-          department: instructorData?.department || 'Department'
+          role: currentUser?.role || 'instructor',
+          fullName: currentUser?.fullName || 'Instructor',
+          department: currentUser?.department || 'Department',
         }}
       />
       

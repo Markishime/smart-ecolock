@@ -1,58 +1,59 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // Added useEffect
 import { motion } from 'framer-motion';
 import { AcademicCapIcon, UserIcon, ClockIcon, BookOpenIcon } from '@heroicons/react/24/outline';
-import { useContext } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useContext } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../Pages/AuthContext';
 import { signOut } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase'; // Added db for Firestore
+import { collection, query, where, getDocs } from 'firebase/firestore'; // Added Firestore imports
 import Swal from 'sweetalert2';
 
-interface Subject{
-    id: string;
-    name: string;
-    department: string;
-    details?: string;
-    code?: string;
-    credits?: number;
-    prerequisites?: string[];
-    learningObjectives?: string[];
-    status: 'active' | 'inactive';
-    teacherId?: string | null;
+interface Subject {
+  id: string;
+  name: string;
+  department: string;
+  details?: string;
+  code?: string;
+  credits?: number;
+  prerequisites?: string[];
+  learningObjectives?: string[];
+  status: 'active' | 'inactive';
+  teacherId?: string | null;
 }
 
 interface Schedule {
-    id: string;
-    subject: string;
-    room: string;
-    day: string;
-    startTime: string;
-    endTime: string;
-    department: string;
-    status: 'active' | 'inactive';
-    instructor: string;
-    instructorEmail: string;
-    instructorDepartment: string;
-    subjectDetails: Subject | null;
+  id: string;
+  subject: string;
+  room: string;
+  day: string;
+  startTime: string;
+  endTime: string;
+  department: string;
+  status: 'active' | 'inactive';
+  instructor: string;
+  instructorEmail: string;
+  instructorDepartment: string;
+  subjectDetails: Subject | null;
 }
 
 interface Instructor {
-    id: string;
-    name: string;
-    email: string;
-    department: string;
-    role: string;
-    subjects: Subject[];
-    schedules: Schedule[];
-    uid: string;
-    fullName: string;
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+  role: string;
+  subjects: Subject[];
+  schedules: Schedule[];
+  uid: string;
+  fullName: string;
 }
 
 interface NavBarProps {
   currentTime?: Date;
   user: {
     role: 'admin' | 'instructor' | 'student';
-    fullName: string;
+    fullName: string; // Ensure this is populated by the parent
     department: string;
   };
   classStatus: {
@@ -67,13 +68,51 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [instructorFullName, setInstructorFullName] = useState<string>(user.fullName); // Default to prop value
+
+  // Fetch instructor details from Firestore 'teachers' collection
+  useEffect(() => {
+    const fetchInstructorDetails = async () => {
+      if (!currentUser || !currentUser.uid || user.fullName) return; // Skip if no UID or name is already available
+
+      try {
+        const teachersRef = collection(db, 'teachers'); // Changed to 'teachers' collection
+        const q = query(teachersRef, where('uid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+
+        if (!snapshot.empty) {
+          const teacherData = snapshot.docs[0].data() as Instructor;
+          setInstructorFullName(teacherData.fullName || 'Unknown Instructor');
+        } else {
+          console.warn('No teacher found for UID:', currentUser.uid);
+          setInstructorFullName('Unknown Instructor');
+        }
+      } catch (error) {
+        console.error('Error fetching teacher details:', error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'Failed to fetch teacher details.',
+          confirmButtonColor: '#4F46E5',
+          background: '#F9FAFB',
+          customClass: {
+            popup: 'rounded-xl border border-indigo-100',
+            title: 'text-indigo-900',
+            htmlContainer: 'text-indigo-700',
+            confirmButton: 'bg-indigo-600 hover:bg-indigo-700',
+          },
+        });
+      }
+    };
+
+    fetchInstructorDetails();
+  }, [currentUser, user.fullName]);
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
       navigate('/login');
-      
-      // Show success message with correct property names
+
       Swal.fire({
         icon: 'success',
         title: 'Logged Out Successfully',
@@ -84,13 +123,12 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
         customClass: {
           popup: 'rounded-xl border border-indigo-100',
           title: 'text-indigo-900',
-          htmlContainer: 'text-indigo-700'
-        }
+          htmlContainer: 'text-indigo-700',
+        },
       });
     } catch (error) {
       console.error('Error logging out:', error);
-      
-      // Show error message with correct property names
+
       Swal.fire({
         icon: 'error',
         title: 'Logout Failed',
@@ -101,8 +139,8 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
           popup: 'rounded-xl border border-indigo-100',
           title: 'text-indigo-900',
           htmlContainer: 'text-indigo-700',
-          confirmButton: 'bg-indigo-600 hover:bg-indigo-700'
-        }
+          confirmButton: 'bg-indigo-600 hover:bg-indigo-700',
+        },
       });
     }
   };
@@ -182,7 +220,7 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
                 className="flex items-center space-x-3 focus:outline-none hover:opacity-80 transition-opacity"
               >
                 <div className="flex flex-col items-end">
-                  <span className="text-sm font-medium">{user.fullName}</span>
+                  <span className="text-sm font-medium">{instructorFullName}</span> {/* Use fetched or prop name */}
                   <span className="text-xs text-indigo-200">{user.role.charAt(0).toUpperCase() + user.role.slice(1)}</span>
                 </div>
                 <div className="h-10 w-10 rounded-full bg-indigo-500/30 flex items-center justify-center">

@@ -25,6 +25,8 @@ import RFIDRegistrationPage from '../Pages/Register';
 import AdminSections from '../Pages/AdminSectionPage';
 import RoomsPage from '../Pages/RoomsPage';
 import AttendanceManagement from '../Pages/AttendanceManagement';
+import SubjectSelection from '../Pages/SubjectSelection';
+import SubjectsManagement from '../Pages/SubjectManagement';
 const App = () => {
   return (
     <Router>
@@ -39,7 +41,7 @@ const App = () => {
           {/* Admin routes */}
           <Route path="/admin/dashboard" element={<PrivateRoute roles={['admin']}><AdminDashboard /></PrivateRoute>} />
           <Route path="/admin/users" element={<PrivateRoute roles={['admin']}><Users /></PrivateRoute>} />
-          <Route path="/admin/reports" element={<PrivateRoute roles={['admin']}><Reports /></PrivateRoute>} />
+          <Route path="/admin/insights" element={<PrivateRoute roles={['admin']}><Reports /></PrivateRoute>} />
           <Route path="/admin/security-logs" element={<PrivateRoute roles={['admin']}><SecurityLogsPage /></PrivateRoute>} />
           <Route path="/admin/settings" element={<PrivateRoute roles={['admin']}><SettingsPage /></PrivateRoute>} />
           <Route path="/admin/teachers" element={<PrivateRoute roles={['admin']}><TeachersPage /></PrivateRoute>} />
@@ -49,6 +51,8 @@ const App = () => {
           <Route path="/admin/subjects" element={<PrivateRoute roles={['admin']}><AdminSubjects /></PrivateRoute>} />
           <Route path="/admin/sections" element={<PrivateRoute roles={['admin']}><AdminSections /></PrivateRoute>} />
           <Route path="/admin/rooms" element={<PrivateRoute roles={['admin']}><RoomsPage /></PrivateRoute>} />
+          <Route path="/admin/subjects-management" element={<PrivateRoute roles={['admin']}><SubjectsManagement /></PrivateRoute>} />
+          
           {/* Instructor routes */}
           <Route path="/instructor/dashboard" element={<PrivateRoute roles={['instructor']}><Dashboard /></PrivateRoute>} />
           <Route path="/instructor/attendance" element={<PrivateRoute roles={['instructor']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
@@ -75,6 +79,7 @@ const App = () => {
           {/* Student routes */}
           <Route path="/student/dashboard" element={<PrivateRoute roles={['student']}><StudentDashboard /></PrivateRoute>} />
           <Route path="/student/attendance" element={<PrivateRoute roles={['student']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
+          <Route path="/student/subject-selection" element={<PrivateRoute roles={['student']}><SubjectSelection /></PrivateRoute>} />
 
           {/* Redirect root to login */}
           <Route path="/" element={<Navigate to="/login" replace />} />
