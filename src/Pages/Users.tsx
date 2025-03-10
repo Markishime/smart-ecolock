@@ -46,8 +46,15 @@ interface InstructorDetails {
   schedules?: Schedule[];
 }
 
+interface Room {
+  id: string;
+  name: string; // Room name
+  status?: 'available' | 'occupied';
+}
+
 const Users = () => {
   const [users, setUsers] = useState<User[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedRole, setSelectedRole] = useState<'all' | 'admin' | 'instructor' | 'student'>('all');
@@ -65,7 +72,6 @@ const Users = () => {
   });
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
-  const [newScheduleSubject, setNewScheduleSubject] = useState('');
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -131,7 +137,28 @@ const Users = () => {
       }
     };
 
+    const fetchRooms = async () => {
+      try {
+        const roomsCollection = collection(db, 'rooms');
+        const roomsSnapshot = await getDocs(roomsCollection);
+        const roomsData = roomsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name || doc.id, // Fallback to ID if name is missing
+          status: doc.data().status || 'available',
+        } as Room));
+        setRooms(roomsData.filter(room => room.status === 'available')); // Only active rooms
+      } catch (error) {
+        console.error('Error fetching rooms:', error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Fetch Error',
+          text: 'Failed to fetch rooms',
+        });
+      }
+    };
+
     fetchUsers();
+    fetchRooms();
   }, []);
 
   useEffect(() => {
@@ -239,10 +266,11 @@ const Users = () => {
       Swal.fire('Error', 'Failed to delete users', 'error');
     }
   };
+  
 
+  // Handle assignment modal with rooms
   const handleAssignmentModal = async (user: User) => {
     try {
-      // Fetch existing instructor details
       const teacherDoc = await getDoc(doc(db, 'teachers', user.id));
       const existingDetails = teacherDoc.data() as InstructorDetails || {};
 
@@ -250,7 +278,7 @@ const Users = () => {
       setSelectedTeacherId(user.id);
       setInstructorDetails({
         subjects: existingDetails.subjects || [],
-        schedules: existingDetails.schedules || []
+        schedules: existingDetails.schedules || [],
       });
       setIsAssignmentModalOpen(true);
     } catch (error) {
@@ -258,19 +286,6 @@ const Users = () => {
       Swal.fire('Error', 'Failed to load instructor details', 'error');
     }
   };
-
-  const handleSubjectToggle = (subjectId: string) => {
-    setInstructorDetails(prev => {
-      const currentSubjects = prev.subjects || [];
-      return {
-        ...prev,
-        subjects: currentSubjects.includes(subjectId)
-          ? currentSubjects.filter(id => id !== subjectId)
-          : [...currentSubjects, subjectId]
-      };
-    });
-  };
-
   const addNewSchedule = () => {
     setInstructorDetails(prev => ({
       ...prev,
@@ -403,7 +418,6 @@ const Users = () => {
       };
     });
   };
-
   const renderScheduleInputs = () => {
     return (instructorDetails.schedules || []).map((schedule, index) => (
       <motion.div 
@@ -418,14 +432,8 @@ const Users = () => {
           value={schedule.day}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
-            updatedSchedules[index] = {
-              ...updatedSchedules[index],
-              day: e.target.value
-            };
-            setInstructorDetails(prev => ({
-              ...prev,
-              schedules: updatedSchedules
-            }));
+            updatedSchedules[index] = { ...updatedSchedules[index], day: e.target.value };
+            setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
@@ -441,14 +449,8 @@ const Users = () => {
           value={schedule.startTime}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
-            updatedSchedules[index] = {
-              ...updatedSchedules[index],
-              startTime: e.target.value
-            };
-            setInstructorDetails(prev => ({
-              ...prev,
-              schedules: updatedSchedules
-            }));
+            updatedSchedules[index] = { ...updatedSchedules[index], startTime: e.target.value };
+            setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
@@ -459,14 +461,8 @@ const Users = () => {
           value={schedule.endTime}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
-            updatedSchedules[index] = {
-              ...updatedSchedules[index],
-              endTime: e.target.value
-            };
-            setInstructorDetails(prev => ({
-              ...prev,
-              schedules: updatedSchedules
-            }));
+            updatedSchedules[index] = { ...updatedSchedules[index], endTime: e.target.value };
+            setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
@@ -478,40 +474,31 @@ const Users = () => {
           value={schedule.section}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
-            updatedSchedules[index] = {
-              ...updatedSchedules[index],
-              section: e.target.value
-            };
-            setInstructorDetails(prev => ({
-              ...prev,
-              schedules: updatedSchedules
-            }));
+            updatedSchedules[index] = { ...updatedSchedules[index], section: e.target.value };
+            setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
 
-        {/* Room */}
-        <input
-          type="text"
-          placeholder="Room"
+        {/* Room Dropdown */}
+        <select
           value={schedule.room || ''}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
-            updatedSchedules[index] = {
-              ...updatedSchedules[index],
-              room: e.target.value
-            };
-            setInstructorDetails(prev => ({
-              ...prev,
-              schedules: updatedSchedules
-            }));
+            updatedSchedules[index] = { ...updatedSchedules[index], room: e.target.value };
+            setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
+        >
+          <option value="">Select Room</option>
+          {rooms.map(room => (
+            <option key={room.id} value={room.name}>{room.name}</option>
+          ))}
+        </select>
 
         {/* Subject Dropdown */}
         <select
-          value={schedule.subject}
+          value={schedule.subject || ''}
           onChange={(e) => updateScheduleSubject(index, e.target.value)}
           className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
@@ -524,10 +511,9 @@ const Users = () => {
         {/* Delete Button */}
         <button
           onClick={() => {
-            // Remove this specific schedule
             setInstructorDetails(prev => ({
               ...prev,
-              schedules: (prev.schedules || []).filter((_, i) => i !== index)
+              schedules: (prev.schedules || []).filter((_, i) => i !== index),
             }));
           }}
           className="text-red-500 hover:text-red-700"
@@ -539,39 +525,36 @@ const Users = () => {
   };
 
   const filteredUsers = users
-    .filter(user => 
-      (selectedRole === 'all' || user.role === selectedRole) &&
-      (selectedDepartment === 'all' || user.department?.toLowerCase() === selectedDepartment.toLowerCase()) &&
-      (searchQuery === '' || 
-        user.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        user.department?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+  .filter(user => 
+    (selectedRole === 'all' || user.role === selectedRole) &&
+    (selectedDepartment === 'all' || user.department?.toLowerCase() === selectedDepartment.toLowerCase()) &&
+    (searchQuery === '' || 
+      user.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.department?.toLowerCase().includes(searchQuery.toLowerCase())
     )
-    .sort((a, b) => {
-      let valueA, valueB;
-      switch (sortBy) {
-        case 'name':
-          valueA = a.fullName?.toLowerCase() || '';
-          valueB = b.fullName?.toLowerCase() || '';
-          break;
-        case 'role':
-          valueA = a.role?.toLowerCase() || '';
-          valueB = b.role?.toLowerCase() || '';
-          break;
-        case 'department':
-          valueA = a.department?.toLowerCase() || '';
-          valueB = b.department?.toLowerCase() || '';
-          break;
-        default:
-          valueA = '';
-          valueB = '';
-      }
-
-      return sortOrder === 'asc' 
-        ? valueA.localeCompare(valueB) 
-        : valueB.localeCompare(valueA);
-    });
+  )
+  .sort((a, b) => {
+    let valueA, valueB;
+    switch (sortBy) {
+      case 'name':
+        valueA = a.fullName?.toLowerCase() || '';
+        valueB = b.fullName?.toLowerCase() || '';
+        break;
+      case 'role':
+        valueA = a.role?.toLowerCase() || '';
+        valueB = b.role?.toLowerCase() || '';
+        break;
+      case 'department':
+        valueA = a.department?.toLowerCase() || '';
+        valueB = b.department?.toLowerCase() || '';
+        break;
+      default:
+        valueA = '';
+        valueB = '';
+    }
+    return sortOrder === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
+  });
 
   const renderUserCard = (user: User) => (
     <motion.div
@@ -727,7 +710,6 @@ const Users = () => {
           {/* Main Content Area */}
           <div className="w-2/3 p-8 overflow-y-auto">
             <div className="space-y-8">
-
               {/* Schedules Section */}
               <div>
                 <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center">
@@ -749,8 +731,8 @@ const Users = () => {
               </div>
             </div>
 
-            {/* Modal Actions */}
-            <div className="mt-8 flex justify-end space-x-4 border-t pt-6">
+          {/* Modal Actions */}
+          <div className="mt-8 flex justify-end space-x-4 border-t pt-6">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}

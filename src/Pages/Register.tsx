@@ -10,7 +10,7 @@ import {
   onSnapshot,
   updateDoc
 } from 'firebase/firestore';
-import { auth, db, rtdb, listenForNewRFIDTag } from '../firebase';
+import { auth, db, rtdb } from '../firebase';
 import { getDatabase, ref, get, set, remove, onValue, off, DataSnapshot, update } from 'firebase/database';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -56,10 +56,17 @@ interface UserData {
   isAdmin?: boolean;
   section?: string;
   sectionId?: string;
-  [key: string]: string | string[] | boolean | undefined;
+  schedules?: Array<{
+    day: string;
+    startTime: string;
+    endTime: string;
+    room?: string;
+    subject?: string;
+    section: string;
+  }>;
+  [key: string]: string | string[] | boolean | undefined | Array<{ day: string; startTime: string; endTime: string; room?: string; subject?: string; section: string; }>;
 }
 
-// Update the RFID tag interface
 interface RFIDTag {
   uid: string;
   timestamp: string;
@@ -76,6 +83,22 @@ interface Section {
     room: string;
     subject: string;
   };
+}
+
+interface Teacher {
+  id: string;
+  fullName: string;
+  email: string;
+  department: string;
+  subjects?: string[];
+  schedules?: Array<{
+    day: string;
+    startTime: string;
+    endTime: string;
+    room?: string;
+    subject?: string;
+    section: string;
+  }>;
 }
 
 const Register: React.FC = () => {
@@ -163,12 +186,12 @@ const Register: React.FC = () => {
   });
 
   const [isRegistered, setIsRegistered] = useState(false);
-
   const [rfidTags, setRfidTags] = useState<RFIDTag[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
-
   const [sections, setSections] = useState<Section[]>([]);
   const [selectedSection, setSelectedSection] = useState<Section | null>(null);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [selectedTeacherSchedule, setSelectedTeacherSchedule] = useState<Teacher['schedules']>([]);
 
   const navigate = useNavigate();
 
@@ -189,9 +212,7 @@ const Register: React.FC = () => {
   }, [currentStep]);
 
   useEffect(() => {
-    // Real-time listeners for available data
     const fetchRealTimeData = () => {
-      // Fetch sections from students collection
       const studentsRef = collection(db, 'students');
       const unsubscribeStudents = onSnapshot(studentsRef, (snapshot) => {
         const sections = new Set<string>();
@@ -202,7 +223,6 @@ const Register: React.FC = () => {
         setAvailableData(prev => ({ ...prev, sections: Array.from(sections).sort() }));
       });
 
-      // Predefined Departments
       const departments = [
         'Computer Science',
         'Information Technology',
@@ -247,7 +267,24 @@ const Register: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // Password validation effect
+    const fetchTeachers = async () => {
+      try {
+        const teachersCollection = collection(db, 'teachers');
+        const teachersSnapshot = await getDocs(teachersCollection);
+        const teachersData = teachersSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Teacher[];
+        setTeachers(teachersData);
+      } catch (error) {
+        console.error('Error fetching teachers:', error);
+      }
+    };
+
+    fetchTeachers();
+  }, []);
+
+  useEffect(() => {
     const validatePassword = () => {
       const validations = {
         hasUpper: /[A-Z]/.test(formData.password),
@@ -260,35 +297,26 @@ const Register: React.FC = () => {
     };
 
     validatePassword();
-
-    // Cleanup
-    return () => {};
   }, [formData.password]);
 
   useEffect(() => {
-    // Listen for RFID tag updates from Firebase
     const rfidRef = ref(rtdb, '/UnregisteredUIDs');
-    
     const handleRFIDUpdate = (snapshot: DataSnapshot) => {
       const data = snapshot.val();
       if (data) {
         const firstKey = Object.keys(data)[0];
         const uidData = data[firstKey];
         if (uidData && uidData.uid) {
-        setFormData(prev => ({
-          ...prev,
+          setFormData(prev => ({
+            ...prev,
             rfidUid: uidData.uid
-        }));
+          }));
         }
       }
     };
 
     onValue(rfidRef, handleRFIDUpdate);
-
-    // Cleanup subscription
-    return () => {
-      off(rfidRef);
-    };
+    return () => off(rfidRef);
   }, []);
 
   useEffect(() => {
@@ -328,8 +356,6 @@ const Register: React.FC = () => {
       try {
         const tagsRef = collection(db, 'rfidTags');
         const q = query(tagsRef, where('isRegistered', '==', false));
-        
-        // Set up real-time listener
         const unsubscribe = onSnapshot(q, (snapshot) => {
           const tags = snapshot.docs.map(doc => ({
             uid: doc.id,
@@ -337,7 +363,6 @@ const Register: React.FC = () => {
           })) as RFIDTag[];
           setRfidTags(tags);
         });
-
         return () => unsubscribe();
       } catch (error) {
         console.error('Error fetching RFID tags:', error);
@@ -349,7 +374,6 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     const unregisteredUidsRef = ref(rtdb, 'UnregisteredUIDs');
-    
     const unsubscribe = onValue(unregisteredUidsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
@@ -358,13 +382,10 @@ const Register: React.FC = () => {
             uid: value.uid,
             timestamp: value.timestamp
           }))
-          // Filter out UIDs that are already in RegisteredUIDs
           .filter(tag => !data.RegisteredUIDs?.[tag.uid]?.registered);
-
         setRfidTags(tags);
       }
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -416,16 +437,12 @@ const Register: React.FC = () => {
     }));
   };
 
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [rfidTag, setRfidTag] = useState('');
-
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
       const { user } = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-
       const isAdmin = formData.idNumber === '123';
 
       const userData: UserData = {
@@ -441,7 +458,8 @@ const Register: React.FC = () => {
         isAdmin: isAdmin,
         ...(formData.role === 'student' && selectedSection && {
           section: selectedSection.name,
-          sectionId: selectedSection.id
+          sectionId: selectedSection.id,
+          schedules: selectedTeacherSchedule || []
         })
       };
 
@@ -478,7 +496,6 @@ const Register: React.FC = () => {
       } else {
         navigate('/login');
       }
-
     } catch (error) {
       console.error('Registration error:', error);
       Swal.fire({
@@ -609,17 +626,16 @@ const Register: React.FC = () => {
           <div className="space-y-6">
             <h3 className="text-xl font-semibold text-white mb-4">Personal Information</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* RFID Card Input */}
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-white/90">
                   RFID Card
                 </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  name="rfidUid"
+                <div className="relative">
+                  <input
+                    type="text"
+                    name="rfidUid"
                     value={selectedUid}
-                  readOnly
+                    readOnly
                     className={`
                       w-full px-4 py-3 pl-12
                       bg-white/10 border border-white/20 rounded-xl
@@ -652,86 +668,143 @@ const Register: React.FC = () => {
               {renderInput('idNumber', 'ID Number', 'text', 'Enter your ID number')}
               {renderInput('email', 'Email', 'email', 'Enter your email')}
               {renderInput('mobileNumber', 'Mobile Number', 'tel', 'Enter your mobile number')}
-              
             </div>
           </div>
         );
 
-      case 3:
-        return (
-          <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-white mb-4">Academic Details</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {renderSelect('department', 'Department', availableData.departments.map(dept => ({
-                value: dept,
-                label: dept
-              })))}
-              
-              {formData.role === 'student' && (
-                <>
-                  {renderSelect('yearLevel', 'Year Level', [
-                    { value: '1st Year', label: '1st Year' },
-                    { value: '2nd Year', label: '2nd Year' },
-                    { value: '3rd Year', label: '3rd Year' },
-                    { value: '4th Year', label: '4th Year' }
-                  ])}
-                  
-                  <div>
-                    <label className="block text-white/90 text-sm font-medium mb-2">
-                      Section
-                    </label>
-                    <div className="space-y-3">
-                      {sections.map((section) => (
-                        <motion.div
-                          key={section.id}
-                          onClick={() => {
-                            setSelectedSection(section);
-                            setFormData(prev => ({
-                              ...prev,
-                              section: section.name
-                            }));
-                          }}
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
-                          className={`
-                            p-4 rounded-xl cursor-pointer transition-all duration-200
-                            ${selectedSection?.id === section.id
-                              ? 'bg-white text-indigo-600'
-                              : 'bg-white/10 text-white hover:bg-white/20'
-                            }
-                          `}
-                        >
-                          <div className="flex flex-col space-y-2">
-                            <div className="flex justify-between items-center">
-                              <span className="font-medium">{section.name}</span>
-                              <span className="text-sm opacity-80">{section.schedule.room}</span>
-                            </div>
-                            <div className="flex items-center space-x-4 text-sm opacity-80">
-                              <div className="flex items-center space-x-1">
-                                <CalendarIcon className="w-4 h-4" />
-                                <span>{section.schedule.day}</span>
+        case 3:
+          return (
+            <div className="space-y-6">
+              <h3 className="text-xl font-semibold text-white mb-4">Academic Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {renderSelect('department', 'Department', availableData.departments.map(dept => ({
+                  value: dept,
+                  label: dept
+                })))}
+                
+                {formData.role === 'student' && (
+                  <>
+                    {renderSelect('yearLevel', 'Year Level', [
+                      { value: '1st Year', label: '1st Year' },
+                      { value: '2nd Year', label: '2nd Year' },
+                      { value: '3rd Year', label: '3rd Year' },
+                      { value: '4th Year', label: '4th Year' }
+                    ])}
+                    
+                    <div>
+                      <label className="block text-white/90 text-sm font-medium mb-2">
+                        Section
+                      </label>
+                      <div className="space-y-3 max-h-64 overflow-y-auto">
+                        {sections.length > 0 ? (
+                          sections.map((section) => (
+                            <motion.div
+                              key={section.id}
+                              onClick={() => {
+                                setSelectedSection(section);
+                                setFormData(prev => ({
+                                  ...prev,
+                                  section: section.name
+                                }));
+                                const teacher = teachers.find(t => t.id === section.instructorId);
+                                setSelectedTeacherSchedule(teacher?.schedules || []);
+                              }}
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              className={`
+                                p-4 rounded-xl cursor-pointer transition-all duration-200
+                                ${selectedSection?.id === section.id
+                                  ? 'bg-white text-indigo-600'
+                                  : 'bg-white/10 text-white hover:bg-white/20'
+                                }
+                              `}
+                            >
+                              <div className="flex flex-col space-y-2">
+                                <div className="flex justify-between items-center">
+                                  <span className="font-medium">{section.name}</span>
+                                  <span className="text-sm opacity-80">
+                                    {section.schedule?.room || 'TBD'}
+                                  </span>
+                                </div>
+                                {section.schedule && (
+                                  <div className="flex items-center space-x-4 text-sm opacity-80">
+                                    <div className="flex items-center space-x-1">
+                                      <CalendarIcon className="w-4 h-4" />
+                                      <span>{section.schedule.day}</span>
+                                    </div>
+                                    <div className="flex items-center space-x-1">
+                                      <ClockIcon className="w-4 h-4" />
+                                      <span>{section.schedule.startTime} - {section.schedule.endTime}</span>
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="text-sm opacity-80">
+                                  {section.schedule?.subject || 'N/A'}
+                                </div>
                               </div>
-                              <div className="flex items-center space-x-1">
-                                <ClockIcon className="w-4 h-4" />
-                                <span>{section.schedule.startTime} - {section.schedule.endTime}</span>
-                              </div>
-                            </div>
-                            <div className="text-sm opacity-80">
-                              {section.schedule.subject}
-                            </div>
-                          </div>
-                        </motion.div>
-                      ))}
+                            </motion.div>
+                          ))
+                        ) : (
+                          <p className="text-white/80">No sections available.</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </>
-              )}
-              {formData.role === 'instructor' && (
-                renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience')
-              )}
+  
+                    {selectedSection && selectedTeacherSchedule && selectedTeacherSchedule.length > 0 && (
+                      <div>
+                        <label className="block text-white/90 text-sm font-medium mb-2">
+                          Teacher's Schedule
+                        </label>
+                        <div className="space-y-3 max-h-64 overflow-y-auto">
+                          {selectedTeacherSchedule?.map((schedule, index) => (
+                            <motion.div
+                              key={index}
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              className={`
+                                p-4 rounded-xl cursor-pointer transition-all duration-200
+                                ${formData.selectedSchedule === schedule
+                                  ? 'bg-white text-indigo-600'
+                                  : 'bg-white/10 text-white hover:bg-white/20'
+                                }
+                              `}
+                              onClick={() => setFormData(prev => ({
+                                ...prev,
+                                selectedSchedule: schedule
+                              }))}
+                            >
+                              <div className="flex flex-col space-y-2">
+                                <div className="flex justify-between items-center">
+                                  <span className="font-medium">{schedule.subject || 'N/A'}</span>
+                                  <span className="text-sm opacity-80">{schedule.room || 'TBD'}</span>
+                                </div>
+                                <div className="flex items-center space-x-4 text-sm opacity-80">
+                                  <div className="flex items-center space-x-1">
+                                    <CalendarIcon className="w-4 h-4" />
+                                    <span>{schedule.day}</span>
+                                  </div>
+                                  <div className="flex items-center space-x-1">
+                                    <ClockIcon className="w-4 h-4" />
+                                    <span>{schedule.startTime} - {schedule.endTime}</span>
+                                  </div>
+                                </div>
+                                <div className="text-sm opacity-80">
+                                  Section: {schedule.section}
+                                </div>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {formData.role === 'instructor' && (
+                  renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience')
+                )}
+              </div>
             </div>
-          </div>
-        );
+          );
 
       case 4:
         return (
@@ -750,8 +823,6 @@ const Register: React.FC = () => {
                     </button>
                   )}
                 </div>
-                
-                {/* Password Requirements */}
                 <div className="mt-2 space-y-2">
                   <div className="flex items-center space-x-2">
                     <CheckIcon className={`w-4 h-4 ${passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-400'}`} />
@@ -793,7 +864,7 @@ const Register: React.FC = () => {
                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                     className="absolute right-2 top-[38px] hover:text-white/80 transition-colors"
                   >
-                    {showConfirmPassword ? <EyeSlashIcon className="absolute right-1 bottom-[12px]  w-6 h-6" /> : <EyeIcon className="absolute right-1 bottom-[12px]  w-6 h-6" />}
+                    {showConfirmPassword ? <EyeSlashIcon className="absolute right-1 bottom-[12px] w-6 h-6" /> : <EyeIcon className="absolute right-1 bottom-[12px] w-6 h-6" />}
                   </button>
                 )}
                 {formData.confirmPassword && (
@@ -828,7 +899,6 @@ const Register: React.FC = () => {
         <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-white/5 pointer-events-none"></div>
         
         <div className="relative p-8">
-          {/* Header */}
           <div className="text-center mb-8">
             <motion.div
               initial={{ scale: 0 }}
@@ -842,7 +912,6 @@ const Register: React.FC = () => {
             <p className="text-white/80">Join our community today</p>
           </div>
 
-          {/* Progress Bar */}
           <div className="mb-8">
             <div className="flex justify-between mb-2">
               {steps.map((step) => (
@@ -866,9 +935,7 @@ const Register: React.FC = () => {
             </div>
           </div>
 
-          {/* Form Content */}
           <form onSubmit={handleRegister} className="space-y-6">
-            {/* Add RFID UID selection before other fields */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 RFID Tag
@@ -895,7 +962,6 @@ const Register: React.FC = () => {
             </div>
             {renderStepContent()}
 
-            {/* Navigation Buttons */}
             <div className="flex justify-between mt-8 pt-6 border-t border-white/10">
               {currentStep > 1 && (
                 <button

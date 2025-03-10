@@ -10,9 +10,9 @@ import {
   onSnapshot,
   getDoc,
   doc,
-  documentId
+  documentId,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, rtdb } from '../firebase';
 import { useAuth } from '../Pages/AuthContext';
 import {
   CheckCircleIcon,
@@ -24,14 +24,13 @@ import {
   ArrowDownTrayIcon,
   UserGroupIcon,
   CalendarIcon,
-  MagnifyingGlassIcon
+  MagnifyingGlassIcon,
 } from '@heroicons/react/24/solid';
 import NavBar from '../components/NavBar';
 import { toast } from 'react-toastify';
 import { motion } from 'framer-motion';
 import SeatPlanLayout from '../components/SeatPlanLayout';
 import { ref, onValue, off } from 'firebase/database';
-import { rtdb } from '../firebase';
 
 // Define interfaces with additional fields
 interface Student {
@@ -110,14 +109,17 @@ const TakeAttendance: React.FC = () => {
         const sectionsSnapshot = await getDocs(q);
         const fetchedSections = sectionsSnapshot.docs.map(doc => ({
           id: doc.id,
-          ...doc.data()
+          ...doc.data(),
         } as Section));
         setSections(fetchedSections);
         if (fetchedSections.length > 0) {
           setSelectedSection(fetchedSections[0]); // Default to first section
+        } else {
+          setSelectedSection(null); // No sections available
         }
       } catch (error) {
         console.error('Error fetching sections:', error);
+        toast.error('Failed to load sections');
       } finally {
         setLoading(false);
       }
@@ -129,34 +131,39 @@ const TakeAttendance: React.FC = () => {
   // Fetch students for the selected section
   useEffect(() => {
     const fetchStudents = async () => {
-      if (!selectedSection) return;
+      if (!selectedSection) {
+        setStudents([]); // Clear students if no section is selected
+        setClassStartTime(null);
+        setLoading(false);
+        return;
+      }
 
       try {
         setLoading(true);
-        // First, get the list of student IDs from the section
         const sectionDoc = await getDoc(doc(db, 'sections', selectedSection.id));
         if (!sectionDoc.exists()) {
           console.error('Section not found');
+          setStudents([]);
           return;
         }
-        
+
         const sectionData = sectionDoc.data();
         const studentIds = sectionData.students || [];
-        
+
         if (studentIds.length === 0) {
           setStudents([]);
+          setClassStartTime(selectedSection.startTime.toDate());
           setLoading(false);
           return;
         }
-        
-        // Then fetch each student's details from the students collection
+
         const studentsRef = collection(db, 'students');
         const studentsQuery = query(
           studentsRef,
           where('role', '==', 'student'),
           where(documentId(), 'in', studentIds)
         );
-        
+
         const studentsSnapshot = await getDocs(studentsQuery);
         const fetchedStudents = studentsSnapshot.docs.map(doc => {
           const data = doc.data();
@@ -169,14 +176,15 @@ const TakeAttendance: React.FC = () => {
             rfidAuthenticated: false,
             weightAuthenticated: false,
             timestamp: undefined,
-            confirmed: false
+            confirmed: false,
           } as Student;
         });
-        
+
         setStudents(fetchedStudents);
         setClassStartTime(selectedSection.startTime.toDate());
       } catch (error) {
         console.error('Error fetching students:', error);
+        toast.error('Failed to load students');
       } finally {
         setLoading(false);
       }
@@ -234,7 +242,7 @@ const TakeAttendance: React.FC = () => {
           const eventTime = eventData.timestamp.toDate();
           if (weight >= 40) {
             const student = students.find(s => s.seatId === seatId);
-            if (student && student.attendanceStatus) { // Ensure RFID tap was confirmed
+            if (student && student.attendanceStatus) {
               setStudents(prev =>
                 prev.map(s =>
                   s.id === student.id ? { ...s, confirmed: true } : s
@@ -261,13 +269,11 @@ const TakeAttendance: React.FC = () => {
         const teacherData = teacherDoc.data();
         const schedules = teacherData.schedule || [];
 
-        // Get current day and time
         const now = new Date();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const currentDay = days[now.getDay()];
         const currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-        // Find matching schedule
         const matchingSchedule = schedules.find((schedule: Schedule) => {
           return (
             schedule.day === currentDay &&
@@ -278,14 +284,13 @@ const TakeAttendance: React.FC = () => {
 
         if (matchingSchedule) {
           setCurrentSchedule(matchingSchedule);
-          
-          // Find room ID based on room number
+
           const roomsQuery = query(
             collection(db, 'rooms'),
             where('number', '==', matchingSchedule.room)
           );
           const roomSnapshot = await getDocs(roomsQuery);
-          
+
           if (!roomSnapshot.empty) {
             setRoomId(roomSnapshot.docs[0].id);
           }
@@ -303,30 +308,28 @@ const TakeAttendance: React.FC = () => {
     if (!selectedSection || !roomId) return;
 
     const weightSensorsRef = ref(rtdb, `rooms/${roomId}/weightSensors`);
-    
+
     const unsubscribe = onValue(weightSensorsRef, (snapshot) => {
       const weightData = snapshot.val();
-      
+
       if (weightData) {
         setStudents(prev => prev.map(student => {
-          // Find matching weight sensor for student's seat
           const sensorWeight = weightData[student.seatId];
-          
-          if (student.rfidAuthenticated && sensorWeight > 40) { // Weight threshold
+
+          if (student.rfidAuthenticated && sensorWeight > 40) {
             const now = new Date();
             const classStart = classStartTime || new Date();
             const fifteenMinutes = 15 * 60 * 1000;
-            
-            // Determine status based on time
-            const status = now.getTime() - classStart.getTime() <= fifteenMinutes 
-              ? 'present' 
+
+            const status = now.getTime() - classStart.getTime() <= fifteenMinutes
+              ? 'present'
               : 'late';
 
             return {
               ...student,
               weightAuthenticated: true,
               attendanceStatus: status,
-              timestamp: now
+              timestamp: now,
             };
           }
           return student;
@@ -351,11 +354,11 @@ const TakeAttendance: React.FC = () => {
     if (confirmationStudent && confirmationTapTime && classStartTime) {
       const startTimeMs = classStartTime.getTime();
       const tapTimeMs = confirmationTapTime.getTime();
-      const gracePeriod = 15 * 60 * 1000; // 15 minutes in milliseconds
+      const gracePeriod = 15 * 60 * 1000; // 15 minutes
       const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
       setStudents(prev =>
         prev.map(s =>
-          s.id === confirmationStudent.id ? { ...s, attendanceStatus: status } : s
+          s.id === confirmationStudent.id ? { ...s, attendanceStatus: status, rfidAuthenticated: true } : s
         )
       );
     }
@@ -394,8 +397,8 @@ const TakeAttendance: React.FC = () => {
         submittedBy: {
           id: currentUser?.uid,
           name: currentUser?.fullName,
-          role: currentUser?.role
-        }
+          role: currentUser?.role,
+        },
       }));
 
       const attendanceRef = collection(db, 'attendanceRecords');
@@ -423,29 +426,26 @@ const TakeAttendance: React.FC = () => {
       late: lateCount,
       absent: absentCount,
       attendanceRate: total ? ((presentCount + lateCount) / total) * 100 : 0,
-      punctualityRate: total ? (presentCount / (presentCount + lateCount || 1)) * 100 : 0
+      punctualityRate: total ? (presentCount / (presentCount + lateCount || 1)) * 100 : 0,
     };
   }, [students]);
 
   const filteredAndSortedStudents = useMemo(() => {
     let filtered = [...students];
 
-    // Apply search filter
     if (searchQuery) {
       filtered = filtered.filter(student =>
         student.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
-    // Apply status filter
     if (statusFilter !== 'all') {
       filtered = filtered.filter(student => student.attendanceStatus === statusFilter);
     }
 
-    // Apply sorting
     filtered.sort((a, b) => {
       if (sortBy === 'name') {
-        return sortOrder === 'asc' 
+        return sortOrder === 'asc'
           ? a.name.localeCompare(b.name)
           : b.name.localeCompare(a.name);
       }
@@ -468,15 +468,16 @@ const TakeAttendance: React.FC = () => {
         student.name,
         student.email,
         student.attendanceStatus || 'Not marked',
-        student.confirmed ? 'Yes' : 'No'
-      ])
+        student.timestamp ? student.timestamp.toLocaleTimeString() : '',
+        student.confirmed ? 'Yes' : 'No',
+      ]),
     ].map(row => row.join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance_${selectedSection?.name}_${new Date().toLocaleDateString()}.csv`;
+    a.download = `attendance_${selectedSection?.name || 'unnamed'}_${new Date().toLocaleDateString()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -485,11 +486,11 @@ const TakeAttendance: React.FC = () => {
 
   // Update RFID tap handler
   const handleRFIDTap = (studentId: string) => {
-    setStudents(prev => prev.map(student => 
+    setStudents(prev => prev.map(student =>
       student.id === studentId ? {
         ...student,
         rfidAuthenticated: true,
-        attendanceStatus: 'pending'
+        attendanceStatus: 'pending',
       } : student
     ));
   };
@@ -500,12 +501,11 @@ const TakeAttendance: React.FC = () => {
       return (
         <span className="text-yellow-600 flex items-center gap-1">
           <ClockIcon className="w-4 h-4" />
-          Waiting for 2nd authentication...
+          Waiting for weight authentication...
         </span>
       );
     }
-    
-    // Regular status display for authenticated students
+
     switch (student.attendanceStatus) {
       case 'present':
         return <span className="text-green-600">Present</span>;
@@ -532,13 +532,13 @@ const TakeAttendance: React.FC = () => {
         user={{
           role: currentUser?.role || 'instructor',
           fullName: currentUser?.fullName || 'Instructor',
-          department: currentUser?.department || 'Department'
+          department: currentUser?.department || 'Department',
         }}
         classStatus={{
           status: 'Taking Attendance',
           color: 'bg-indigo-100 text-indigo-800',
           details: selectedSection?.name || 'No section selected',
-          fullName: currentUser?.fullName || 'Instructor'
+          fullName: currentUser?.fullName || 'Instructor',
         }}
       />
 
@@ -555,8 +555,8 @@ const TakeAttendance: React.FC = () => {
               <select
                 value={selectedSection?.id || ''}
                 onChange={e => {
-                  const section = sections.find(s => s.id === e.target.value);
-                  setSelectedSection(section || null);
+                  const section = sections.find(s => s.id === e.target.value) || null;
+                  setSelectedSection(section);
                 }}
                 className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500"
               >
@@ -573,6 +573,7 @@ const TakeAttendance: React.FC = () => {
               <button
                 onClick={exportAttendance}
                 className="flex items-center space-x-1 px-3 py-1 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100"
+                disabled={!selectedSection}
               >
                 <ArrowDownTrayIcon className="w-4 h-4" />
                 <span>Export</span>
@@ -581,7 +582,7 @@ const TakeAttendance: React.FC = () => {
           </div>
 
           {/* Current Schedule Card */}
-          {currentSchedule && (
+          {currentSchedule && selectedSection && (
             <div className="mb-6 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 text-white shadow-lg">
               <div className="flex justify-between items-start">
                 <div>
@@ -602,167 +603,181 @@ const TakeAttendance: React.FC = () => {
           {roomId && selectedSection && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold text-gray-800 mb-4">Room Seat Plan</h2>
-              <SeatPlanLayout 
-                roomId={roomId} 
-                sectionId={selectedSection.id} 
+              <SeatPlanLayout
+                roomId={roomId}
+                sectionId={selectedSection.id}
               />
             </div>
           )}
 
           {/* Statistics Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              className="bg-blue-50 p-4 rounded-xl"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-blue-600 text-sm">Total Students</p>
-                  <p className="text-2xl font-bold text-blue-900">{stats.totalStudents}</p>
-                </div>
-                <UserGroupIcon className="w-8 h-8 text-blue-500" />
-              </div>
-            </motion.div>
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              className="bg-green-50 p-4 rounded-xl"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-green-600 text-sm">Present</p>
-                  <p className="text-2xl font-bold text-green-900">{stats.present}</p>
-                </div>
-                <CheckCircleIcon className="w-8 h-8 text-green-500" />
-              </div>
-            </motion.div>
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              className="bg-yellow-50 p-4 rounded-xl"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-yellow-600 text-sm">Late</p>
-                  <p className="text-2xl font-bold text-yellow-900">{stats.late}</p>
-                </div>
-                <ClockIcon className="w-8 h-8 text-yellow-500" />
-              </div>
-            </motion.div>
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              className="bg-red-50 p-4 rounded-xl"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-red-600 text-sm">Absent</p>
-                  <p className="text-2xl font-bold text-red-900">{stats.absent}</p>
-                </div>
-                <XCircleIcon className="w-8 h-8 text-red-500" />
-              </div>
-            </motion.div>
-          </div>
-
-          {/* Filters and Search */}
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 space-y-4 md:space-y-0">
-            <div className="flex items-center space-x-4">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Search students..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-                />
-                <MagnifyingGlassIcon className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" />
-              </div>
-              <select
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value as any)}
-                className="border rounded-lg p-2"
-              >
-                <option value="all">All Status</option>
-                <option value="present">Present</option>
-                <option value="late">Late</option>
-                <option value="absent">Absent</option>
-              </select>
-            </div>
-            <div className="flex items-center space-x-4">
-              <select
-                value={sortBy}
-                onChange={e => setSortBy(e.target.value as any)}
-                className="border rounded-lg p-2"
-              >
-                <option value="name">Sort by Name</option>
-                <option value="status">Sort by Status</option>
-              </select>
-              <button
-                onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <ArrowPathIcon className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Students Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredAndSortedStudents.map(student => (
+          {selectedSection && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <motion.div
-                key={student.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
                 whileHover={{ scale: 1.02 }}
-                className="bg-gray-50 rounded-xl p-4 flex items-center justify-between"
+                className="bg-blue-50 p-4 rounded-xl"
               >
-                <div>
-                  <p className="font-medium text-gray-800">{student.name}</p>
-                  <p className="text-sm text-gray-600">{student.email}</p>
-                  {getStatusDisplay(student)}
-                </div>
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleAttendanceChange(student.id, 'present')}
-                    className={`
-                      p-2 rounded-full
-                      ${student.attendanceStatus === 'present'
-                        ? 'bg-green-500 text-white'
-                        : 'bg-green-100 text-green-600 hover:bg-green-200'}
-                    `}
-                  >
-                    <CheckCircleIcon className="w-6 h-6" />
-                  </button>
-                  <button
-                    onClick={() => handleAttendanceChange(student.id, 'late')}
-                    className={`
-                      p-2 rounded-full
-                      ${student.attendanceStatus === 'late'
-                        ? 'bg-yellow-500 text-white'
-                        : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
-                    `}
-                  >
-                    <ClockIcon className="w-6 h-6" />
-                  </button>
-                  <button
-                    onClick={() => handleAttendanceChange(student.id, 'absent')}
-                    className={`
-                      p-2 rounded-full
-                      ${student.attendanceStatus === 'absent'
-                        ? 'bg-red-500 text-white'
-                        : 'bg-red-100 text-red-600 hover:bg-red-200'}
-                    `}
-                  >
-                    <XCircleIcon className="w-6 h-6" />
-                  </button>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-blue-600 text-sm">Total Students</p>
+                    <p className="text-2xl font-bold text-blue-900">{stats.totalStudents}</p>
+                  </div>
+                  <UserGroupIcon className="w-8 h-8 text-blue-500" />
                 </div>
               </motion.div>
-            ))}
-          </div>
+              <motion.div
+                whileHover={{ scale: 1.02 }}
+                className="bg-green-50 p-4 rounded-xl"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-green-600 text-sm">Present</p>
+                    <p className="text-2xl font-bold text-green-900">{stats.present}</p>
+                  </div>
+                  <CheckCircleIcon className="w-8 h-8 text-green-500" />
+                </div>
+              </motion.div>
+              <motion.div
+                whileHover={{ scale: 1.02 }}
+                className="bg-yellow-50 p-4 rounded-xl"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-yellow-600 text-sm">Late</p>
+                    <p className="text-2xl font-bold text-yellow-900">{stats.late}</p>
+                  </div>
+                  <ClockIcon className="w-8 h-8 text-yellow-500" />
+                </div>
+              </motion.div>
+              <motion.div
+                whileHover={{ scale: 1.02 }}
+                className="bg-red-50 p-4 rounded-xl"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-red-600 text-sm">Absent</p>
+                    <p className="text-2xl font-bold text-red-900">{stats.absent}</p>
+                  </div>
+                  <XCircleIcon className="w-8 h-8 text-red-500" />
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {/* Filters and Search */}
+          {selectedSection && (
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 space-y-4 md:space-y-0">
+              <div className="flex items-center space-x-4">
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search students..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <MagnifyingGlassIcon className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value as any)}
+                  className="border rounded-lg p-2"
+                >
+                  <option value="all">All Status</option>
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="absent">Absent</option>
+                </select>
+              </div>
+              <div className="flex items-center space-x-4">
+                <select
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value as any)}
+                  className="border rounded-lg p-2"
+                >
+                  <option value="name">Sort by Name</option>
+                  <option value="status">Sort by Status</option>
+                </select>
+                <button
+                  onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <ArrowPathIcon className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Students Grid */}
+          {selectedSection ? (
+            filteredAndSortedStudents.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredAndSortedStudents.map(student => (
+                  <motion.div
+                    key={student.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    whileHover={{ scale: 1.02 }}
+                    className="bg-gray-50 rounded-xl p-4 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="font-medium text-gray-800">{student.name}</p>
+                      <p className="text-sm text-gray-600">{student.email}</p>
+                      {getStatusDisplay(student)}
+                    </div>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleAttendanceChange(student.id, 'present')}
+                        className={`
+                          p-2 rounded-full
+                          ${student.attendanceStatus === 'present'
+                            ? 'bg-green-500 text-white'
+                            : 'bg-green-100 text-green-600 hover:bg-green-200'}
+                        `}
+                      >
+                        <CheckCircleIcon className="w-6 h-6" />
+                      </button>
+                      <button
+                        onClick={() => handleAttendanceChange(student.id, 'late')}
+                        className={`
+                          p-2 rounded-full
+                          ${student.attendanceStatus === 'late'
+                            ? 'bg-yellow-500 text-white'
+                            : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
+                        `}
+                      >
+                        <ClockIcon className="w-6 h-6" />
+                      </button>
+                      <button
+                        onClick={() => handleAttendanceChange(student.id, 'absent')}
+                        className={`
+                          p-2 rounded-full
+                          ${student.attendanceStatus === 'absent'
+                            ? 'bg-red-500 text-white'
+                            : 'bg-red-100 text-red-600 hover:bg-red-200'}
+                        `}
+                      >
+                        <XCircleIcon className="w-6 h-6" />
+                      </button>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-600 text-center py-4">No students found for this section.</p>
+            )
+          ) : (
+            <p className="text-gray-600 text-center py-4">Please select a section to view students.</p>
+          )}
 
           {/* Submit Button */}
           <div className="mt-6 flex justify-between items-center">
-            <div className="text-sm text-gray-600">
-              Attendance Rate: {stats.attendanceRate.toFixed(1)}% | 
-              Punctuality Rate: {stats.punctualityRate.toFixed(1)}%
-            </div>
+            {selectedSection && (
+              <div className="text-sm text-gray-600">
+                Attendance Rate: {stats.attendanceRate.toFixed(1)}% | 
+                Punctuality Rate: {stats.punctualityRate.toFixed(1)}%
+              </div>
+            )}
             <div className="flex space-x-4">
               <Link
                 to="/instructor/attendance-management"
@@ -774,6 +789,7 @@ const TakeAttendance: React.FC = () => {
               <button
                 onClick={submitAttendance}
                 className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition flex items-center gap-2"
+                disabled={!selectedSection || students.length === 0}
               >
                 <CheckCircleIcon className="w-5 h-5" />
                 Submit Attendance
