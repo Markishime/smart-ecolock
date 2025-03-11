@@ -39,6 +39,7 @@ interface Schedule {
   section: string;
   room?: string;
   subject?: string;
+  instructorUid?: string; // Added to track instructor UID
 }
 
 interface InstructorDetails {
@@ -48,13 +49,21 @@ interface InstructorDetails {
 
 interface Room {
   id: string;
-  name: string; // Room name
+  name: string;
   status?: 'available' | 'occupied';
+}
+
+interface Section {
+  id: string;
+  name: string;
+  code: string;
+  teacherId?: string;
 }
 
 const Users = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedRole, setSelectedRole] = useState<'all' | 'admin' | 'instructor' | 'student'>('all');
@@ -73,6 +82,7 @@ const Users = () => {
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
 
+  // Fetch Users
   useEffect(() => {
     const fetchUsers = async () => {
       try {
@@ -81,51 +91,35 @@ const Users = () => {
         const teachersCollection = collection(db, 'teachers');
         const studentsCollection = collection(db, 'students');
 
-        // Fetch users from the main users collection
-        const usersSnapshot = await getDocs(usersCollection);
-        const usersData = usersSnapshot.docs.map(doc => ({
+        const [usersSnapshot, teachersSnapshot, studentsSnapshot] = await Promise.all([
+          getDocs(usersCollection),
+          getDocs(teachersCollection),
+          getDocs(studentsCollection)
+        ]);
+
+        const usersData = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+        const teachersData = teachersSnapshot.docs.map(doc => ({
           id: doc.id,
-          ...doc.data()
+          fullName: doc.data().fullName,
+          email: doc.data().email,
+          role: 'instructor',
+          department: doc.data().department,
+          uid: doc.data().uid
+        } as User));
+        const studentsData = studentsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          fullName: doc.data().fullName,
+          email: doc.data().email,
+          role: 'student',
+          department: doc.data().department,
+          studentId: doc.data().studentId,
+          uid: doc.data().uid
         } as User));
 
-        // Fetch teachers with additional details
-        const teachersSnapshot = await getDocs(teachersCollection);
-        const teachersData = teachersSnapshot.docs.map(doc => {
-          const teacherData = doc.data();
-          return {
-            id: doc.id,
-            fullName: teacherData.fullName,
-            email: teacherData.email,
-            role: 'instructor',
-            department: teacherData.department,
-            uid: teacherData.uid
-          } as User;
-        });
-
-        // Fetch students with additional details
-        const studentsSnapshot = await getDocs(studentsCollection);
-        const studentsData = studentsSnapshot.docs.map(doc => {
-          const studentData = doc.data();
-          return {
-            id: doc.id,
-            fullName: studentData.fullName,
-            email: studentData.email,
-            role: 'student',
-            department: studentData.department,
-            studentId: studentData.studentId,
-            uid: studentData.uid
-          } as User;
-        });
-
-        // Combine all users, prioritizing main users collection
         const combinedUsers = [
           ...usersData,
-          ...teachersData.filter(teacher => 
-            !usersData.some(user => user.uid === teacher.uid)
-          ),
-          ...studentsData.filter(student => 
-            !usersData.some(user => user.uid === student.uid)
-          )
+          ...teachersData.filter(teacher => !usersData.some(user => user.uid === teacher.uid)),
+          ...studentsData.filter(student => !usersData.some(user => user.uid === student.uid))
         ];
 
         setUsers(combinedUsers);
@@ -137,53 +131,31 @@ const Users = () => {
       }
     };
 
+    fetchUsers();
+  }, []);
+
+  // Fetch Rooms
+  useEffect(() => {
     const fetchRooms = async () => {
       try {
         const roomsCollection = collection(db, 'rooms');
         const roomsSnapshot = await getDocs(roomsCollection);
         const roomsData = roomsSnapshot.docs.map(doc => ({
           id: doc.id,
-          name: doc.data().name || doc.id, // Fallback to ID if name is missing
+          name: doc.data().name || doc.id,
           status: doc.data().status || 'available',
         } as Room));
-        setRooms(roomsData.filter(room => room.status === 'available')); // Only active rooms
+        setRooms(roomsData.filter(room => room.status === 'available'));
       } catch (error) {
         console.error('Error fetching rooms:', error);
-        Swal.fire({
-          icon: 'error',
-          title: 'Fetch Error',
-          text: 'Failed to fetch rooms',
-        });
+        Swal.fire({ icon: 'error', title: 'Fetch Error', text: 'Failed to fetch rooms' });
       }
     };
 
-    fetchUsers();
     fetchRooms();
   }, []);
 
-  useEffect(() => {
-    const fetchSubjects = async () => {
-      try {
-        const subjectsCollection = collection(db, 'subjects');
-        const subjectsSnapshot = await getDocs(subjectsCollection);
-        const subjectsData = subjectsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as Subject));
-        setSubjects(subjectsData);
-      } catch (error) {
-        console.error('Error fetching subjects:', error);
-        Swal.fire({
-          icon: 'error',
-          title: 'Fetch Error',
-          text: 'Failed to fetch subjects'
-        });
-      }
-    };
-
-    fetchSubjects();
-  }, []);
-
+  // Fetch Subjects
   useEffect(() => {
     const fetchSubjects = async () => {
       try {
@@ -196,24 +168,40 @@ const Users = () => {
         setSubjects(subjectsData.filter(subject => subject.status === 'active'));
       } catch (error) {
         console.error('Error fetching subjects:', error);
+        Swal.fire({ icon: 'error', title: 'Fetch Error', text: 'Failed to fetch subjects' });
       }
     };
 
     fetchSubjects();
   }, []);
 
-  // Get unique departments for filtering
-  const departments = Array.from(new Set(
-    users.map(user => user.department || 'Unknown')
-  ));
+  // Fetch Sections
+  useEffect(() => {
+    const fetchSections = async () => {
+      try {
+        const sectionsCollection = collection(db, 'sections');
+        const sectionsSnapshot = await getDocs(sectionsCollection);
+        const sectionsData = sectionsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+          code: doc.data().code,
+          teacherId: doc.data().teacherId
+        } as Section));
+        setSections(sectionsData);
+      } catch (error) {
+        console.error('Error fetching sections:', error);
+        Swal.fire({ icon: 'error', title: 'Fetch Error', text: 'Failed to fetch sections' });
+      }
+    };
 
+    fetchSections();
+  }, []);
+
+  // Handle Delete User
   const handleDeleteUser = async (userId: string, userRole: string) => {
     try {
-      const collectionName = userRole === 'instructor' ? 'teachers' : 
-                           userRole === 'student' ? 'students' : 'users';
-      
+      const collectionName = userRole === 'instructor' ? 'teachers' : userRole === 'student' ? 'students' : 'users';
       await deleteDoc(doc(db, collectionName, userId));
-      
       Swal.fire({
         icon: 'success',
         title: 'User Deleted',
@@ -228,6 +216,7 @@ const Users = () => {
     }
   };
 
+  // Handle Sort
   const handleSort = (field: 'name' | 'role' | 'department') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -237,22 +226,20 @@ const Users = () => {
     }
   };
 
+  // Handle Bulk Delete
   const handleBulkDelete = async () => {
     try {
       await Promise.all(
         selectedUsers.map(userId => {
           const user = users.find(u => u.id === userId);
           if (user) {
-            const collectionName = user.role === 'instructor' ? 'teachers' : 
-                                user.role === 'student' ? 'students' : 'users';
+            const collectionName = user.role === 'instructor' ? 'teachers' : user.role === 'student' ? 'students' : 'users';
             return deleteDoc(doc(db, collectionName, userId));
           }
         })
       );
-      
       setSelectedUsers([]);
       setShowDeleteModal(false);
-      
       Swal.fire({
         icon: 'success',
         title: 'Users Deleted',
@@ -266,9 +253,8 @@ const Users = () => {
       Swal.fire('Error', 'Failed to delete users', 'error');
     }
   };
-  
 
-  // Handle assignment modal with rooms
+  // Handle Assignment Modal
   const handleAssignmentModal = async (user: User) => {
     try {
       const teacherDoc = await getDoc(doc(db, 'teachers', user.id));
@@ -278,7 +264,10 @@ const Users = () => {
       setSelectedTeacherId(user.id);
       setInstructorDetails({
         subjects: existingDetails.subjects || [],
-        schedules: existingDetails.schedules || [],
+        schedules: existingDetails.schedules?.map(schedule => ({
+          ...schedule,
+          instructorUid: user.uid // Include UID in each schedule
+        })) || []
       });
       setIsAssignmentModalOpen(true);
     } catch (error) {
@@ -286,6 +275,8 @@ const Users = () => {
       Swal.fire('Error', 'Failed to load instructor details', 'error');
     }
   };
+
+  // Add New Schedule
   const addNewSchedule = () => {
     setInstructorDetails(prev => ({
       ...prev,
@@ -297,25 +288,21 @@ const Users = () => {
           endTime: '',
           section: '',
           room: '',
-          subject: ''
+          subject: '',
+          instructorUid: selectedInstructor?.uid // Include UID in new schedule
         }
       ]
     }));
   };
 
+  // Handle Save Assignments
   const handleSaveAssignments = async () => {
     try {
-      // Validate selected teacher
       if (!selectedTeacherId) {
-        Swal.fire({
-          icon: 'error',
-          title: 'Error',
-          text: 'Please select a teacher first'
-        });
+        Swal.fire({ icon: 'error', title: 'Error', text: 'Please select a teacher first' });
         return;
       }
 
-      // Map subject IDs to subject names with null safety
       const subjectNames = (instructorDetails.subjects || [])
         .map(subjectId => {
           const subject = subjects.find(s => s.id === subjectId);
@@ -323,53 +310,38 @@ const Users = () => {
         })
         .filter(name => name !== '');
 
-      // Validate schedules
       const validSchedules = (instructorDetails.schedules || []).filter(
-        schedule => 
-          schedule.startTime && 
-          schedule.endTime && 
-          schedule.section &&
-          schedule.day
-      );
+        schedule => schedule.startTime && schedule.endTime && schedule.section && schedule.day
+      ).map(schedule => ({
+        ...schedule,
+        instructorUid: selectedInstructor?.uid // Ensure UID is included
+      }));
 
-      // Prepare update object
       const updateData = {
         subjects: subjectNames,
         schedules: validSchedules
       };
 
-      // Reference to the selected teacher's document
       const teacherDocRef = doc(db, 'teachers', selectedTeacherId);
-
-      // Fetch current teacher data to get department
       const teacherDoc = await getDoc(teacherDocRef);
       const teacherData = teacherDoc.data();
 
-      // Update teacher document
       await updateDoc(teacherDocRef, updateData);
 
-      // Optional: Sync subjects with subjects collection
       const subjectsRef = collection(db, 'subjects');
-      
-      // Collect all unique subjects from schedules and assigned subjects
       const allSubjects = [
         ...subjectNames,
         ...(validSchedules.map(schedule => schedule.subject || '').filter(Boolean))
       ];
 
-      // Add new subjects to the subjects collection if they don't exist
       for (const subjectName of allSubjects) {
-        // Check if subject already exists
         const subjectQuery = query(
-          subjectsRef, 
+          subjectsRef,
           where('name', '==', subjectName),
           where('department', '==', teacherData?.department)
         );
-        
         const existingSubjects = await getDocs(subjectQuery);
-        
         if (existingSubjects.empty) {
-          // Add new subject if it doesn't exist
           await addDoc(subjectsRef, {
             name: subjectName,
             department: teacherData?.department || 'Unassigned',
@@ -379,7 +351,6 @@ const Users = () => {
         }
       }
 
-      // Show success message
       Swal.fire({
         icon: 'success',
         title: 'Assignments Saved',
@@ -387,45 +358,30 @@ const Users = () => {
         timer: 2000,
         showConfirmButton: false
       });
-
-      // Close the modal
       setIsAssignmentModalOpen(false);
-
-      // Optional: Refresh teacher data
-      // fetchTeachers();
     } catch (error) {
       console.error('Error saving assignments:', error);
-      Swal.fire({
-        icon: 'error',
-        title: 'Save Error',
-        text: error instanceof Error 
-          ? error.message 
-          : 'Failed to save teacher assignments'
-      });
+      Swal.fire({ icon: 'error', title: 'Save Error', text: error instanceof Error ? error.message : 'Failed to save teacher assignments' });
     }
   };
 
+  // Update Schedule Subject
   const updateScheduleSubject = (index: number, subject: string) => {
     setInstructorDetails(prev => {
       const updatedSchedules = [...(prev.schedules || [])];
-      updatedSchedules[index] = {
-        ...updatedSchedules[index],
-        subject
-      };
-      return {
-        ...prev,
-        schedules: updatedSchedules
-      };
+      updatedSchedules[index] = { ...updatedSchedules[index], subject };
+      return { ...prev, schedules: updatedSchedules };
     });
   };
+
   const renderScheduleInputs = () => {
     return (instructorDetails.schedules || []).map((schedule, index) => (
-      <motion.div 
-        key={index} 
+      <motion.div
+        key={index}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.1 }}
-        className="grid grid-cols-6 gap-4 mb-4 items-center"
+        className="grid grid-cols-1 md:grid-cols-7 gap-6 mb-8 items-center bg-gray-50 px-4 py-6 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200"
       >
         {/* Day Dropdown */}
         <select
@@ -435,14 +391,14 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], day: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
         >
           <option value="">Select Day</option>
           {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => (
             <option key={day} value={day}>{day}</option>
           ))}
         </select>
-
+  
         {/* Start Time */}
         <input
           type="time"
@@ -452,9 +408,9 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], startTime: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="col-span-1 px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
         />
-
+  
         {/* End Time */}
         <input
           type="time"
@@ -464,22 +420,25 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], endTime: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="col-span-1 px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
         />
-
-        {/* Section */}
-        <input
-          type="text"
-          placeholder="Section"
+  
+        {/* Section Dropdown */}
+        <select
           value={schedule.section}
           onChange={(e) => {
             const updatedSchedules = [...(instructorDetails.schedules || [])];
             updatedSchedules[index] = { ...updatedSchedules[index], section: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-
+          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+        >
+          <option value="">Select Section</option>
+          {sections.map(section => (
+            <option key={section.id} value={section.name}>{section.name}</option>
+          ))}
+        </select>
+  
         {/* Room Dropdown */}
         <select
           value={schedule.room || ''}
@@ -488,73 +447,62 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], room: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
         >
           <option value="">Select Room</option>
           {rooms.map(room => (
             <option key={room.id} value={room.name}>{room.name}</option>
           ))}
         </select>
-
+  
         {/* Subject Dropdown */}
         <select
           value={schedule.subject || ''}
           onChange={(e) => updateScheduleSubject(index, e.target.value)}
-          className="col-span-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
         >
           <option value="">Select Subject</option>
           {subjects.map(subject => (
             <option key={subject.id} value={subject.name}>{subject.name}</option>
           ))}
         </select>
-
+  
         {/* Delete Button */}
         <button
           onClick={() => {
             setInstructorDetails(prev => ({
               ...prev,
-              schedules: (prev.schedules || []).filter((_, i) => i !== index),
+              schedules: (prev.schedules || []).filter((_, i) => i !== index)
             }));
           }}
-          className="text-red-500 hover:text-red-700"
+          className="col-span-1 flex items-center justify-center text-red-500 hover:text-red-700"
         >
           <TrashIcon className="w-5 h-5" />
         </button>
       </motion.div>
     ));
   };
-
+  // Filtered Users
   const filteredUsers = users
-  .filter(user => 
-    (selectedRole === 'all' || user.role === selectedRole) &&
-    (selectedDepartment === 'all' || user.department?.toLowerCase() === selectedDepartment.toLowerCase()) &&
-    (searchQuery === '' || 
-      user.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.department?.toLowerCase().includes(searchQuery.toLowerCase())
+    .filter(user => 
+      (selectedRole === 'all' || user.role === selectedRole) &&
+      (selectedDepartment === 'all' || user.department?.toLowerCase() === selectedDepartment.toLowerCase()) &&
+      (searchQuery === '' || 
+        user.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        user.department?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
     )
-  )
-  .sort((a, b) => {
-    let valueA, valueB;
-    switch (sortBy) {
-      case 'name':
-        valueA = a.fullName?.toLowerCase() || '';
-        valueB = b.fullName?.toLowerCase() || '';
-        break;
-      case 'role':
-        valueA = a.role?.toLowerCase() || '';
-        valueB = b.role?.toLowerCase() || '';
-        break;
-      case 'department':
-        valueA = a.department?.toLowerCase() || '';
-        valueB = b.department?.toLowerCase() || '';
-        break;
-      default:
-        valueA = '';
-        valueB = '';
-    }
-    return sortOrder === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
-  });
+    .sort((a, b) => {
+      let valueA, valueB;
+      switch (sortBy) {
+        case 'name': valueA = a.fullName?.toLowerCase() || ''; valueB = b.fullName?.toLowerCase() || ''; break;
+        case 'role': valueA = a.role?.toLowerCase() || ''; valueB = b.role?.toLowerCase() || ''; break;
+        case 'department': valueA = a.department?.toLowerCase() || ''; valueB = b.department?.toLowerCase() || ''; break;
+        default: valueA = ''; valueB = '';
+      }
+      return sortOrder === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
+    });
 
   const renderUserCard = (user: User) => (
     <motion.div
@@ -562,10 +510,7 @@ const Users = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`
-        bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden
-        ${selectedUsers.includes(user.id) ? 'ring-2 ring-indigo-500' : ''}
-      `}
+      className={`bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden ${selectedUsers.includes(user.id) ? 'ring-2 ring-indigo-500' : ''}`}
     >
       <div className="p-6">
         <div className="flex items-start justify-between">
@@ -574,25 +519,16 @@ const Users = () => {
               type="checkbox"
               checked={selectedUsers.includes(user.id)}
               onChange={(e) => {
-                if (e.target.checked) {
-                  setSelectedUsers([...selectedUsers, user.id]);
-                } else {
-                  setSelectedUsers(selectedUsers.filter(id => id !== user.id));
-                }
+                if (e.target.checked) setSelectedUsers([...selectedUsers, user.id]);
+                else setSelectedUsers(selectedUsers.filter(id => id !== user.id));
               }}
               className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
-            <div className={`
-              w-12 h-12 rounded-full flex items-center justify-center
-              ${user.role === 'admin' ? 'bg-blue-100' :
-                user.role === 'instructor' ? 'bg-purple-100' : 'bg-green-100'}
-            `}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${user.role === 'admin' ? 'bg-blue-100' : user.role === 'instructor' ? 'bg-purple-100' : 'bg-green-100'}`}>
               {user.role === 'student' ? (
                 <AcademicCapIcon className="w-6 h-6 text-green-600" />
               ) : (
-                <UserIcon className={`w-6 h-6 ${
-                  user.role === 'admin' ? 'text-blue-600' : 'text-purple-600'
-                }`} />
+                <UserIcon className={`w-6 h-6 ${user.role === 'admin' ? 'text-blue-600' : 'text-purple-600'}`} />
               )}
             </div>
             <div>
@@ -600,7 +536,6 @@ const Users = () => {
               <p className="text-sm text-gray-500">{user.email}</p>
             </div>
           </div>
-          
           <div className="flex items-center space-x-2">
             {user.role === 'instructor' && (
               <button
@@ -608,19 +543,13 @@ const Users = () => {
                 className="p-2 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors duration-200 flex items-center space-x-2"
               >
                 <PlusIcon className="w-5 h-5 mr-1" />
-                Assign
+                <span>Assign</span>
               </button>
             )}
           </div>
         </div>
-        
         <div className="mt-4 flex flex-wrap gap-2">
-          <span className={`
-            px-3 py-1 rounded-full text-xs font-medium
-            ${user.role === 'admin' ? 'bg-blue-100 text-blue-800' :
-              user.role === 'instructor' ? 'bg-purple-100 text-purple-800' :
-              'bg-green-100 text-green-800'}
-          `}>
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${user.role === 'admin' ? 'bg-blue-100 text-blue-800' : user.role === 'instructor' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'}`}>
             {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
           </span>
           {user.department && (
@@ -640,22 +569,22 @@ const Users = () => {
 
   const renderAssignmentModal = () => {
     if (!isAssignmentModalOpen || !selectedInstructor) return null;
-
+  
     return (
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
       >
-        <motion.div 
+        <motion.div
           initial={{ scale: 0.9, y: 50 }}
           animate={{ scale: 1, y: 0 }}
           transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[95vh] overflow-y-auto flex"
+          className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[80vh] overflow-y-auto flex"
         >
           {/* Sidebar with Instructor Info */}
-          <div className="w-1/3 bg-gradient-to-br from-indigo-600 to-purple-600 text-white p-8 flex flex-col justify-between">
+          <div className="w-1/4 bg-gradient-to-br from-indigo-600 to-purple-600 text-white p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center space-x-4 mb-6">
                 <div className="w-16 h-16 bg-white bg-opacity-20 rounded-full flex items-center justify-center">
@@ -666,7 +595,6 @@ const Users = () => {
                   <p className="text-sm opacity-75">{selectedInstructor.email}</p>
                 </div>
               </div>
-              
               <div className="space-y-4">
                 <div>
                   <p className="text-sm opacity-75 mb-1">Department</p>
@@ -685,11 +613,11 @@ const Users = () => {
                       instructorDetails.subjects?.map(subjectId => {
                         const subject = subjects.find(s => s.id === subjectId);
                         return (
-                          <span 
-                            key={subjectId} 
+                          <span
+                            key={subjectId}
                             className="text-xs bg-white bg-opacity-10 px-2 py-1 rounded"
                           >
-                            {subject?.name}
+                            {subject?.name || 'Unknown'}
                           </span>
                         );
                       })
@@ -698,7 +626,6 @@ const Users = () => {
                 </div>
               </div>
             </div>
-            
             <div className="mt-auto">
               <p className="text-xs opacity-75 mb-2">Last Updated</p>
               <p className="text-sm font-medium">
@@ -706,22 +633,22 @@ const Users = () => {
               </p>
             </div>
           </div>
-
+  
           {/* Main Content Area */}
-          <div className="w-2/3 p-8 overflow-y-auto">
+          <div className="w-3/4 p-8 overflow-y-auto">
             <div className="space-y-8">
               {/* Schedules Section */}
               <div>
-                <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center">
+                <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
                   <ClockIcon className="w-6 h-6 mr-3 text-green-600" />
                   Weekly Schedule
                 </h3>
-                <div className="space-y-4">
+                <div className="space-y-6">
                   {renderScheduleInputs()}
                   <div className="flex justify-center">
                     <button
                       onClick={addNewSchedule}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center space-x-2"
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center space-x-2"
                     >
                       <PlusIcon className="w-5 h-5" />
                       <span>Add New Schedule</span>
@@ -730,9 +657,9 @@ const Users = () => {
                 </div>
               </div>
             </div>
-
-          {/* Modal Actions */}
-          <div className="mt-8 flex justify-end space-x-4 border-t pt-6">
+  
+            {/* Modal Actions */}
+            <div className="mt-8 flex justify-end space-x-4 border-t pt-6">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
@@ -745,10 +672,10 @@ const Users = () => {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleSaveAssignments}
-                className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center"
+                className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center"
               >
                 <CheckIcon className="w-5 h-5 mr-2" />
-                Save Assignments
+                <span>Save Assignments</span>
               </motion.button>
             </div>
           </div>
@@ -757,10 +684,11 @@ const Users = () => {
     );
   };
 
+  const departments = Array.from(new Set(users.map(user => user.department || 'Unknown')));
+
   return (
     <div className="flex h-screen bg-gray-100">
       <AdminSidebar />
-      
       <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
         <div className="p-8 space-y-8">
           {/* Header */}
@@ -771,8 +699,6 @@ const Users = () => {
                 {filteredUsers.length} users found
               </p>
             </div>
-            
-            {/* Search Bar */}
             <div className="relative">
               <input
                 type="text"
@@ -797,7 +723,6 @@ const Users = () => {
                 <option value="instructor">Instructor</option>
                 <option value="student">Student</option>
               </select>
-              
               <select
                 value={selectedDepartment}
                 onChange={(e) => setSelectedDepartment(e.target.value)}
@@ -809,8 +734,6 @@ const Users = () => {
                 ))}
               </select>
             </div>
-
-            {/* Sort Controls */}
             <div className="flex gap-4">
               <select
                 value={sortBy}

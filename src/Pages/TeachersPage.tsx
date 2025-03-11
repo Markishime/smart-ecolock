@@ -115,7 +115,7 @@ const TeachersPage: React.FC = () => {
     }
   };
 
-  const getSubjectNames = (subjectIds: string[]) => {
+  const getSubjectNames = (subjectIds: string[] = []): string[] => {
     return subjectIds.map(id => {
       const subject = subjects.find(s => s.id === id);
       return subject ? subject.name : id;
