@@ -69,6 +69,8 @@ interface UserData {
 
 interface RFIDTag {
   uid: string;
+  registered?: boolean;
+  timestamp?: string;
 }
 
 interface Section {
@@ -299,21 +301,32 @@ const Register: React.FC = () => {
   }, [formData.password]);
 
   useEffect(() => {
-    // Fetch unregistered UIDs from RTDB
+    // Fetch RegisteredUIDs and UnregisteredUIDs from RTDB
+    const registeredUidsRef = ref(rtdb, 'RegisteredUIDs');
     const unregisteredUidsRef = ref(rtdb, 'UnregisteredUIDs');
+
     const unsubscribe = onValue(unregisteredUidsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         const tags: RFIDTag[] = Object.entries(data).map(([key, value]: [string, any]) => ({
-          uid: value.uid || key, // Use the key as UID if value.uid is not present
+          uid: value.uid || key,
         }));
         setRfidTags(tags);
       } else {
         setRfidTags([]);
       }
+    }, (error) => {
+      console.error('Error fetching UnregisteredUIDs:', error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: 'Failed to fetch RFID tags.'
+      });
     });
 
-    return () => unsubscribe();
+    return () => {
+      off(unregisteredUidsRef, 'value', unsubscribe);
+    };
   }, []);
 
   useEffect(() => {
@@ -368,9 +381,21 @@ const Register: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
 
+    if (!selectedUid) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'RFID Required',
+        text: 'Please select an RFID tag to proceed.'
+      });
+      setIsLoading(false);
+      return;
+    }
+
     try {
+      // Create auth user
       const { user } = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
 
+      // Prepare user data
       const userData: UserData = {
         uid: user.uid,
         fullName: formData.fullName,
@@ -388,9 +413,8 @@ const Register: React.FC = () => {
         })
       };
 
-      let collectionName = formData.role === 'instructor' ? 'teachers' : 'students';
-
-      const collectionRef = collection(db, collectionName);
+      // Store in Firestore
+      const collectionRef = collection(db, formData.role === 'instructor' ? 'teachers' : 'students');
       await setDoc(doc(collectionRef, user.uid), userData);
 
       if (formData.rfidUid) {
@@ -399,7 +423,8 @@ const Register: React.FC = () => {
         const registeredRef = ref(rtdb, `RegisteredUIDs/${formData.rfidUid}`);
         const snapshot = await get(unregisteredRef);
         if (snapshot.exists()) {
-          await set(registeredRef, snapshot.val());
+          const timestamp = snapshot.val().AccessLogs || snapshot.val();
+          await set(registeredRef, timestamp);
           await remove(unregisteredRef);
         }
 
@@ -421,6 +446,7 @@ const Register: React.FC = () => {
       });
 
       navigate('/login');
+
     } catch (error) {
       console.error('Registration error:', error);
       Swal.fire({

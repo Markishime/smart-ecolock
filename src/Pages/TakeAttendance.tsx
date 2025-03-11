@@ -32,17 +32,17 @@ import { motion } from 'framer-motion';
 import SeatPlanLayout from '../components/SeatPlanLayout';
 import { ref, onValue, off } from 'firebase/database';
 
-// Define interfaces with additional fields
+// Define interfaces
 interface Student {
   id: string;
   name: string;
   email: string;
   seatId: string;
-  attendanceStatus?: 'present' | 'absent' | 'late' | 'pending';
+  rfidUid: string;
+  attendanceStatus: 'pending' | 'present' | 'late' | 'absent' | undefined;
   rfidAuthenticated: boolean;
   weightAuthenticated: boolean;
   timestamp?: Date;
-  confirmed?: boolean;
 }
 
 interface Section {
@@ -50,7 +50,7 @@ interface Section {
   name: string;
   students: string[];
   instructorId?: string;
-  startTime: Timestamp; // Class start time
+  startTime: Timestamp;
 }
 
 interface AttendanceStats {
@@ -81,10 +81,8 @@ const TakeAttendance: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [classStartTime, setClassStartTime] = useState<Date | null>(null);
-  const [confirmationStudent, setConfirmationStudent] = useState<Student | null>(null);
-  const [confirmationTapTime, setConfirmationTapTime] = useState<Date | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'present' | 'absent' | 'late'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'present' | 'absent' | 'late' | 'pending'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'status' | 'time'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [currentSchedule, setCurrentSchedule] = useState<Schedule | null>(null);
@@ -113,9 +111,9 @@ const TakeAttendance: React.FC = () => {
         } as Section));
         setSections(fetchedSections);
         if (fetchedSections.length > 0) {
-          setSelectedSection(fetchedSections[0]); // Default to first section
+          setSelectedSection(fetchedSections[0]);
         } else {
-          setSelectedSection(null); // No sections available
+          setSelectedSection(null);
         }
       } catch (error) {
         console.error('Error fetching sections:', error);
@@ -132,7 +130,7 @@ const TakeAttendance: React.FC = () => {
   useEffect(() => {
     const fetchStudents = async () => {
       if (!selectedSection) {
-        setStudents([]); // Clear students if no section is selected
+        setStudents([]);
         setClassStartTime(null);
         setLoading(false);
         return;
@@ -172,11 +170,11 @@ const TakeAttendance: React.FC = () => {
             name: data.fullName || '',
             email: data.email || '',
             seatId: data.seatId || '',
+            rfidUid: data.rfidUid || '',
             attendanceStatus: undefined,
             rfidAuthenticated: false,
             weightAuthenticated: false,
             timestamp: undefined,
-            confirmed: false,
           } as Student;
         });
 
@@ -193,71 +191,84 @@ const TakeAttendance: React.FC = () => {
     fetchStudents();
   }, [selectedSection]);
 
-  // Listen for RFID tap events
-  useEffect(() => {
-    if (!selectedSection) return;
-
-    const tapsRef = collection(db, 'rfidTaps');
-    const q = query(
-      tapsRef,
-      where('sectionId', '==', selectedSection.id),
-      where('date', '==', new Date().toISOString().split('T')[0])
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const tapData = change.doc.data();
-          const studentId = tapData.studentId;
-          const tapTime = tapData.timestamp.toDate();
-          const student = students.find(s => s.id === studentId);
-          if (student) {
-            setConfirmationStudent(student);
-            setConfirmationTapTime(tapTime);
-          }
-        }
-      });
-    });
-
-    return () => unsubscribe();
-  }, [selectedSection, students]);
-
-  // Listen for weight sensor events
+  // Listen for attendance updates from RTDB
   useEffect(() => {
     if (!selectedSection || !classStartTime) return;
 
-    const weightRef = collection(db, 'weightSensorEvents');
-    const q = query(
-      weightRef,
-      where('sectionId', '==', selectedSection.id),
-      where('date', '==', new Date().toISOString().split('T')[0])
-    );
+    const studentsRef = ref(rtdb, 'Students');
+    const unsubscribe = onValue(studentsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const eventData = change.doc.data();
-          const seatId = eventData.seatId;
-          const weight = eventData.weight;
-          const eventTime = eventData.timestamp.toDate();
-          if (weight >= 40) {
-            const student = students.find(s => s.seatId === seatId);
-            if (student && student.attendanceStatus) {
-              setStudents(prev =>
-                prev.map(s =>
-                  s.id === student.id ? { ...s, confirmed: true } : s
-                )
-              );
-            }
+      setStudents(prev => {
+        return prev.map(student => {
+          const studentAttendance = data[student.rfidUid]?.AttendanceRecords;
+          if (!studentAttendance) return student;
+
+          const latestTimestamp = Object.keys(studentAttendance)
+            .sort()
+            .reverse()[0];
+          const status = studentAttendance[latestTimestamp];
+          const timestampParts = latestTimestamp.split(' ')[0].split('-');
+          const timeParts = latestTimestamp.split(' ')[1].split(':');
+          const timestamp = new Date(
+            parseInt(timestampParts[2]), // Year
+            parseInt(timestampParts[0]) - 1, // Month (0-based)
+            parseInt(timestampParts[1]), // Day
+            parseInt(timeParts[0]), // Hour
+            parseInt(timeParts[1]), // Minute
+            parseInt(timeParts[2]) // Second
+          );
+
+          const timeSinceTap = currentTime.getTime() - timestamp.getTime();
+          const fifteenMinutes = 15 * 60 * 1000;
+          const thirtyMinutes = 30 * 60 * 1000;
+
+          let updatedStatus: 'pending' | 'present' | 'late' | 'absent' | undefined = status;
+          if (status === 'Pending' && timeSinceTap >= thirtyMinutes) {
+            updatedStatus = 'absent';
+            logAttendance(student.rfidUid, 'Absent', timestamp);
+          } else if (status === 'Pending' && timeSinceTap >= fifteenMinutes) {
+            updatedStatus = 'late';
+            logAttendance(student.rfidUid, 'Late', timestamp);
           }
-        }
+
+          return {
+            ...student,
+            rfidAuthenticated: true,
+            weightAuthenticated: status === 'Present',
+            attendanceStatus: updatedStatus,
+            timestamp,
+          };
+        });
       });
     });
 
-    return () => unsubscribe();
-  }, [selectedSection, students, classStartTime]);
+    return () => off(studentsRef, 'value', unsubscribe);
+  }, [selectedSection, classStartTime, currentTime]);
 
-  // Fetch teacher's current schedule based on day and time
+  // Log attendance to RTDB (for late/absent updates)
+  const logAttendance = (rfidUid: string, status: string, timestamp: Date) => {
+    const formattedTimestamp = timestamp.toLocaleString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).replace(/,/, '').replace(/\//g, '-');
+    const path = `/Students/${rfidUid}/AttendanceRecords/${formattedTimestamp}`;
+    const registeredPath = `/RegisteredUIDs/${rfidUid}`;
+    
+    // This assumes Firebase JS SDK is configured for RTDB elsewhere
+    import('firebase/database').then(({ set }) => {
+      set(ref(rtdb, path), status);
+      set(ref(rtdb, registeredPath), formattedTimestamp);
+    });
+  };
+
+  // Fetch teacher's current schedule
   useEffect(() => {
     const fetchCurrentSchedule = async () => {
       if (!currentUser?.uid) return;
@@ -272,25 +283,23 @@ const TakeAttendance: React.FC = () => {
         const now = new Date();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const currentDay = days[now.getDay()];
-        const currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const currentTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
         const matchingSchedule = schedules.find((schedule: Schedule) => {
           return (
             schedule.day === currentDay &&
-            schedule.startTime <= currentTime &&
-            schedule.endTime >= currentTime
+            schedule.startTime <= currentTimeStr &&
+            schedule.endTime >= currentTimeStr
           );
         });
 
         if (matchingSchedule) {
           setCurrentSchedule(matchingSchedule);
-
           const roomsQuery = query(
             collection(db, 'rooms'),
             where('number', '==', matchingSchedule.room)
           );
           const roomSnapshot = await getDocs(roomsQuery);
-
           if (!roomSnapshot.empty) {
             setRoomId(roomSnapshot.docs[0].id);
           }
@@ -303,72 +312,24 @@ const TakeAttendance: React.FC = () => {
     fetchCurrentSchedule();
   }, [currentUser]);
 
-  // Add real-time database listener for weight sensors
-  useEffect(() => {
-    if (!selectedSection || !roomId) return;
-
-    const weightSensorsRef = ref(rtdb, `Students`);
-
-    const unsubscribe = onValue(weightSensorsRef, (snapshot) => {
-      const weightData = snapshot.val();
-
-      if (weightData) {
-        setStudents(prev => prev.map(student => {
-          const sensorWeight = weightData[student.seatId];
-
-          if (student.rfidAuthenticated && sensorWeight > 40) {
-            const now = new Date();
-            const classStart = classStartTime || new Date();
-            const fifteenMinutes = 15 * 60 * 1000;
-
-            const status = now.getTime() - classStart.getTime() <= fifteenMinutes
-              ? 'present'
-              : 'late';
-
-            return {
-              ...student,
-              weightAuthenticated: true,
-              attendanceStatus: status,
-              timestamp: now,
-            };
-          }
-          return student;
-        }));
-      }
-    });
-
-    return () => off(weightSensorsRef, 'value', unsubscribe);
-  }, [selectedSection, roomId, classStartTime]);
-
   // Handle manual attendance change
   const handleAttendanceChange = (studentId: string, status: 'present' | 'absent' | 'late') => {
     setStudents(prev =>
-      prev.map(student =>
-        student.id === studentId ? { ...student, attendanceStatus: status, confirmed: false } : student
-      )
+      prev.map(student => {
+        if (student.id === studentId) {
+          const timestamp = new Date();
+          logAttendance(student.rfidUid, status, timestamp);
+          return {
+            ...student,
+            attendanceStatus: status,
+            rfidAuthenticated: true,
+            weightAuthenticated: status === 'present',
+            timestamp,
+          };
+        }
+        return student;
+      })
     );
-  };
-
-  // Confirm RFID tap and set initial status
-  const confirmAttendance = () => {
-    if (confirmationStudent && confirmationTapTime && classStartTime) {
-      const startTimeMs = classStartTime.getTime();
-      const tapTimeMs = confirmationTapTime.getTime();
-      const gracePeriod = 15 * 60 * 1000; // 15 minutes
-      const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
-      setStudents(prev =>
-        prev.map(s =>
-          s.id === confirmationStudent.id ? { ...s, attendanceStatus: status, rfidAuthenticated: true } : s
-        )
-      );
-    }
-    setConfirmationStudent(null);
-    setConfirmationTapTime(null);
-  };
-
-  const rejectAttendance = () => {
-    setConfirmationStudent(null);
-    setConfirmationTapTime(null);
   };
 
   // Submit attendance records
@@ -389,10 +350,9 @@ const TakeAttendance: React.FC = () => {
         subject: currentSchedule.subject,
         room: currentSchedule.room,
         status: student.attendanceStatus || 'absent',
-        confirmed: student.confirmed || false,
-        rfidAuthenticated: student.rfidAuthenticated || false,
-        weightAuthenticated: student.weightAuthenticated || false,
-        timestamp: Timestamp.now(),
+        rfidAuthenticated: student.rfidAuthenticated,
+        weightAuthenticated: student.weightAuthenticated,
+        timestamp: Timestamp.fromDate(student.timestamp || new Date()),
         date: new Date().toISOString().split('T')[0],
         submittedBy: {
           id: currentUser?.uid,
@@ -455,6 +415,11 @@ const TakeAttendance: React.FC = () => {
         const statusB = statusOrder[b.attendanceStatus || 'undefined'];
         return sortOrder === 'asc' ? statusA - statusB : statusB - statusA;
       }
+      if (sortBy === 'time' && a.timestamp && b.timestamp) {
+        return sortOrder === 'asc'
+          ? a.timestamp.getTime() - b.timestamp.getTime()
+          : b.timestamp.getTime() - a.timestamp.getTime();
+      }
       return 0;
     });
 
@@ -463,13 +428,14 @@ const TakeAttendance: React.FC = () => {
 
   const exportAttendance = () => {
     const csvContent = [
-      ['Name', 'Email', 'Status', 'Time', 'Confirmed by Sensor'],
+      ['Name', 'Email', 'Status', 'Timestamp', 'RFID Authenticated', 'Weight Authenticated'],
       ...students.map(student => [
         student.name,
         student.email,
         student.attendanceStatus || 'Not marked',
-        student.timestamp ? student.timestamp.toLocaleTimeString() : '',
-        student.confirmed ? 'Yes' : 'No',
+        student.timestamp ? student.timestamp.toLocaleString() : '',
+        student.rfidAuthenticated ? 'Yes' : 'No',
+        student.weightAuthenticated ? 'Yes' : 'No',
       ]),
     ].map(row => row.join(',')).join('\n');
 
@@ -484,20 +450,8 @@ const TakeAttendance: React.FC = () => {
     window.URL.revokeObjectURL(url);
   };
 
-  // Update RFID tap handler
-  const handleRFIDTap = (studentId: string) => {
-    setStudents(prev => prev.map(student =>
-      student.id === studentId ? {
-        ...student,
-        rfidAuthenticated: true,
-        attendanceStatus: 'pending',
-      } : student
-    ));
-  };
-
-  // Update student card status display
   const getStatusDisplay = (student: Student) => {
-    if (student.rfidAuthenticated && !student.weightAuthenticated) {
+    if (student.attendanceStatus === 'pending') {
       return (
         <span className="text-yellow-600 flex items-center gap-1">
           <ClockIcon className="w-4 h-4" />
@@ -505,14 +459,28 @@ const TakeAttendance: React.FC = () => {
         </span>
       );
     }
-
     switch (student.attendanceStatus) {
       case 'present':
-        return <span className="text-green-600">Present</span>;
+        return (
+          <span className="text-green-600 flex items-center gap-1">
+            <CheckCircleIcon className="w-4 h-4" />
+            Present
+          </span>
+        );
       case 'late':
-        return <span className="text-yellow-600">Late</span>;
+        return (
+          <span className="text-yellow-600 flex items-center gap-1">
+            <ClockIcon className="w-4 h-4" />
+            Late
+          </span>
+        );
       case 'absent':
-        return <span className="text-red-600">Absent</span>;
+        return (
+          <span className="text-red-600 flex items-center gap-1">
+            <XCircleIcon className="w-4 h-4" />
+            Absent
+          </span>
+        );
       default:
         return <span className="text-gray-600">Not marked</span>;
     }
@@ -603,20 +571,14 @@ const TakeAttendance: React.FC = () => {
           {roomId && selectedSection && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold text-gray-800 mb-4">Room Seat Plan</h2>
-              <SeatPlanLayout
-                roomId={roomId}
-                sectionId={selectedSection.id}
-              />
+              <SeatPlanLayout roomId={roomId} sectionId={selectedSection.id} />
             </div>
           )}
 
           {/* Statistics Cards */}
           {selectedSection && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                className="bg-blue-50 p-4 rounded-xl"
-              >
+              <motion.div whileHover={{ scale: 1.02 }} className="bg-blue-50 p-4 rounded-xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-blue-600 text-sm">Total Students</p>
@@ -625,10 +587,7 @@ const TakeAttendance: React.FC = () => {
                   <UserGroupIcon className="w-8 h-8 text-blue-500" />
                 </div>
               </motion.div>
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                className="bg-green-50 p-4 rounded-xl"
-              >
+              <motion.div whileHover={{ scale: 1.02 }} className="bg-green-50 p-4 rounded-xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-green-600 text-sm">Present</p>
@@ -637,10 +596,7 @@ const TakeAttendance: React.FC = () => {
                   <CheckCircleIcon className="w-8 h-8 text-green-500" />
                 </div>
               </motion.div>
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                className="bg-yellow-50 p-4 rounded-xl"
-              >
+              <motion.div whileHover={{ scale: 1.02 }} className="bg-yellow-50 p-4 rounded-xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-yellow-600 text-sm">Late</p>
@@ -649,10 +605,7 @@ const TakeAttendance: React.FC = () => {
                   <ClockIcon className="w-8 h-8 text-yellow-500" />
                 </div>
               </motion.div>
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                className="bg-red-50 p-4 rounded-xl"
-              >
+              <motion.div whileHover={{ scale: 1.02 }} className="bg-red-50 p-4 rounded-xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-red-600 text-sm">Absent</p>
@@ -687,6 +640,7 @@ const TakeAttendance: React.FC = () => {
                   <option value="present">Present</option>
                   <option value="late">Late</option>
                   <option value="absent">Absent</option>
+                  <option value="pending">Pending</option>
                 </select>
               </div>
               <div className="flex items-center space-x-4">
@@ -697,9 +651,10 @@ const TakeAttendance: React.FC = () => {
                 >
                   <option value="name">Sort by Name</option>
                   <option value="status">Sort by Status</option>
+                  <option value="time">Sort by Time</option>
                 </select>
                 <button
-                  onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                  onClick={() => setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'))}
                   className="p-2 hover:bg-gray-100 rounded-lg"
                 >
                   <ArrowPathIcon className="w-5 h-5" />
@@ -723,7 +678,12 @@ const TakeAttendance: React.FC = () => {
                     <div>
                       <p className="font-medium text-gray-800">{student.name}</p>
                       <p className="text-sm text-gray-600">{student.email}</p>
-                      {getStatusDisplay(student)}
+                      <p className="text-sm">{getStatusDisplay(student)}</p>
+                      {student.timestamp && (
+                        <p className="text-xs text-gray-500">
+                          Last Update: {student.timestamp.toLocaleString()}
+                        </p>
+                      )}
                     </div>
                     <div className="flex space-x-2">
                       <button
@@ -774,8 +734,8 @@ const TakeAttendance: React.FC = () => {
           <div className="mt-6 flex justify-between items-center">
             {selectedSection && (
               <div className="text-sm text-gray-600">
-                Attendance Rate: {stats.attendanceRate.toFixed(1)}% | 
-                Punctuality Rate: {stats.punctualityRate.toFixed(1)}%
+                Attendance Rate: {stats.attendanceRate.toFixed(1)}% | Punctuality Rate:{' '}
+                {stats.punctualityRate.toFixed(1)}%
               </div>
             )}
             <div className="flex space-x-4">
@@ -798,44 +758,6 @@ const TakeAttendance: React.FC = () => {
           </div>
         </motion.div>
       </main>
-
-      {/* RFID Confirmation Dialog */}
-      {confirmationStudent && confirmationTapTime && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-        >
-          <motion.div
-            initial={{ scale: 0.9 }}
-            animate={{ scale: 1 }}
-            className="bg-white p-6 rounded-xl shadow-xl max-w-md w-full mx-4"
-          >
-            <h2 className="text-xl font-bold mb-4">Confirm Attendance</h2>
-            <div className="space-y-2">
-              <p><strong>Student:</strong> {confirmationStudent.name}</p>
-              <p><strong>Tap Time:</strong> {confirmationTapTime.toLocaleString()}</p>
-              <p className="text-sm text-gray-600">
-                Weight sensor confirmation pending...
-              </p>
-            </div>
-            <div className="mt-6 flex justify-end space-x-3">
-              <button
-                onClick={rejectAttendance}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
-              >
-                Reject
-              </button>
-              <button
-                onClick={confirmAttendance}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-              >
-                Confirm
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
     </div>
   );
 };

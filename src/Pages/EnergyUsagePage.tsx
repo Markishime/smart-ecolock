@@ -1,7 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
-import { getDatabase, ref, onValue, off } from 'firebase/database';
-import { db, rtdb } from '../firebase'; // Ensure rtdb is exported from firebase.js
 import { motion } from 'framer-motion';
 import AdminSidebar from '../components/AdminSidebar';
 import { 
@@ -37,11 +34,77 @@ ChartJS.register(
   Legend
 );
 
+// Static JSON data
+const energyDataJson = {
+  "Alerts": {
+    "Tamper": "03-11-2025 12:27:21"
+  },
+  "Instructors": {
+    "1419CF": {
+      "AccessLogs": "e:03-10-2025 20:02:32",
+      "PZEMData": {
+        "Current": "0.16",
+        "Energy": "0.04",
+        "Frequency": "59.80",
+        "Power": "1.20",
+        "PowerFactor": "0.03",
+        "Voltage": "228.40"
+      }
+    },
+    "1419CFBA": {
+      "AccessLogs": "03-10-2025 20:02:32",
+      "PZEMData": {
+        "Current": "0.16",
+        "Energy": "0.04",
+        "Frequency": "59.80",
+        "Power": "1.20",
+        "PowerFactor": "0.03",
+        "Voltage": "228.40"
+      }
+    },
+    "74F8C4BA": {
+      "AccessLogs": "03-10-2025 21:12:31",
+      "PZEMData": {
+        "Current": "0.16",
+        "Energy": "0.04",
+        "Frequency": "60.10",
+        "Power": "1.10",
+        "PowerFactor": "0.03",
+        "Voltage": "226.50"
+      }
+    }
+  },
+  "RegisteredUIDs": {
+    "1419CF": "e:03-10-2025 20:18:05",
+    "1419CFBA": "03-10-2025 20:18:05",
+    "74F8C4BA": "03-10-2025 21:12:31"
+  },
+  "UnregisteredUIDs": {
+    "1419CF": { "AccessLogs": "e:03-10-2025 20:01:24" },
+    "7422B5BA": { "AccessLogs": "03-10-2025 21:12:44" },
+    "74F8C4": { "AccessLogs": "e:03-10-2025 20:19:21" },
+    "F429BA": { "AccessLogs": "e:03-11-2025 12:27:44" },
+    "F429BABA": { "AccessLogs": "03-11-2025 12:27:44" }
+  },
+  "rfid": {
+    "1419CFBA": {
+      "role": "instructor",
+      "timestamp": { "_methodName": "serverTimestamp" },
+      "uid": "T4TVOYRBpgTX3voUkXuxpAyte4r2"
+    },
+    "74F8C4BA": {
+      "role": "student",
+      "timestamp": { "_methodName": "serverTimestamp" },
+      "uid": "eEIYuVZ2B4MXwEBWRANowKdf7Hw1"
+    }
+  }
+};
+
 interface Room {
   id: string;
-  name: string; // e.g., "705"
-  building: string; // e.g., "GLE Building"
-  floor: string; // e.g., "7th Floor"
+  name: string;
+  building: string;
+  floor: string;
 }
 
 interface EnergyUsage {
@@ -64,7 +127,7 @@ interface PZEMData {
   Power: string;
   PowerFactor: string;
   Voltage: string;
-  timestamp?: string; // Added to track when data was recorded
+  timestamp?: string;
 }
 
 interface InstructorPZEMData {
@@ -75,150 +138,98 @@ interface InstructorPZEMData {
 const EnergyUsagePage: React.FC = () => {
   const [energyData, setEnergyData] = useState<EnergyUsage[]>([]);
   const [pzemData, setPzemData] = useState<InstructorPZEMData[]>([]);
-  const [selectedClassroom, setSelectedClassroom] = useState<string>(''); // Uses room name (e.g., "705")
+  const [selectedClassroom, setSelectedClassroom] = useState<string>('');
   const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week'>('hour');
   const [loading, setLoading] = useState(true);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  // Fetch rooms from Firestore 'rooms' collection
+  // Simulated room data since we don't have Firestore
   useEffect(() => {
-    const fetchRooms = async () => {
-      try {
-        const roomsRef = collection(db, 'rooms');
-        const snapshot = await getDocs(roomsRef);
-        const roomsData: Room[] = snapshot.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name,
-          building: doc.data().building || 'Unknown',
-          floor: doc.data().floor || 'Unknown',
-        }));
-
-        setRooms(roomsData.sort((a, b) => a.name.localeCompare(b.name)));
-        if (roomsData.length > 0 && !selectedClassroom) {
-          setSelectedClassroom(roomsData[0].name);
-        }
-      } catch (error) {
-        console.error('Error fetching rooms:', error);
-        Swal.fire('Error', 'Failed to fetch rooms from Firestore', 'error');
-      }
-    };
-
-    fetchRooms();
+    const mockRooms: Room[] = [
+      { id: "1", name: "705", building: "GLE Building", floor: "7th Floor" },
+      { id: "2", name: "706", building: "GLE Building", floor: "7th Floor" },
+    ];
+    setRooms(mockRooms.sort((a, b) => a.name.localeCompare(b.name)));
+    setSelectedClassroom(mockRooms[0].name);
   }, []);
 
-  // Fetch energy usage data from Firestore 'energyUsage' collection
+  // Simulated energy usage data (since original doesn't contain this)
   useEffect(() => {
     if (!selectedClassroom) return;
 
-    const getStartTime = () => {
-      const now = new Date();
-      switch (timeRange) {
-        case 'hour': return new Date(now.getTime() - 60 * 60 * 1000);
-        case 'day': return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        case 'week': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        default: return now;
-      }
-    };
+    const mockEnergyData: EnergyUsage[] = [
+      {
+        id: "1",
+        classroomId: selectedClassroom,
+        timestamp: new Date("2025-03-10T20:00:00"),
+        consumptionKWh: 0.04,
+        devices: { lighting: 0.01, projection: 0.01, computers: 0.01, hvac: 0.01 }
+      },
+      {
+        id: "2",
+        classroomId: selectedClassroom,
+        timestamp: new Date("2025-03-10T21:00:00"),
+        consumptionKWh: 0.04,
+        devices: { lighting: 0.01, projection: 0.01, computers: 0.01, hvac: 0.01 }
+      },
+    ];
 
-    const fetchEnergyData = async () => {
-      try {
-        const q = query(
-          collection(db, 'energyUsage'),
-          where('classroomId', '==', selectedClassroom),
-          where('timestamp', '>', getStartTime())
-        );
+    const filteredData = mockEnergyData.filter(entry => {
+      const startTime = getStartTime();
+      return entry.timestamp > startTime;
+    });
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-          const data = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            timestamp: doc.data().timestamp.toDate(),
-          } as EnergyUsage));
-
-          setEnergyData(data);
-          setLoading(false);
-        });
-
-        return () => unsubscribe();
-      } catch (error) {
-        console.error('Error fetching energy data:', error);
-        Swal.fire('Error', 'Failed to fetch energy data', 'error');
-        setLoading(false);
-      }
-    };
-
-    fetchEnergyData();
+    setEnergyData(filteredData);
+    setLoading(false);
   }, [selectedClassroom, timeRange]);
 
-  // Fetch PZEM data from RTDB 'Instructors' node
+  // Fetch PZEM data from static JSON
   useEffect(() => {
-    const fetchPZEMData = async () => {
+    const fetchPZEMData = () => {
       try {
-        // Fetch room assignments from Firestore 'teachers' collection
-        const teachersRef = collection(db, 'teachers');
-        const teachersSnapshot = await getDocs(teachersRef);
-        const roomAssignments: { [key: string]: string } = {};
+        // Simulated room assignments
+        const roomAssignments: { [key: string]: string } = {
+          "1419CF": "705",
+          "1419CFBA": "705",
+          "74F8C4BA": "706",
+        };
 
-        teachersSnapshot.docs.forEach(doc => {
-          const data = doc.data();
-          if (data.roomName) {
-            roomAssignments[doc.id] = data.roomName; // Map teacher UID to room name
+        const instructorsData = energyDataJson.Instructors;
+        const pzemEntries: InstructorPZEMData[] = [];
+
+        Object.entries(instructorsData).forEach(([instructorId, data]: [string, any]) => {
+          const roomName = roomAssignments[instructorId] || 'Unknown';
+          if (data.PZEMData) {
+            const pzemData: PZEMData = {
+              Current: data.PZEMData.Current || '0',
+              Energy: data.PZEMData.Energy || '0',
+              Frequency: data.PZEMData.Frequency || '0',
+              Power: data.PZEMData.Power || '0',
+              PowerFactor: data.PZEMData.PowerFactor || '0',
+              Voltage: data.PZEMData.Voltage || '0',
+              timestamp: data.AccessLogs.replace('e:', ''), // Using AccessLogs as timestamp
+            };
+            pzemEntries.push({
+              roomName,
+              pzemData,
+            });
           }
         });
 
-        // Fetch PZEM data from RTDB 'Instructors' node
-        const instructorsRef = ref(rtdb, '/Instructors');
-        const unsubscribe = onValue(
-          instructorsRef,
-          (snapshot) => {
-            if (snapshot.exists()) {
-              const instructorsData = snapshot.val();
-              const pzemEntries: InstructorPZEMData[] = [];
+        const filteredPzemData = pzemEntries.filter((entry) => {
+          const matchesRoom = !selectedClassroom || entry.roomName === selectedClassroom;
+          const entryTime = new Date(entry.pzemData.timestamp || '');
+          const startTime = getStartTime();
+          const matchesTime = entryTime > startTime;
+          return matchesRoom && matchesTime;
+        });
 
-              Object.entries(instructorsData).forEach(([instructorId, data]: [string, any]) => {
-                const roomName = roomAssignments[instructorId] || 'Unknown';
-                if (data.PZEMData) {
-                  const pzemData: PZEMData = {
-                    Current: data.PZEMData.Current || '0',
-                    Energy: data.PZEMData.Energy || '0',
-                    Frequency: data.PZEMData.Frequency || '0',
-                    Power: data.PZEMData.Power || '0',
-                    PowerFactor: data.PZEMData.PowerFactor || '0',
-                    Voltage: data.PZEMData.Voltage || '0',
-                    timestamp: data.PZEMData.timestamp || new Date().toISOString(),
-                  };
-                  pzemEntries.push({
-                    roomName,
-                    pzemData,
-                  });
-                }
-              });
-
-              // Filter PZEM data based on selected classroom and time range
-              const filteredPzemData = pzemEntries.filter((entry) => {
-                const matchesRoom = !selectedClassroom || entry.roomName === selectedClassroom;
-                const entryTime = new Date(entry.pzemData.timestamp || '');
-                const startTime = getStartTime();
-                const matchesTime = entryTime > startTime;
-                return matchesRoom && matchesTime;
-              });
-
-              setPzemData(filteredPzemData);
-            } else {
-              setPzemData([]);
-            }
-          },
-          (error) => {
-            console.error('Error fetching PZEM data:', error);
-            Swal.fire('Error', 'Failed to fetch PZEM data from RTDB', 'error');
-          }
-        );
-
-        return () => off(instructorsRef, 'value', unsubscribe);
+        setPzemData(filteredPzemData);
+        setLoading(false);
       } catch (error) {
-        console.error('Error fetching PZEM data:', error);
-        Swal.fire('Error', 'Failed to fetch PZEM data', 'error');
+        console.error('Error processing PZEM data:', error);
+        Swal.fire('Error', 'Failed to process PZEM data', 'error');
       }
     };
 
@@ -280,9 +291,8 @@ const EnergyUsagePage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <AdminSidebar/>
+      <AdminSidebar />
 
-      {/* Mobile Menu Button */}
       <button
         onClick={() => setIsSidebarOpen(!isSidebarOpen)}
         className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
@@ -299,7 +309,6 @@ const EnergyUsagePage: React.FC = () => {
             <p className="mt-2 text-gray-600">Monitor and analyze classroom energy consumption</p>
           </div>
 
-          {/* Filters */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div className="bg-white rounded-xl shadow-sm p-6">
               <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -355,45 +364,43 @@ const EnergyUsagePage: React.FC = () => {
             </div>
           ) : (
             <>
-              {/* Stats Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <StatCard
                   icon={BoltIcon}
-                  title="Total Consumption (Firestore)"
+                  title="Total Consumption"
                   value={`${totalConsumption.toFixed(2)} kWh`}
                   description="Total energy used"
                 />
                 <StatCard
                   icon={ChartBarIcon}
-                  title="Average Consumption (Firestore)"
+                  title="Average Consumption"
                   value={`${averageConsumption.toFixed(2)} kWh`}
                   description="Average per reading"
                 />
                 <StatCard
                   icon={PowerIcon}
-                  title="Peak Usage (Firestore)"
+                  title="Peak Usage"
                   value={`${peakUsage.toFixed(2)} kWh`}
                   description="Highest consumption"
                 />
                 <StatCard
                   icon={ArrowsRightLeftIcon}
-                  title="Readings (Firestore)"
+                  title="Readings"
                   value={energyData.length}
                   description="Total data points"
                 />
               </div>
 
-              {/* PZEM Stats Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <StatCard
                   icon={BoltIcon}
-                  title="Total PZEM Power (RTDB)"
+                  title="Total PZEM Power"
                   value={`${totalPzemPower.toFixed(2)} W`}
                   description="Total power from PZEM"
                 />
                 <StatCard
                   icon={ChartBarIcon}
-                  title="Average PZEM Power (RTDB)"
+                  title="Average PZEM Power"
                   value={`${averagePzemPower.toFixed(2)} W`}
                   description="Average power reading"
                 />
@@ -405,17 +412,15 @@ const EnergyUsagePage: React.FC = () => {
                 />
               </div>
 
-              {/* Main Chart */}
               <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
                 <div className="h-[400px]">
                   <Line data={chartData} options={chartOptions} />
                 </div>
               </div>
 
-              {/* PZEM Data Table */}
               {pzemData.length > 0 && (
                 <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
-                  <h3 className="text-lg font-semibold mb-6">PZEM Power Readings (RTDB)</h3>
+                  <h3 className="text-lg font-semibold mb-6">PZEM Power Readings</h3>
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
@@ -425,6 +430,15 @@ const EnergyUsagePage: React.FC = () => {
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Power (W)
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Voltage (V)
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Current (A)
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Energy (kWh)
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Timestamp
@@ -441,6 +455,15 @@ const EnergyUsagePage: React.FC = () => {
                               {parseFloat(entry.pzemData.Power || '0').toFixed(2)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {parseFloat(entry.pzemData.Voltage || '0').toFixed(2)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {parseFloat(entry.pzemData.Current || '0').toFixed(2)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {parseFloat(entry.pzemData.Energy || '0').toFixed(2)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {new Date(entry.pzemData.timestamp || '').toLocaleString()}
                             </td>
                           </tr>
@@ -451,10 +474,9 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               )}
 
-              {/* Device Breakdown */}
               {energyData.length > 0 && (
                 <div className="bg-white p-6 rounded-xl shadow-sm">
-                  <h3 className="text-lg font-semibold mb-6">Device Energy Breakdown (Firestore)</h3>
+                  <h3 className="text-lg font-semibold mb-6">Device Energy Breakdown</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <DeviceEnergy
                       label="Lighting"
