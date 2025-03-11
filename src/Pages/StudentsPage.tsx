@@ -142,17 +142,21 @@ const StudentsPage: React.FC = () => {
 
     students.forEach(student => {
       // Department stats
-      if (!stats.byDepartment[student.department]) {
-        stats.byDepartment[student.department] = 0;
+      if (student.department) {
+        if (!stats.byDepartment[student.department]) {
+          stats.byDepartment[student.department] = 0;
+        }
+        stats.byDepartment[student.department]++;
       }
-      stats.byDepartment[student.department]++;
 
       // Year level stats
-      const yearKey = student.yearLevel.toString();
-      if (!stats.byYearLevel[yearKey]) {
-        stats.byYearLevel[yearKey] = 0;
+      const yearKey = student.yearLevel?.toString();
+      if (yearKey) {
+        if (!stats.byYearLevel[yearKey]) {
+          stats.byYearLevel[yearKey] = 0;
+        }
+        stats.byYearLevel[yearKey]++;
       }
-      stats.byYearLevel[yearKey]++;
 
       // Status stats
       stats.byStatus[student.status]++;

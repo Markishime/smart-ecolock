@@ -8,7 +8,12 @@ import {
   BuildingOfficeIcon,
   ArrowLeftOnRectangleIcon,
   ChevronDoubleLeftIcon,
-  ChevronDoubleRightIcon
+  ChevronDoubleRightIcon,
+  CalendarDateRangeIcon,
+  BookOpenIcon,
+  BuildingStorefrontIcon,
+  ChartBarSquareIcon,
+  LightBulbIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../Pages/AuthContext';
 
@@ -30,17 +35,17 @@ const AdminSidebar = () => {
     },
     {
       name: 'Schedules',
-      icon: UserGroupIcon,
+      icon: CalendarDateRangeIcon,
       path: '/admin/schedules'
     },
     {
       name: 'Subjects',
-      icon: UserGroupIcon,
+      icon: BookOpenIcon,
       path: '/admin/subjects-management'
     },
     {
       name: 'Sections',
-      icon: UserGroupIcon,
+      icon: BuildingStorefrontIcon,
       path: '/admin/sections'
     },
     {
@@ -50,7 +55,7 @@ const AdminSidebar = () => {
     },
     {
       name: 'Students',
-      icon: UserGroupIcon,
+      icon: AcademicCapIcon,
       path: '/admin/students'
     },
     {
@@ -60,12 +65,12 @@ const AdminSidebar = () => {
     },
     {
       name: 'Insights',
-      icon: UserGroupIcon,
+      icon: ChartBarSquareIcon,
       path: '/admin/insights'
     },
     {
       name: 'Energy Usage',
-      icon: UserGroupIcon,
+      icon: LightBulbIcon,
       path: '/admin/energyusage'
     },
     {
