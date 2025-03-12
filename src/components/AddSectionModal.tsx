@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { theme } from '../styles/theme';
+import Modal from './Modal';
 
 // Define interfaces for type safety
 interface Instructor {
@@ -11,156 +12,123 @@ interface Instructor {
 }
 
 interface Subject {
-  id: string; // Assuming subjects have an ID; adjust if it's just a name
+  id: string;
   name: string;
+  code: string;
 }
 
 interface AddSectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: { name: string; instructorId: string; subjectId: string }) => void; // Updated to include subjectId
+  onSubmit: (data: { name: string; code: string; instructorId: string; subjectId: string }) => void;
   instructors: Instructor[];
-  subjects: Subject[]; // New prop for subjects
+  subjects: Subject[];
 }
 
-const AddSectionModal: React.FC<AddSectionModalProps> = ({ isOpen, onClose, onSubmit, instructors, subjects }) => {
-  const [sectionName, setSectionName] = useState('');
-  const [selectedInstructor, setSelectedInstructor] = useState('');
-  const [selectedSubject, setSelectedSubject] = useState(''); // New state for subject
+const AddSectionModal = ({ isOpen, onClose, onSubmit, instructors, subjects }: AddSectionModalProps) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    code: '',
+    instructorId: '',
+    subjectId: ''
+  });
 
-  // Handle form submission
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sectionName || !selectedInstructor || !selectedSubject) return; // Guard clause for required fields
-
-    onSubmit({
-      name: sectionName,
-      instructorId: selectedInstructor,
-      subjectId: selectedSubject, // Include selected subject
-    });
-
-    resetForm();
+    onSubmit(formData);
+    setFormData({ name: '', code: '', instructorId: '', subjectId: '' });
   };
-
-  // Reset form fields
-  const resetForm = () => {
-    setSectionName('');
-    setSelectedInstructor('');
-    setSelectedSubject('');
-  };
-
-  if (!isOpen) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-    >
-      <motion.div
-        initial={{ scale: 0.95 }}
-        animate={{ scale: 1 }}
-        exit={{ scale: 0.95 }}
-        className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-hidden"
-      >
-        {/* Header */}
-        <div className="flex justify-between items-center p-6 border-b">
-          <h2 className={theme.typography.h3}>Add New Section</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-            <XMarkIcon className="w-6 h-6" />
-          </button>
+    <Modal isOpen={isOpen} onClose={onClose} title="Add New Section">
+      <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <div>
+          <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+            Section Name
+          </label>
+          <input
+            type="text"
+            id="name"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+            placeholder="Enter section name"
+            required
+          />
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          {/* Section Name Field */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Section Name
-            </label>
-            <input
-              type="text"
-              value={sectionName}
-              onChange={(e) => setSectionName(e.target.value)}
-              className={theme.components.input}
-              placeholder="e.g., BSIT-3A"
-              required
-              autoFocus
-            />
-          </div>
+        <div>
+          <label htmlFor="code" className="block text-sm font-medium text-gray-700 mb-2">
+            Section Code
+          </label>
+          <input
+            type="text"
+            id="code"
+            value={formData.code}
+            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+            placeholder="Enter section code"
+            required
+          />
+        </div>
 
-          {/* Instructor Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Instructor
-            </label>
-            {instructors.length === 0 ? (
-              <p className="text-red-500">No instructors available. Please add instructors first.</p>
-            ) : (
-              <select
-                value={selectedInstructor}
-                onChange={(e) => setSelectedInstructor(e.target.value)}
-                className={theme.components.input}
-                required
-              >
-                <option value="">Select Instructor</option>
-                {instructors.map((instructor) => (
-                  <option key={instructor.id} value={instructor.id}>
-                    {instructor.fullName}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
+        <div>
+          <label htmlFor="instructor" className="block text-sm font-medium text-gray-700 mb-2">
+            Instructor
+          </label>
+          <select
+            id="instructor"
+            value={formData.instructorId}
+            onChange={(e) => setFormData({ ...formData, instructorId: e.target.value })}
+            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+            required
+          >
+            <option value="">Select an instructor</option>
+            {instructors.map((instructor) => (
+              <option key={instructor.id} value={instructor.id}>
+                {instructor.fullName}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* Subject Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Subject
-            </label>
-            {subjects.length === 0 ? (
-              <p className="text-red-500">No subjects available.</p>
-            ) : (
-              <select
-                value={selectedSubject}
-                onChange={(e) => setSelectedSubject(e.target.value)}
-                className={theme.components.input}
-                required
-              >
-                <option value="">Select Subject</option>
-                {subjects.map((subject) => (
-                  <option key={subject.id} value={subject.id}>
-                    {subject.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
+        <div>
+          <label htmlFor="subject" className="block text-sm font-medium text-gray-700 mb-2">
+            Subject
+          </label>
+          <select
+            id="subject"
+            value={formData.subjectId}
+            onChange={(e) => setFormData({ ...formData, subjectId: e.target.value })}
+            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+            required
+          >
+            <option value="">Select a subject</option>
+            {subjects.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.name} ({subject.code})
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* Buttons */}
-          <div className="flex justify-end space-x-4 pt-6 mt-6 border-t">
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                resetForm();
-              }}
-              className={theme.components.button.secondary}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className={theme.components.button.primary}
-              disabled={!sectionName || !selectedInstructor || !selectedSubject || instructors.length === 0 || subjects.length === 0}
-            >
-              Create Section
-            </button>
-          </div>
-        </form>
-      </motion.div>
-    </motion.div>
+        <div className="flex justify-end space-x-3 mt-6">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Create Section
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 };
 

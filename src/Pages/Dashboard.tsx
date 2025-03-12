@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { collection, query, where, onSnapshot, doc, updateDoc, orderBy, limit, getDocs, addDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, orderBy, limit, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { ref, onValue, off, Database, DataSnapshot } from 'firebase/database';
 import { auth, db, rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
@@ -52,6 +52,7 @@ import {
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
 import { Student } from '../interfaces/Student';
+import Modal from '../components/Modal';
 
 
 interface Message {
@@ -82,6 +83,22 @@ interface Section {
   name: string;
   code: string;
   studentCount?: number;
+}
+
+interface TeacherDocument {
+  uid?: string;
+  fullName?: string;
+  email?: string;
+  department?: string;
+  schedules?: {
+    subject: string;
+    day: string;
+    startTime: string;
+    endTime: string;
+    room?: string;
+  }[];
+  subjects?: Subject[];
+  assignedStudents?: string[];
 }
 
 interface TeacherData {
@@ -362,6 +379,12 @@ const InstructorDashboard = () => {
     onTimeRate: 0
   });
   const [roomStatus, setRoomStatus] = useState<{[key: string]: RoomStatus}>({});
+  const [isAddSectionModalOpen, setIsAddSectionModalOpen] = useState(false);
+  const [newSection, setNewSection] = useState({
+    name: '',
+    code: '',
+    subject: ''
+  });
 
   const handleRemoveSection = async (sectionId: string) => {
     try {
@@ -387,11 +410,11 @@ const InstructorDashboard = () => {
 
   const handleRemoveSubject = async (subjectId: string) => {
     try {
-      await updateDoc(doc(db, 'teachers', currentUser!.uid), {
-        subjects: instructorData!.subjects.filter(s => s.id !== subjectId)
-      });
+      // Delete the subject document from the subjects collection
+      await deleteDoc(doc(db, 'subjects', subjectId));
       Swal.fire('Success', 'Subject deleted successfully!', 'success');
     } catch (error) {
+      console.error('Error deleting subject:', error);
       Swal.fire('Error', 'Failed to delete subject', 'error');
     }
   };
@@ -408,77 +431,59 @@ const InstructorDashboard = () => {
       if (!currentUser) return;
 
       try {
-        // Fetch teachers collection
-        const teachersCollection = collection(db, 'teachers');
-        const teachersQuery = query(
-          teachersCollection, 
-          where('instructor', '==', currentUser.uid)
-        );
-        const teachersSnapshot = await getDocs(teachersQuery);
-
-        if (!teachersSnapshot.empty) {
-          const teacherDoc = teachersSnapshot.docs[0];
-          const teacherData: TeacherData = {
-            id: teacherDoc.id,
-            ...teacherDoc.data()
-          };
-
-          // Fetch user details to ensure complete profile
-          const userQuery = query(
-            collection(db, 'users'), 
-            where('id', '==', teacherDoc.id)
-          );
-          const userSnapshot = await getDocs(userQuery);
-          
-          let userData: Partial<TeacherData> = {};
-          if (!userSnapshot.empty) {
-            userData = userSnapshot.docs[0].data() as Partial<TeacherData>;
+        // Fetch directly from teachers collection using currentUser.uid
+        const teacherRef = doc(db, 'teachers', currentUser.uid);
+        const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('uid', '==', currentUser.uid)));
+        
+        let teacherData: TeacherDocument = {};
+        if (!teacherDoc.empty) {
+          teacherData = teacherDoc.docs[0].data() as TeacherDocument;
+        } else {
+          // Try to get the document directly
+          const directDoc = await getDocs(collection(db, 'teachers'));
+          const foundDoc = directDoc.docs.find(doc => doc.id === currentUser.uid || doc.data().uid === currentUser.uid);
+          if (foundDoc) {
+            teacherData = foundDoc.data() as TeacherDocument;
           }
+        }
 
-          // Combine teacher and user data
-          const completeTeacherData: TeacherData = {
-            ...teacherData,
-            ...userData
-          };
-
-          // Transform schedules to match Schedule interface
-          const fetchedSchedules: Schedule[] = (completeTeacherData.schedules || []).map((schedule) => ({
-            id: `${teacherDoc.id}_${schedule.subject}_${schedule.day}`,
-            day: schedule.day,
-            subject: schedule.subject,
-            classes: [
-              {
-                time: `${schedule.startTime} - ${schedule.endTime}`,
-                subject: schedule.subject
-              }
-            ],
-            room: schedule.room
-          }));
-
-          // Update instructor data
-          setInstructorData(prevData => ({
-            ...(prevData || {}),
-            id: teacherDoc.id,
-            fullName: completeTeacherData.fullName || completeTeacherData.name || 'Instructor',
-            email: completeTeacherData.email || '',
-            department: completeTeacherData.department || 'Department',
-            schedules: fetchedSchedules,
-            subjects: completeTeacherData.subjects || [],
-            sections: prevData?.sections || [],
-            teacherData: {
-              assignedStudents: completeTeacherData.assignedStudents || []
+        // Transform schedules to match Schedule interface
+        const fetchedSchedules: Schedule[] = (teacherData.schedules || []).map((schedule) => ({
+          id: `${currentUser.uid}_${schedule.subject}_${schedule.day}`,
+          day: schedule.day,
+          subject: schedule.subject,
+          classes: [
+            {
+              time: `${schedule.startTime} - ${schedule.endTime}`,
+              subject: schedule.subject
             }
-          } as InstructorData));
+          ],
+          room: schedule.room
+        }));
 
-          // Set initial section if not already set
-          if (fetchedSchedules.length > 0 && !selectedSection) {
-            const firstValidSection = fetchedSchedules.find(schedule => schedule.subject)?.subject;
-            if (firstValidSection) {
-              setSelectedSection(firstValidSection);
-            } else if (fetchedSchedules[0].subject) {
-              // Fallback to the first schedule's section if it exists
-              setSelectedSection(fetchedSchedules[0].subject);
-            }
+        // Update instructor data
+        setInstructorData(prevData => ({
+          ...(prevData || {}),
+          id: currentUser.uid,
+          fullName: teacherData.fullName || 'Instructor',
+          email: teacherData.email || '',
+          department: teacherData.department || 'Department',
+          schedules: fetchedSchedules,
+          subjects: teacherData.subjects || [],
+          sections: prevData?.sections || [],
+          teacherData: {
+            assignedStudents: teacherData.assignedStudents || []
+          }
+        } as InstructorData));
+
+        // Set initial section if not already set
+        if (fetchedSchedules.length > 0 && !selectedSection) {
+          const firstValidSection = fetchedSchedules.find(schedule => schedule.subject)?.subject;
+          if (firstValidSection) {
+            setSelectedSection(firstValidSection);
+          } else if (fetchedSchedules[0].subject) {
+            // Fallback to the first schedule's section if it exists
+            setSelectedSection(fetchedSchedules[0].subject);
           }
         }
       } catch (error) {
@@ -489,7 +494,8 @@ const InstructorDashboard = () => {
     fetchInstructorDetails();
 
     const unsubscribeStudents = onSnapshot(
-      query(collection(db, 'students'), where('section', '==', selectedSection)),
+      query(collection(db, 'students'),
+      where('section', '==', selectedSection)),
       (snapshot) => {
         const studentsList = snapshot.docs.map(doc => ({
           id: doc.id,
@@ -1157,25 +1163,28 @@ const InstructorDashboard = () => {
   
     const fetchTeacherData = async () => {
       try {
-        // Fetch teacher's basic info
+        // Fetch teacher's basic info directly from the teachers collection using currentUser.uid
         const teacherRef = doc(db, 'teachers', currentUser.uid);
         const teacherSnap = await getDocs(collection(db, 'teachers'));
+        
+        // Get the specific teacher document
+        const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('uid', '==', currentUser.uid)));
+        let teacherData: TeacherDocument = {};
+        
+        if (!teacherDoc.empty) {
+          teacherData = teacherDoc.docs[0].data() as TeacherDocument;
+        }
         
         // Fetch all related collections in parallel
         const [
           schedulesSnap,
-          subjectsSnap,
           sectionsSnap,
           studentsSnap
         ] = await Promise.all([
           getDocs(query(
             collection(db, 'schedules'),
-        where('teacherId', '==', currentUser.uid),
+            where('teacherId', '==', currentUser.uid),
             orderBy('day')
-          )),
-          getDocs(query(
-            collection(db, 'subjects'),
-            where('teacherId', '==', currentUser.uid)
           )),
           getDocs(query(
             collection(db, 'sections'),
@@ -1187,55 +1196,67 @@ const InstructorDashboard = () => {
           ))
         ]);
 
-        // Process schedules with detailed info
-        const schedules = schedulesSnap.docs.map(doc => ({
-          id: doc.id,
-          day: doc.data().day || '',
-          subject: doc.data().subject || '',
-          classes: doc.data().classes?.map((cls: any) => ({
-            time: cls.time || '',
-            subject: cls.subject || ''
-          })) || [],
-          room: doc.data().room,
-          ...doc.data()
-        })) as Schedule[];
+        // Set up real-time listener for subjects
+        const subjectsQuery = query(
+          collection(db, 'subjects'),
+          where('teacherId', '==', currentUser.uid)
+        );
 
-        // Process subjects with section counts
-        const subjects = subjectsSnap.docs.map(doc => ({
-          id: doc.id,
-          code: doc.data().code || '',
-          name: doc.data().name || '',
-          ...doc.data()
-        })) as Subject[];
+        const unsubscribeSubjects = onSnapshot(subjectsQuery, (snapshot) => {
+          const subjects = snapshot.docs.map(doc => ({
+            id: doc.id,
+            code: doc.data().code || '',
+            name: doc.data().name || '',
+            ...doc.data()
+          })) as Subject[];
 
-        // Process sections with student counts
-        const sections = sectionsSnap.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name || '',
-          code: doc.data().code || '',
-          studentCount: studentsSnap.docs.filter(s => 
-            s.data().section === doc.id
-          ).length,
-          ...doc.data()
-        })) as Section[];
+          // Process schedules with detailed info
+          const schedules = schedulesSnap.docs.map(doc => ({
+            id: doc.id,
+            day: doc.data().day || '',
+            subject: doc.data().subject || '',
+            classes: doc.data().classes?.map((cls: any) => ({
+              time: cls.time || '',
+              subject: cls.subject || ''
+            })) || [],
+            room: doc.data().room,
+            ...doc.data()
+          })) as Schedule[];
 
-        // Update instructor data with all fetched info
-        setInstructorData({
-          id: currentUser.uid,
-          fullName: teacherSnap.docs[0]?.data().fullName || 'Instructor',
-          email: teacherSnap.docs[0]?.data().email || '',
-          department: teacherSnap.docs[0]?.data().department || '',
-          schedules,
-          sections,
-          subjects,
-          teacherData: {
-            assignedStudents: studentsSnap.docs.map(doc => doc.id)
-          }
+          // Process sections with student counts
+          const sections = sectionsSnap.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name || '',
+            code: doc.data().code || '',
+            studentCount: studentsSnap.docs.filter(s => 
+              s.data().section === doc.id
+            ).length,
+            ...doc.data()
+          })) as Section[];
+
+          // Update instructor data with all fetched info
+          setInstructorData({
+            id: currentUser.uid,
+            fullName: teacherData.fullName || 'Instructor',
+            email: teacherData.email || '',
+            department: teacherData.department || '',
+            schedules,
+            sections,
+            subjects,
+            teacherData: {
+              assignedStudents: studentsSnap.docs.map(doc => doc.id)
+            }
+          } as InstructorData);
+
+          setLoading(false);
         });
 
-        setLoading(false);
+        // Clean up the subjects listener when component unmounts
+        return () => {
+          unsubscribeSubjects();
+        };
 
-            } catch (error) {
+      } catch (error) {
         console.error('Error fetching teacher data:', error);
         toast.error('Failed to load teacher data');
         setLoading(false);
@@ -1345,6 +1366,29 @@ const InstructorDashboard = () => {
     };
   }, [currentUser]);
 
+  // Add section handler
+  const handleAddSection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSection.name || !newSection.code || !newSection.subject) return;
+
+    try {
+      await addDoc(collection(db, 'sections'), {
+        name: newSection.name,
+        code: newSection.code,
+        subject: newSection.subject,
+        teacherId: currentUser?.uid,
+        createdAt: new Date()
+      });
+
+      setIsAddSectionModalOpen(false);
+      setNewSection({ name: '', code: '', subject: '' });
+      Swal.fire('Success', 'Section created successfully!', 'success');
+    } catch (error) {
+      console.error('Error creating section:', error);
+      Swal.fire('Error', 'Failed to create section', 'error');
+    }
+  };
+
   if (!instructorData) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-100">
@@ -1400,6 +1444,31 @@ const InstructorDashboard = () => {
                   </div>
                 </motion.div>
               </div>
+
+              {/* Quick Actions */}
+              <motion.section
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="backdrop-blur-lg bg-white/80 rounded-3xl shadow-xl p-8 border border-white/20"
+              >
+                <h2 className="text-2xl font-bold text-gray-800 mb-6">Quick Actions</h2>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => setIsAddSectionModalOpen(true)}
+                    className="flex items-center justify-center p-4 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+                  >
+                    <PlusIcon className="h-5 w-5 mr-2" />
+                    Create Section
+                  </button>
+                  <Link
+                    to="/instructor/subjects"
+                    className="flex items-center justify-center p-4 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors"
+                  >
+                    <BookOpenIcon className="h-5 w-5 mr-2" />
+                    View Subjects
+                  </Link>
+                </div>
+              </motion.section>
 
               {/* Overview Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
@@ -1596,7 +1665,7 @@ const InstructorDashboard = () => {
                                 {section.studentCount} students
                               </span>
                       </div>
-                          ))}
+                            ))}
                     </div>
                     </div>
                 ))}
@@ -1773,6 +1842,76 @@ const InstructorDashboard = () => {
           </div>
         </div>
       </main>
+
+      {/* Add Section Modal */}
+      <Modal
+        isOpen={isAddSectionModalOpen}
+        onClose={() => setIsAddSectionModalOpen(false)}
+        title="Create New Section"
+      >
+        <form onSubmit={handleAddSection} className="space-y-4 p-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Section Name
+            </label>
+            <input
+              type="text"
+              value={newSection.name}
+              onChange={(e) => setNewSection({ ...newSection, name: e.target.value })}
+              className="w-full p-2 border rounded-lg"
+              placeholder="e.g., Section A"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Section Code
+            </label>
+            <input
+              type="text"
+              value={newSection.code}
+              onChange={(e) => setNewSection({ ...newSection, code: e.target.value })}
+              className="w-full p-2 border rounded-lg"
+              placeholder="e.g., SEC-A"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Subject
+            </label>
+            <select
+              value={newSection.subject}
+              onChange={(e) => setNewSection({ ...newSection, subject: e.target.value })}
+              className="w-full p-2 border rounded-lg"
+              required
+            >
+              <option value="">Select Subject</option>
+              {instructorData?.subjects?.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end space-x-3 mt-6">
+            <button
+              type="button"
+              onClick={() => setIsAddSectionModalOpen(false)}
+              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              Create Section
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       <GeminiChatbot />
     </div>
   );

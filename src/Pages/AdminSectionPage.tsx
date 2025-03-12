@@ -16,8 +16,10 @@ import AssignStudentsModal from '../components/AssignStudentsModal';
 interface Section {
   id: string;
   name: string;
+  code: string;
   students: string[]; // Array of student IDs
   instructorId: string;
+  subjectId: string;
 }
 
 interface Student {
@@ -26,11 +28,18 @@ interface Student {
   idNumber: string;
 }
 
+interface Subject {
+  id: string;
+  name: string;
+  code: string;
+}
+
 const AdminSectionPage = () => {
   // State declarations
   const [sections, setSections] = useState<Section[]>([]);
   const [instructors, setInstructors] = useState<Student[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -60,6 +69,14 @@ const AdminSectionPage = () => {
         ...doc.data(),
       })) as Student[];
       setStudents(studentsData);
+    });
+
+    const unsubscribeFromSubjects = onSnapshot(collection(db, 'subjects'), (snapshot) => {
+      const subjectsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Subject[];
+      setSubjects(subjectsData);
       setIsLoading(false);
     });
 
@@ -68,16 +85,20 @@ const AdminSectionPage = () => {
       unsubscribeFromSections();
       unsubscribeFromInstructors();
       unsubscribeFromStudents();
+      unsubscribeFromSubjects();
     };
   }, []);
 
   // Handle adding a new section
-  const handleAddSection = async (sectionData: any) => {
+  const handleAddSection = async (sectionData: { name: string; code: string; instructorId: string; subjectId: string }) => {
     try {
       await addDoc(collection(db, 'sections'), {
         name: sectionData.name,
+        code: sectionData.code,
         students: [],
         instructorId: sectionData.instructorId,
+        subjectId: sectionData.subjectId,
+        createdAt: new Date()
       });
 
       setIsModalOpen(false);
@@ -184,6 +205,7 @@ const AdminSectionPage = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {sections.map(section => {
                 const instructor = instructors.find(i => i.id === section.instructorId);
+                const subject = subjects.find(s => s.id === section.subjectId);
                 return (
                   <motion.div
                     key={section.id}
@@ -198,6 +220,12 @@ const AdminSectionPage = () => {
                         <h2 className="text-xl font-semibold text-gray-900">{section.name}</h2>
                         <p className="text-sm text-gray-600">
                           Instructor: {instructor?.fullName || 'Not Assigned'}
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          Subject: {subject?.name || 'Not Assigned'}
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          Code: {section.code}
                         </p>
                       </div>
                       <UserGroupIcon className="w-8 h-8 text-indigo-600" />
@@ -286,7 +314,7 @@ const AdminSectionPage = () => {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleAddSection}
         instructors={instructors}
-        subjects={[]}
+        subjects={subjects}
       />
       <AssignStudentsModal
         isOpen={isAssignModalOpen}
