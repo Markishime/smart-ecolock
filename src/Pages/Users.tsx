@@ -9,17 +9,49 @@ import {
   AcademicCapIcon,
   PlusIcon,
   ClockIcon,
-  ViewColumnsIcon,
   CheckIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import AdminSidebar from '../components/AdminSidebar';
 
+
+ // Particle Background Component
+ const ParticleBackground: React.FC = () => {
+  const particles = Array.from({ length: 30 }, () => ({
+    x: Math.random() * 100,
+    y: Math.random() * 100,
+    speedX: (Math.random() - 0.5) * 0.3,
+    speedY: (Math.random() - 0.5) * 0.3,
+  }));
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {particles.map((particle, index) => (
+        <motion.div
+          key={index}
+          className="absolute w-1 h-1 bg-cyan-400 rounded-full"
+          initial={{ x: `${particle.x}vw`, y: `${particle.y}vh`, opacity: 0.6 }}
+          animate={{
+            x: `${particle.x + particle.speedX * 50}vw`,
+            y: `${particle.y + particle.speedY * 50}vh`,
+            opacity: [0.6, 0.8, 0.6],
+          }}
+          transition={{
+            duration: 15,
+            repeat: Infinity,
+            repeatType: 'reverse',
+          }}
+        />
+      ))}
+    </div>
+  );
+};
+
 interface User {
   id: string;
   fullName: string;
   email: string;
-  role: 'admin' | 'instructor' | 'student';
+  role?: 'admin' | 'instructor' | 'student';
   department?: string;
   studentId?: string;
   uid?: string;
@@ -39,7 +71,7 @@ interface Schedule {
   section: string;
   room?: string;
   subject?: string;
-  instructorUid?: string; // Added to track instructor UID
+  instructorUid?: string;
 }
 
 interface InstructorDetails {
@@ -64,7 +96,6 @@ const Users = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedRole, setSelectedRole] = useState<'all' | 'admin' | 'instructor' | 'student'>('all');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
@@ -198,7 +229,7 @@ const Users = () => {
   }, []);
 
   // Handle Delete User
-  const handleDeleteUser = async (userId: string, userRole: string) => {
+  const handleDeleteUser = async (userId: string, userRole?: string) => {
     try {
       const collectionName = userRole === 'instructor' ? 'teachers' : userRole === 'student' ? 'students' : 'users';
       await deleteDoc(doc(db, collectionName, userId));
@@ -206,9 +237,9 @@ const Users = () => {
         icon: 'success',
         title: 'User Deleted',
         text: 'The user has been successfully removed.',
-        background: '#f8fafc',
-        iconColor: '#3b82f6',
-        confirmButtonColor: '#3b82f6'
+        background: '#1e293b',
+        iconColor: '#22d3ee',
+        confirmButtonColor: '#0891b2'
       });
     } catch (error) {
       console.error("Error deleting user:", error);
@@ -244,9 +275,9 @@ const Users = () => {
         icon: 'success',
         title: 'Users Deleted',
         text: 'Selected users have been removed successfully.',
-        background: '#f8fafc',
-        iconColor: '#3b82f6',
-        confirmButtonColor: '#3b82f6'
+        background: '#1e293b',
+        iconColor: '#22d3ee',
+        confirmButtonColor: '#0891b2'
       });
     } catch (error) {
       console.error("Error deleting users:", error);
@@ -266,7 +297,7 @@ const Users = () => {
         subjects: existingDetails.subjects || [],
         schedules: existingDetails.schedules?.map(schedule => ({
           ...schedule,
-          instructorUid: user.uid // Include UID in each schedule
+          instructorUid: user.uid
         })) || []
       });
       setIsAssignmentModalOpen(true);
@@ -289,7 +320,7 @@ const Users = () => {
           section: '',
           room: '',
           subject: '',
-          instructorUid: selectedInstructor?.uid // Include UID in new schedule
+          instructorUid: selectedInstructor?.uid
         }
       ]
     }));
@@ -314,7 +345,7 @@ const Users = () => {
         schedule => schedule.startTime && schedule.endTime && schedule.section && schedule.day
       ).map(schedule => ({
         ...schedule,
-        instructorUid: selectedInstructor?.uid // Ensure UID is included
+        instructorUid: selectedInstructor?.uid
       }));
 
       const updateData = {
@@ -356,7 +387,10 @@ const Users = () => {
         title: 'Assignments Saved',
         text: 'Teacher assignments and subjects have been successfully updated',
         timer: 2000,
-        showConfirmButton: false
+        showConfirmButton: false,
+        background: '#1e293b',
+        iconColor: '#22d3ee',
+        confirmButtonColor: '#0891b2'
       });
       setIsAssignmentModalOpen(false);
     } catch (error) {
@@ -381,9 +415,8 @@ const Users = () => {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.1 }}
-        className="grid grid-cols-1 md:grid-cols-7 gap-6 mb-8 items-center bg-gray-50 px-4 py-6 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200"
+        className="grid grid-cols-1 md:grid-cols-7 gap-6 mb-8 items-center bg-gray-700/50 p-4 rounded-lg border border-cyan-800"
       >
-        {/* Day Dropdown */}
         <select
           value={schedule.day}
           onChange={(e) => {
@@ -391,15 +424,13 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], day: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 w-full px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         >
           <option value="">Select Day</option>
           {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => (
             <option key={day} value={day}>{day}</option>
           ))}
         </select>
-  
-        {/* Start Time */}
         <input
           type="time"
           value={schedule.startTime}
@@ -408,10 +439,8 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], startTime: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         />
-  
-        {/* End Time */}
         <input
           type="time"
           value={schedule.endTime}
@@ -420,10 +449,8 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], endTime: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         />
-  
-        {/* Section Dropdown */}
         <select
           value={schedule.section}
           onChange={(e) => {
@@ -431,15 +458,13 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], section: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 w-full px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         >
           <option value="">Select Section</option>
           {sections.map(section => (
             <option key={section.id} value={section.name}>{section.name}</option>
           ))}
         </select>
-  
-        {/* Room Dropdown */}
         <select
           value={schedule.room || ''}
           onChange={(e) => {
@@ -447,27 +472,23 @@ const Users = () => {
             updatedSchedules[index] = { ...updatedSchedules[index], room: e.target.value };
             setInstructorDetails(prev => ({ ...prev, schedules: updatedSchedules }));
           }}
-          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 w-full px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         >
           <option value="">Select Room</option>
           {rooms.map(room => (
             <option key={room.id} value={room.name}>{room.name}</option>
           ))}
         </select>
-  
-        {/* Subject Dropdown */}
         <select
           value={schedule.subject || ''}
           onChange={(e) => updateScheduleSubject(index, e.target.value)}
-          className="col-span-1 w-full px-4 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-700"
+          className="col-span-1 w-full px-4 py-3 rounded-md bg-gray-600 text-cyan-100 border border-cyan-700 focus:ring-2 focus:ring-cyan-500"
         >
           <option value="">Select Subject</option>
           {subjects.map(subject => (
             <option key={subject.id} value={subject.name}>{subject.name}</option>
           ))}
         </select>
-  
-        {/* Delete Button */}
         <button
           onClick={() => {
             setInstructorDetails(prev => ({
@@ -475,13 +496,14 @@ const Users = () => {
               schedules: (prev.schedules || []).filter((_, i) => i !== index)
             }));
           }}
-          className="col-span-1 flex items-center justify-center text-red-500 hover:text-red-700"
+          className="col-span-1 flex items-center justify-center text-red-400 hover:text-red-500"
         >
           <TrashIcon className="w-5 h-5" />
         </button>
       </motion.div>
     ));
   };
+
   // Filtered Users
   const filteredUsers = users
     .filter(user => 
@@ -510,9 +532,15 @@ const Users = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden ${selectedUsers.includes(user.id) ? 'ring-2 ring-indigo-500' : ''}`}
+      className={`backdrop-blur-lg bg-gray-800/80 rounded-xl shadow-xl p-6 border ${selectedUsers.includes(user.id) ? 'border-cyan-400' : 'border-cyan-800'} hover:shadow-2xl transition-all relative overflow-hidden`}
     >
-      <div className="p-6">
+      <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'%3E%3Cpath d=\'M10 10 L90 90 M90 10 L10 90\' stroke=\'%2300b4d8\' stroke-width=\'1\' opacity=\'0.1\'/%3E%3C/svg%3E')] opacity-20"></div>
+      <motion.div
+        className="absolute -inset-2 bg-cyan-500/20 blur-xl"
+        animate={{ opacity: [0.2, 0.4, 0.2] }}
+        transition={{ duration: 3, repeat: Infinity }}
+      />
+      <div className="relative z-10">
         <div className="flex items-start justify-between">
           <div className="flex items-center space-x-4">
             <input
@@ -522,43 +550,53 @@ const Users = () => {
                 if (e.target.checked) setSelectedUsers([...selectedUsers, user.id]);
                 else setSelectedUsers(selectedUsers.filter(id => id !== user.id));
               }}
-              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              className="rounded border-gray-600 text-cyan-400 focus:ring-cyan-500 bg-gray-700"
             />
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${user.role === 'admin' ? 'bg-blue-100' : user.role === 'instructor' ? 'bg-purple-100' : 'bg-green-100'}`}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${user.role === 'admin' ? 'bg-blue-900/50' : user.role === 'instructor' ? 'bg-purple-900/50' : 'bg-green-900/50'}`}>
               {user.role === 'student' ? (
-                <AcademicCapIcon className="w-6 h-6 text-green-600" />
+                <AcademicCapIcon className="w-6 h-6 text-cyan-400" />
               ) : (
-                <UserIcon className={`w-6 h-6 ${user.role === 'admin' ? 'text-blue-600' : 'text-purple-600'}`} />
+                <UserIcon className={`w-6 h-6 text-cyan-400`} />
               )}
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">{user.fullName}</h3>
-              <p className="text-sm text-gray-500">{user.email}</p>
+              <h3 className="text-lg font-semibold text-cyan-100">{user.fullName || 'Unknown'}</h3>
+              <p className="text-sm text-cyan-300">{user.email || 'No email'}</p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
             {user.role === 'instructor' && (
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => handleAssignmentModal(user)}
-                className="p-2 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors duration-200 flex items-center space-x-2"
+                className="p-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors flex items-center space-x-2"
               >
-                <PlusIcon className="w-5 h-5 mr-1" />
+                <PlusIcon className="w-5 h-5" />
                 <span>Assign</span>
-              </button>
+              </motion.button>
             )}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => handleDeleteUser(user.id, user.role)}
+              className="p-2 text-red-400 hover:text-red-500"
+            >
+              <TrashIcon className="w-5 h-5" />
+            </motion.button>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${user.role === 'admin' ? 'bg-blue-100 text-blue-800' : user.role === 'instructor' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'}`}>
-            {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${user.role === 'admin' ? 'bg-blue-700 text-cyan-100' : user.role === 'instructor' ? 'bg-purple-700 text-cyan-100' : user.role === 'student' ? 'bg-green-700 text-cyan-100' : 'bg-gray-700 text-cyan-300'}`}>
+            {user.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Unknown'}
           </span>
           {user.department && (
-            <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-700 text-cyan-100">
               {user.department}
             </span>
           )}
           {user.studentId && (
-            <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-700 text-cyan-100">
               ID: {user.studentId}
             </span>
           )}
@@ -569,7 +607,7 @@ const Users = () => {
 
   const renderAssignmentModal = () => {
     if (!isAssignmentModalOpen || !selectedInstructor) return null;
-  
+
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -581,90 +619,33 @@ const Users = () => {
           initial={{ scale: 0.9, y: 50 }}
           animate={{ scale: 1, y: 0 }}
           transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[80vh] overflow-y-auto flex"
+          className="bg-gray-800/80 backdrop-blur-lg rounded-xl shadow-xl max-w-6xl w-full max-h-[80vh] overflow-y-auto border border-cyan-800"
         >
-          {/* Sidebar with Instructor Info */}
-          <div className="w-1/4 bg-gradient-to-br from-indigo-600 to-purple-600 text-white p-6 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center space-x-4 mb-6">
-                <div className="w-16 h-16 bg-white bg-opacity-20 rounded-full flex items-center justify-center">
-                  <UserIcon className="w-8 h-8 text-white" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold">{selectedInstructor.fullName}</h2>
-                  <p className="text-sm opacity-75">{selectedInstructor.email}</p>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm opacity-75 mb-1">Department</p>
-                  <p className="font-semibold">
-                    {selectedInstructor.department || 'Not Specified'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm opacity-75 mb-1">Current Assignments</p>
-                  <div className="flex flex-wrap gap-2">
-                    {instructorDetails.subjects?.length === 0 ? (
-                      <span className="text-xs bg-white bg-opacity-10 px-2 py-1 rounded">
-                        No subjects assigned
-                      </span>
-                    ) : (
-                      instructorDetails.subjects?.map(subjectId => {
-                        const subject = subjects.find(s => s.id === subjectId);
-                        return (
-                          <span
-                            key={subjectId}
-                            className="text-xs bg-white bg-opacity-10 px-2 py-1 rounded"
-                          >
-                            {subject?.name || 'Unknown'}
-                          </span>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+          <div className="p-8">
+            <h3 className="text-2xl font-bold text-cyan-100 mb-6 flex items-center">
+              <ClockIcon className="w-7 h-7 text-cyan-400 mr-3" />
+              Assign Schedule for {selectedInstructor.fullName}
+            </h3>
+            <div className="space-y-6">
+              {renderScheduleInputs()}
+              <div className="flex justify-center">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={addNewSchedule}
+                  className="px-6 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors flex items-center space-x-2"
+                >
+                  <PlusIcon className="w-5 h-5" />
+                  <span>Add New Schedule</span>
+                </motion.button>
               </div>
             </div>
-            <div className="mt-auto">
-              <p className="text-xs opacity-75 mb-2">Last Updated</p>
-              <p className="text-sm font-medium">
-                {new Date().toLocaleDateString()}
-              </p>
-            </div>
-          </div>
-  
-          {/* Main Content Area */}
-          <div className="w-3/4 p-8 overflow-y-auto">
-            <div className="space-y-8">
-              {/* Schedules Section */}
-              <div>
-                <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-                  <ClockIcon className="w-6 h-6 mr-3 text-green-600" />
-                  Weekly Schedule
-                </h3>
-                <div className="space-y-6">
-                  {renderScheduleInputs()}
-                  <div className="flex justify-center">
-                    <button
-                      onClick={addNewSchedule}
-                      className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center space-x-2"
-                    >
-                      <PlusIcon className="w-5 h-5" />
-                      <span>Add New Schedule</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-  
-            {/* Modal Actions */}
-            <div className="mt-8 flex justify-end space-x-4 border-t pt-6">
+            <div className="mt-8 flex justify-end space-x-4 border-t border-cyan-800 pt-6">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setIsAssignmentModalOpen(false)}
-                className="px-6 py-2 text-gray-600 hover:text-gray-800 rounded-lg border"
+                className="px-6 py-2 bg-gray-700 text-cyan-200 rounded-lg hover:bg-gray-600 transition-colors"
               >
                 Cancel
               </motion.button>
@@ -672,7 +653,7 @@ const Users = () => {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleSaveAssignments}
-                className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center"
+                className="px-6 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 flex items-center"
               >
                 <CheckIcon className="w-5 h-5 mr-2" />
                 <span>Save Assignments</span>
@@ -687,15 +668,19 @@ const Users = () => {
   const departments = Array.from(new Set(users.map(user => user.department || 'Unknown')));
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white font-mono">
+      <ParticleBackground />
       <AdminSidebar />
-      <div className={`flex-1 transition-all duration-300 ease-in-out ${isCollapsed ? 'ml-20' : 'ml-64'} overflow-y-auto`}>
-        <div className="p-8 space-y-8">
-          {/* Header */}
-          <div className="flex flex-col space-y-4 md:space-y-0 md:flex-row md:items-center md:justify-between">
+      <div className="ml-64 p-8 space-y-8">
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="backdrop-blur-lg bg-gray-800/80 rounded-xl shadow-xl p-6 border border-cyan-800"
+        >
+          <div className="flex flex-col space-y-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Users Management</h1>
-              <p className="mt-2 text-gray-600">
+              <h1 className="text-3xl font-bold text-cyan-100">Users Management</h1>
+              <p className="mt-2 text-cyan-300">
                 {filteredUsers.length} users found
               </p>
             </div>
@@ -705,18 +690,17 @@ const Users = () => {
                 placeholder="Search users..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full md:w-64 px-4 py-2 rounded-lg border border-gray-200 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="w-full md:w-64 px-4 py-2 rounded-lg bg-gray-700 text-cyan-100 border border-cyan-800 focus:ring-2 focus:ring-cyan-500"
               />
             </div>
           </div>
 
-          {/* Filters and Actions */}
-          <div className="flex flex-col sm:flex-row justify-between gap-4">
+          <div className="flex flex-col sm:flex-row justify-between gap-4 mt-6">
             <div className="flex flex-wrap gap-4">
               <select
                 value={selectedRole}
                 onChange={(e) => setSelectedRole(e.target.value as typeof selectedRole)}
-                className="px-4 py-2 rounded-lg border border-gray-200 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="px-4 py-2 rounded-lg bg-gray-700 text-cyan-100 border border-cyan-800 focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="all">All Roles</option>
                 <option value="admin">Admin</option>
@@ -726,7 +710,7 @@ const Users = () => {
               <select
                 value={selectedDepartment}
                 onChange={(e) => setSelectedDepartment(e.target.value)}
-                className="px-4 py-2 rounded-lg border border-gray-200 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="px-4 py-2 rounded-lg bg-gray-700 text-cyan-100 border border-cyan-800 focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="all">All Departments</option>
                 {departments.map((dept) => (
@@ -738,7 +722,7 @@ const Users = () => {
               <select
                 value={sortBy}
                 onChange={(e) => handleSort(e.target.value as typeof sortBy)}
-                className="px-4 py-2 rounded-lg border border-gray-200 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="px-4 py-2 rounded-lg bg-gray-700 text-cyan-100 border border-cyan-800 focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="name">Sort by Name</option>
                 <option value="role">Sort by Role</option>
@@ -746,71 +730,81 @@ const Users = () => {
               </select>
               <button
                 onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                className="px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50"
+                className="px-4 py-2 bg-gray-700 border border-cyan-800 hover:bg-gray-600 text-cyan-100 rounded-lg"
               >
                 {sortOrder === 'asc' ? '↑' : '↓'}
               </button>
             </div>
           </div>
 
-          {/* Bulk Actions */}
           {selectedUsers.length > 0 && (
-            <div className="bg-indigo-50 p-4 rounded-lg flex items-center justify-between">
-              <span className="text-indigo-700">
+            <div className="mt-6 bg-cyan-900/30 p-4 rounded-lg flex items-center justify-between border border-cyan-800">
+              <span className="text-cyan-100">
                 {selectedUsers.length} users selected
               </span>
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setShowDeleteModal(true)}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
               >
                 Delete Selected
-              </button>
+              </motion.button>
             </div>
           )}
+        </motion.div>
 
-          {/* Users Grid */}
-          {loading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredUsers.map(renderUserCard)}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-semibold text-gray-900 mb-4">
-              Delete Selected Users
-            </h3>
-            <p className="text-gray-600 mb-6">
-              Are you sure you want to delete {selectedUsers.length} selected users? This action cannot be undone.
-            </p>
-            <div className="flex justify-end space-x-4">
-              <button
-                onClick={() => setShowDeleteModal(false)}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleBulkDelete}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-              >
-                Delete Users
-              </button>
-            </div>
+        {loading ? (
+          <div className="flex items-center justify-center h-64">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ repeat: Infinity, duration: 1 }}
+              className="w-12 h-12 border-4 border-cyan-400 border-t-transparent rounded-full"
+            />
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredUsers.map(renderUserCard)}
+          </div>
+        )}
 
-      {/* Assignment Modal */}
-      {renderAssignmentModal()}
+        {showDeleteModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-cyan-800"
+            >
+              <h3 className="text-xl font-semibold text-cyan-100 mb-4">
+                Delete Selected Users
+              </h3>
+              <p className="text-cyan-300 mb-6">
+                Are you sure you want to delete {selectedUsers.length} selected users? This action cannot be undone.
+              </p>
+              <div className="flex justify-end space-x-4">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setShowDeleteModal(false)}
+                  className="px-4 py-2 bg-gray-700 text-cyan-200 rounded-lg hover:bg-gray-600"
+                >
+                  Cancel
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleBulkDelete}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  Delete Users
+                </motion.button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {renderAssignmentModal()}
+      </div>
     </div>
   );
 };

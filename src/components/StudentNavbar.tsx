@@ -1,15 +1,47 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Menu, Transition } from '@headlessui/react';
 import { 
   UserIcon,
   AcademicCapIcon,
   ClockIcon,
   ChartBarIcon,
-  ArrowLeftOnRectangleIcon,
+  ArrowLeftEndOnRectangleIcon,
   BellIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../Pages/AuthContext';
+import { motion } from 'framer-motion';
+
+// Particle Background Component (unchanged)
+const ParticleBackground: React.FC = () => {
+  const particles = Array.from({ length: 10 }, () => ({
+    x: Math.random() * 100,
+    y: Math.random() * 100,
+    speedX: (Math.random() - 0.5) * 0.2,
+    speedY: (Math.random() - 0.5) * 0.2,
+  }));
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {particles.map((particle, index) => (
+        <motion.div
+          key={index}
+          className="absolute w-1 h-1 bg-cyan-400 rounded-full"
+          initial={{ x: `${particle.x}vw`, y: `${particle.y}vh`, opacity: 0.6 }}
+          animate={{
+            x: `${particle.x + particle.speedX * 50}vw`,
+            y: `${particle.y + particle.speedY * 50}vh`,
+            opacity: [0.6, 0.8, 0.6],
+          }}
+          transition={{
+            duration: 15,
+            repeat: Infinity,
+            repeatType: 'reverse',
+          }}
+        />
+      ))}
+    </div>
+  );
+};
 
 interface StudentNavbarProps {
   student: {
@@ -22,6 +54,7 @@ interface StudentNavbarProps {
 const StudentNavbar: React.FC<StudentNavbarProps> = ({ student }) => {
   const { logout } = useAuth();
   const navigate = useNavigate();
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -35,83 +68,91 @@ const StudentNavbar: React.FC<StudentNavbarProps> = ({ student }) => {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 bg-white shadow-md z-50">
+    <nav className="fixed top-0 left-0 right-0 bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white shadow-lg z-50 font-mono overflow-visible">
+      <ParticleBackground />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
+          {/* Logo and Brand */}
           <div className="flex items-center">
-            <AcademicCapIcon className="h-8 w-8 text-indigo-600" />
-            <span className="ml-2 text-xl font-bold text-gray-800">Student Portal</span>
+            <AcademicCapIcon className="h-8 w-8 text-cyan-400" />
+            <div className="ml-2">
+              <span className="text-xl font-semibold text-cyan-100">Smart EcoLock</span>
+              <p className="text-sm text-cyan-300">{student.department}</p>
+            </div>
           </div>
 
+          {/* Navigation Links and Profile */}
           <div className="flex items-center space-x-4">
-            {/* Navigation Links */}
-            <Link to="/student/dashboard" className="text-gray-600 hover:text-indigo-600 px-3 py-2 rounded-md text-sm font-medium">
+            <Link
+              to="/student/dashboard"
+              className="text-cyan-200 hover:text-white hover:bg-gray-800/50 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+            >
               Dashboard
             </Link>
-            <Link to="/student/attendance" className="text-gray-600 hover:text-indigo-600 px-3 py-2 rounded-md text-sm font-medium">
+            <Link
+              to="/student/attendance"
+              className="text-cyan-200 hover:text-white hover:bg-gray-800/50 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+            >
               Attendance
             </Link>
-            <Link to="/student/schedule" className="text-gray-600 hover:text-indigo-600 px-3 py-2 rounded-md text-sm font-medium">
+            <Link
+              to="/student/schedule"
+              className="text-cyan-200 hover:text-white hover:bg-gray-800/50 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+            >
               Schedule
             </Link>
 
-            {/* Notifications */}
-            <button className="relative p-2 text-gray-600 hover:text-indigo-600">
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.95 }}
+              className="relative p-2 text-cyan-200 hover:text-cyan-100"
+            >
               <BellIcon className="h-6 w-6" />
-              <span className="absolute top-0 right-0 h-2 w-2 bg-red-500 rounded-full"></span>
-            </button>
+              <span className="absolute top-0 right-0 h-4 w-4 bg-red-500 rounded-full text-xs flex items-center justify-center border border-cyan-800">
+                1
+              </span>
+            </motion.button>
 
             {/* Profile Dropdown */}
-            <Menu as="div" className="relative ml-3">
-              <Menu.Button className="flex items-center space-x-3 text-sm focus:outline-none">
-                <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                  <UserIcon className="h-5 w-5 text-indigo-600" />
+            <div className="relative">
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="flex items-center space-x-3 focus:outline-none hover:opacity-80 transition-opacity"
+              >
+                <div className="h-8 w-8 rounded-full bg-gray-700/50 flex items-center justify-center border border-cyan-800">
+                  <UserIcon className="h-5 w-5 text-cyan-400" />
                 </div>
                 <div className="text-left hidden md:block">
-                  <p className="text-sm font-medium text-gray-800">{student.fullName}</p>
-                  <p className="text-xs text-gray-500">{student.section}</p>
+                  <p className="text-sm font-medium text-cyan-100">{student.fullName}</p>
+                  <p className="text-xs text-cyan-300">{student.section}</p>
                 </div>
-              </Menu.Button>
+              </button>
 
-              <Transition
-                as={Fragment}
-                enter="transition ease-out duration-100"
-                enterFrom="transform opacity-0 scale-95"
-                enterTo="transform opacity-100 scale-100"
-                leave="transition ease-in duration-75"
-                leaveFrom="transform opacity-100 scale-100"
-                leaveTo="transform opacity-0 scale-95"
-              >
-                <Menu.Items className="absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none">
-                  <div className="py-1">
-                    <Menu.Item>
-                      {({ active }) => (
-                        <Link
-                          to="/student/profile"
-                          className={`${
-                            active ? 'bg-gray-100' : ''
-                          } block px-4 py-2 text-sm text-gray-700`}
-                        >
-                          Your Profile
-                        </Link>
-                      )}
-                    </Menu.Item>
-                    <Menu.Item>
-                      {({ active }) => (
-                        <button
-                          onClick={handleLogout}
-                          className={`${
-                            active ? 'bg-gray-100' : ''
-                          } block w-full text-left px-4 py-2 text-sm text-red-600`}
-                        >
-                          Sign out
-                        </button>
-                      )}
-                    </Menu.Item>
-                  </div>
-                </Menu.Items>
-              </Transition>
-            </Menu>
+              {isDropdownOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  className="absolute right-0 mt-2 w-48 rounded-xl shadow-xl py-1 bg-gray-800/80 backdrop-blur-lg border border-cyan-800 z-50"
+                  style={{ top: '100%' }} // Ensure dropdown appears below the button
+                >
+                  <Link
+                    to="/student/profile"
+                    className="flex items-center px-4 py-2 text-sm text-cyan-100 hover:bg-gray-700 transition-colors"
+                  >
+                    <UserIcon className="h-4 w-4 mr-2 text-cyan-400" />
+                    Your Profile
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center w-full px-4 py-2 text-sm text-red-400 hover:bg-gray-700 transition-colors"
+                  >
+                    <ArrowLeftEndOnRectangleIcon className="h-4 w-4 mr-2 text-red-400" />
+                    Sign Out
+                  </button>
+                </motion.div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -119,4 +160,4 @@ const StudentNavbar: React.FC<StudentNavbarProps> = ({ student }) => {
   );
 };
 
-export default StudentNavbar; 
+export default StudentNavbar;

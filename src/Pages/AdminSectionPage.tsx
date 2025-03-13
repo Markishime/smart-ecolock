@@ -26,6 +26,7 @@ interface Student {
   id: string;
   fullName: string;
   idNumber: string;
+  rfidUid?: string; // Added rfidUid field
 }
 
 interface Subject {
@@ -159,6 +160,14 @@ const AdminSectionPage = () => {
         students: [...selectedSection.students, ...studentIds],
       });
 
+      // Update each student's sectionId in the students collection
+      await Promise.all(
+        studentIds.map(async (studentId) => {
+          const studentRef = doc(db, 'students', studentId);
+          await updateDoc(studentRef, { sectionId: selectedSection.id });
+        })
+      );
+
       setIsAssignModalOpen(false);
       Swal.fire({
         icon: 'success',
@@ -257,6 +266,9 @@ const AdminSectionPage = () => {
                                   <div>
                                     <p className="text-sm font-medium text-gray-900">{student.fullName}</p>
                                     <p className="text-xs text-gray-500">ID: {student.idNumber}</p>
+                                    <p className="text-xs text-gray-500">
+                                      RFID UID: {student.rfidUid || 'Not Assigned'}
+                                    </p>
                                   </div>
                                 </div>
                                 <button

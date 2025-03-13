@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, updateDoc } from 'firebase/firestore
 import { db } from '../firebase';
 import StudentNavbar from '../components/StudentNavbar';
 import { motion } from 'framer-motion';
-import { BookOpenIcon } from '@heroicons/react/24/outline';
+import { BookOpenIcon, UserGroupIcon } from '@heroicons/react/24/outline';
 
 interface Subject {
   id: string;
@@ -14,10 +14,24 @@ interface Subject {
   status: 'active' | 'inactive';
 }
 
+interface Section {
+  id: string;
+  name: string;
+  code: string;
+  subjectId: string;
+  instructorId: string;
+  students: string[];
+}
+
+interface SubjectWithSection {
+  subject: Subject;
+  section: Section | null;
+}
+
 const SubjectSelection = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const [allSubjects, setAllSubjects] = useState<Subject[]>([]);
+  const [allSubjectsWithSections, setAllSubjectsWithSections] = useState<SubjectWithSection[]>([]);
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [studentData, setStudentData] = useState<{
@@ -46,14 +60,29 @@ const SubjectSelection = () => {
           setSelectedSubjects(studentData.enrolledSubjects || []);
         }
 
-        // Fetch all subjects from the 'subjects' collection
+        // Fetch all subjects
         const subjectsRef = collection(db, 'subjects');
         const subjectsSnapshot = await getDocs(subjectsRef);
         const subjectsData = subjectsSnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
-        } as Subject));
-        setAllSubjects(subjectsData.filter((subject) => subject.status === 'active'));
+        } as Subject)).filter(subject => subject.status === 'active');
+
+        // Fetch all sections
+        const sectionsRef = collection(db, 'sections');
+        const sectionsSnapshot = await getDocs(sectionsRef);
+        const sectionsData = sectionsSnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        } as Section));
+
+        // Combine subjects with their sections
+        const subjectsWithSections = subjectsData.map(subject => {
+          const section = sectionsData.find(section => section.subjectId === subject.id) || null;
+          return { subject, section };
+        });
+
+        setAllSubjectsWithSections(subjectsWithSections);
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
@@ -71,10 +100,9 @@ const SubjectSelection = () => {
       if (!studentSnapshot.empty) {
         const studentDoc = studentSnapshot.docs[0];
         await updateDoc(studentDoc.ref, { enrolledSubjects: selectedSubjects });
-        // Update local storage to reflect changes immediately
         const updatedStudentData = { ...studentDoc.data(), enrolledSubjects: selectedSubjects };
         localStorage.setItem('userData', JSON.stringify(updatedStudentData));
-        navigate('/student/dashboard'); // Updated path to match StudentNavbar
+        navigate('/student/dashboard');
       }
     } catch (error) {
       console.error('Error saving selection:', error);
@@ -91,43 +119,46 @@ const SubjectSelection = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 flex items-center justify-center">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ repeat: Infinity, duration: 1 }}
-          className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full"
+          className="w-12 h-12 border-4 border-cyan-400 border-t-transparent rounded-full"
         />
       </div>
     );
   }
 
   if (!studentData) {
-    return <div className="p-8 text-center text-gray-500">No student data found.</div>;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 p-8 text-center text-cyan-300">
+        No student data found.
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800">
       <StudentNavbar student={studentData} />
-
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-12">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="bg-white rounded-2xl shadow-lg p-6"
+          className="bg-gray-800/80 backdrop-blur-lg rounded-xl shadow-xl p-6 border border-cyan-800"
         >
-          <h2 className="text-3xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <BookOpenIcon className="w-8 h-8 text-indigo-600" />
+          <h2 className="text-3xl font-bold text-cyan-100 mb-6 flex items-center gap-2 font-mono">
+            <BookOpenIcon className="w-8 h-8 text-cyan-400" />
             Select Your Subjects
           </h2>
-          <p className="text-gray-600 mb-6">
+          <p className="text-cyan-300 mb-6 font-mono">
             Choose the subjects you want to enroll in for this semester. Your selections will be
             reflected in your dashboard.
           </p>
 
-          {allSubjects.length > 0 ? (
+          {allSubjectsWithSections.length > 0 ? (
             <div className="space-y-4">
-              {allSubjects.map((subject, index) => (
+              {allSubjectsWithSections.map(({ subject, section }, index) => (
                 <motion.div
                   key={subject.id}
                   initial={{ opacity: 0, x: -20 }}
@@ -135,9 +166,9 @@ const SubjectSelection = () => {
                   transition={{ delay: index * 0.1 }}
                   className={`p-4 rounded-xl border ${
                     selectedSubjects.includes(subject.name)
-                      ? 'border-indigo-300 bg-indigo-50'
-                      : 'border-gray-200 bg-white'
-                  } hover:shadow-md transition-all duration-200`}
+                      ? 'border-cyan-400 bg-gray-700/50'
+                      : 'border-gray-700 bg-gray-800'
+                  } hover:shadow-lg transition-all duration-200`}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-4">
@@ -145,21 +176,27 @@ const SubjectSelection = () => {
                         type="checkbox"
                         checked={selectedSubjects.includes(subject.name)}
                         onChange={() => toggleSubject(subject.name)}
-                        className="h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500"
+                        className="h-5 w-5 text-cyan-400 rounded focus:ring-cyan-500 bg-gray-700 border-gray-600"
                       />
                       <div>
-                        <p className="text-lg font-medium text-gray-900">{subject.name}</p>
-                        <p className="text-sm text-gray-600">{subject.department}</p>
+                        <p className="text-lg font-medium text-cyan-100 font-mono">{subject.name}</p>
+                        <p className="text-sm text-cyan-300 font-mono">{subject.department}</p>
+                        <div className="flex items-center gap-1">
+                          <UserGroupIcon className="w-4 h-4 text-cyan-400" />
+                          <p className="text-sm text-cyan-300 font-mono">
+                            Section: {section ? section.name : 'Not assigned'}
+                          </p>
+                        </div>
                       </div>
                     </div>
                     <motion.button
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
                       onClick={() => toggleSubject(subject.name)}
-                      className={`px-4 py-1 text-sm font-medium rounded-full ${
+                      className={`px-4 py-1 text-sm font-medium rounded-full font-mono ${
                         selectedSubjects.includes(subject.name)
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-gray-200 text-gray-700'
+                          ? 'bg-cyan-600 text-white'
+                          : 'bg-gray-700 text-cyan-200'
                       }`}
                     >
                       {selectedSubjects.includes(subject.name) ? 'Selected' : 'Select'}
@@ -169,7 +206,7 @@ const SubjectSelection = () => {
               ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-center py-4">No subjects available.</p>
+            <p className="text-cyan-300 text-center py-4 font-mono">No subjects available.</p>
           )}
 
           <div className="mt-8 flex justify-end gap-4">
@@ -177,7 +214,7 @@ const SubjectSelection = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => navigate('/student/dashboard')}
-              className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              className="px-6 py-2 bg-gray-700 text-cyan-200 rounded-lg hover:bg-gray-600 transition-colors font-mono"
             >
               Cancel
             </motion.button>
@@ -186,10 +223,10 @@ const SubjectSelection = () => {
               whileTap={{ scale: 0.95 }}
               onClick={handleSave}
               disabled={selectedSubjects.length === 0}
-              className={`px-6 py-2 rounded-lg transition-colors ${
+              className={`px-6 py-2 rounded-lg transition-colors font-mono ${
                 selectedSubjects.length > 0
-                  ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  ? 'bg-cyan-600 text-white hover:bg-cyan-700'
+                  : 'bg-gray-700 text-cyan-400 cursor-not-allowed'
               }`}
             >
               Save Selection
