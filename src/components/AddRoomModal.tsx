@@ -14,7 +14,8 @@ interface RoomData {
   building: string;
   floor: string;
   capacity: number;
-  type: 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room';
+  type: 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room';
+  // Added 'faculty_room' to the type options
   status: 'available' | 'occupied' | 'maintenance';
   facilities: {
     hasProjector: boolean;
@@ -147,7 +148,7 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
               </label>
               <select
                 value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value as 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' })}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value as 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room' })}
                 className={theme.components.input}
                 required
               >
@@ -155,6 +156,7 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
                 <option value="laboratory">Laboratory</option>
                 <option value="lecture_hall">Lecture Hall</option>
                 <option value="conference_room">Conference Room</option>
+                <option value="faculty_room">Faculty Room</option>
               </select>
             </div>
             <div>

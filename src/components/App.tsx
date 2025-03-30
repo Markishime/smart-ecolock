@@ -1,5 +1,5 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
-import { AuthProvider, useAuth, } from '../Pages/AuthContext';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
+import { AuthProvider, useAuth } from '../Pages/AuthContext';
 import Login from '../Pages/Login';
 import Dashboard from '../Pages/Dashboard';
 import ResetPassword from '../Pages/ResetPassword';
@@ -18,8 +18,6 @@ import SettingsPage from '../Pages/SettingsPage';
 import ClassesPage from '../Pages/ClassesPage';
 import InstructorSchedules from '../Pages/Schedules';
 import AdminSchedules from '../Pages/AdminSchedules';
-import Subjects from '../Pages/Subjects';
-import AdminSubjects from '../Pages/AdminSubjects';
 import TakeAttendance from '../Pages/TakeAttendance';
 import RFIDRegistrationPage from '../Pages/Register';
 import AdminSections from '../Pages/AdminSectionPage';
@@ -27,6 +25,13 @@ import RoomsPage from '../Pages/RoomsPage';
 import AttendanceManagement from '../Pages/AttendanceManagement';
 import SubjectSelection from '../Pages/SubjectSelection';
 import SubjectsManagement from '../Pages/SubjectManagement';
+
+// Wrapper component to pass instructorName from URL params
+const AttendancePageWrapper: React.FC = () => {
+  const { instructorName } = useParams<{ instructorName: string }>();
+  return <AttendancePage instructorName={instructorName} />;
+};
+
 const App = () => {
   return (
     <Router>
@@ -48,15 +53,12 @@ const App = () => {
           <Route path="/admin/students" element={<PrivateRoute roles={['admin']}><StudentsPage /></PrivateRoute>} />
           <Route path="/admin/energyusage" element={<PrivateRoute roles={['admin']}><EnergyUsagePage /></PrivateRoute>} />
           <Route path="/admin/schedules" element={<PrivateRoute roles={['admin']}><AdminSchedules /></PrivateRoute>} />
-          <Route path="/admin/subjects" element={<PrivateRoute roles={['admin']}><AdminSubjects /></PrivateRoute>} />
           <Route path="/admin/sections" element={<PrivateRoute roles={['admin']}><AdminSections /></PrivateRoute>} />
           <Route path="/admin/rooms" element={<PrivateRoute roles={['admin']}><RoomsPage /></PrivateRoute>} />
           <Route path="/admin/subjects-management" element={<PrivateRoute roles={['admin']}><SubjectsManagement /></PrivateRoute>} />
           
           {/* Instructor routes */}
           <Route path="/instructor/dashboard" element={<PrivateRoute roles={['instructor']}><Dashboard /></PrivateRoute>} />
-          <Route path="/instructor/attendance" element={<PrivateRoute roles={['instructor']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
-          <Route path="/instructor/subjects" element={<PrivateRoute roles={['instructor']}><Subjects /></PrivateRoute>} />
           <Route path="/instructor/schedules" element={<PrivateRoute roles={['instructor']}><InstructorSchedules /></PrivateRoute>} />
           <Route path="/instructor/classes" element={<PrivateRoute roles={['instructor']}><ClassesPage /></PrivateRoute>} />
           <Route path="/instructor/settings" element={<PrivateRoute roles={['instructor']}><SettingsPage /></PrivateRoute>} />
@@ -78,7 +80,14 @@ const App = () => {
           />
           {/* Student routes */}
           <Route path="/student/dashboard" element={<PrivateRoute roles={['student']}><StudentDashboard /></PrivateRoute>} />
-          <Route path="/student/attendance" element={<PrivateRoute roles={['student']}><AttendancePage instructorfullName='' /></PrivateRoute>} />
+          <Route 
+            path="/student/attendance/:instructorName?" 
+            element={
+              <PrivateRoute roles={['student']}>
+                <AttendancePageWrapper />
+              </PrivateRoute>
+            } 
+          />
           <Route path="/student/subject-selection" element={<PrivateRoute roles={['student']}><SubjectSelection /></PrivateRoute>} />
 
           {/* Redirect root to login */}

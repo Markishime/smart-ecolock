@@ -1,20 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, doc, updateDoc, getDoc, arrayUnion } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import AdminSidebar from '../components/AdminSidebar';
 import {
   ClockIcon,
-  PlusIcon,
-  TrashIcon,
-  PencilIcon,
   FunnelIcon,
   Bars3CenterLeftIcon,
   XMarkIcon,
 } from '@heroicons/react/24/solid';
 import { motion } from 'framer-motion';
 import Swal from 'sweetalert2';
-import Modal from '../components/Modal';
 
 // Department color mapping for consistent color coding
 const DEPARTMENT_COLORS: { [key: string]: string } = {
@@ -26,20 +22,22 @@ const DEPARTMENT_COLORS: { [key: string]: string } = {
   'default': 'bg-gray-100 text-gray-800',
 };
 
-// Existing interfaces remain the same
+// Updated interfaces
 interface Schedule {
-  id: string;
-  subject: string;
-  room: string;
   day: string;
   startTime: string;
   endTime: string;
+  room: string;
+  subject?: string; // Subject name (optional, for display purposes)
+}
+
+interface Subject {
+  id: string;
+  name: string;
   department: string;
   status: 'active' | 'inactive';
-  instructor: string;
-  instructorEmail: string;
-  instructorDepartment: string;
-  subjectDetails: Subject | null;
+  instructors: string[]; // Array of instructor IDs (uids or teacher IDs)
+  schedules: Schedule[];
 }
 
 interface Teacher {
@@ -47,18 +45,12 @@ interface Teacher {
   fullName: string;
   email: string;
   department: string;
-  schedules: Schedule[];
-  subjects: string[];
-}
-
-interface Subject {
-  id: string;
-  name: string;
-  department: string;
+  uid?: string; // Optional Firebase UID
 }
 
 const AdminSchedules = () => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
@@ -66,40 +58,46 @@ const AdminSchedules = () => {
     key: 'day',
     direction: 'asc',
   });
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [formData, setFormData] = useState<Partial<Schedule>>({
-    subject: '',
-    room: '',
-    day: 'Monday',
-    startTime: '08:00',
-    endTime: '09:00',
-    department: '',
-    status: 'active',
-  });
-  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(false);
   const { currentUser } = useAuth();
 
-  // Fetch teachers and departments
+  // Fetch teachers, subjects, and departments
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
+
         // Fetch teachers
         const teachersCollection = collection(db, 'teachers');
         const teachersSnapshot = await getDocs(teachersCollection);
         const teachersData = teachersSnapshot.docs.map(doc => ({
           id: doc.id,
-          ...doc.data(),
+          fullName: doc.data().fullName,
+          email: doc.data().email,
+          department: doc.data().department,
+          uid: doc.data().uid || doc.id, // Fallback to doc.id if uid is missing
         } as Teacher));
 
-        // Extract unique departments
+        // Fetch subjects
+        const subjectsCollection = collection(db, 'subjects');
+        const subjectsSnapshot = await getDocs(subjectsCollection);
+        const subjectsData = subjectsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+          department: doc.data().department,
+          status: doc.data().status || 'active',
+          instructors: doc.data().instructors || [],
+          schedules: doc.data().schedules || [],
+        } as Subject));
+
+        // Extract unique departments from teachers
         const uniqueDepartments = Array.from(
           new Set(teachersData.map(teacher => teacher.department))
         ).filter(Boolean);
 
         setTeachers(teachersData);
+        setSubjects(subjectsData);
         setDepartments(uniqueDepartments);
         setLoading(false);
       } catch (error) {
@@ -107,7 +105,7 @@ const AdminSchedules = () => {
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to fetch teachers and departments',
+          text: 'Failed to fetch teachers and subjects',
         });
         setLoading(false);
       }
@@ -135,35 +133,38 @@ const AdminSchedules = () => {
     Sunday: 7,
   };
 
-  // Sorting and filtering functions
+  // Get schedules for the selected teacher from subjects
   const sortedSchedules = useMemo(() => {
-    if (!selectedTeacher || !selectedTeacher.schedules) return [];
+    if (!selectedTeacher) return [];
 
-    return [...(selectedTeacher.schedules || [])].sort((a, b) => {
+    // Filter subjects where the selected teacher is an instructor
+    const teacherSubjects = subjects.filter(subject =>
+      subject.instructors.includes(selectedTeacher.uid || selectedTeacher.id)
+    );
+
+    // Flatten schedules from these subjects and add subject name
+    const schedules = teacherSubjects.flatMap(subject =>
+      subject.schedules.map(schedule => ({
+        ...schedule,
+        subject: subject.name, // Add subject name to each schedule
+      }))
+    );
+
+    // Sort schedules
+    return schedules.sort((a, b) => {
       if (sortConfig.key === 'day') {
-        // Sort by day using the dayOrder
         const dayA = dayOrder[a.day] || 8; // Default to high number if day not found
         const dayB = dayOrder[b.day] || 8;
         const comparison = dayA - dayB;
         return sortConfig.direction === 'asc' ? comparison : -comparison;
       } else {
-        // For other keys, use localeCompare
-        const getSubjectSortValue = (schedule: Schedule) => {
-          return schedule.subjectDetails?.name || schedule.subject;
-        };
-
-        const valueA = sortConfig.key === 'subject'
-          ? getSubjectSortValue(a)
-          : a[sortConfig.key as keyof Schedule] ?? '';
-        const valueB = sortConfig.key === 'subject'
-          ? getSubjectSortValue(b)
-          : b[sortConfig.key as keyof Schedule] ?? '';
-
+        const valueA = a[sortConfig.key] ?? '';
+        const valueB = b[sortConfig.key] ?? '';
         const comparisonResult = String(valueA).localeCompare(String(valueB));
         return sortConfig.direction === 'asc' ? comparisonResult : -comparisonResult;
       }
     });
-  }, [selectedTeacher, sortConfig]);
+  }, [selectedTeacher, subjects, sortConfig]);
 
   const filteredTeachers = useMemo(() => {
     return selectedDepartment === 'all'
@@ -180,12 +181,6 @@ const AdminSchedules = () => {
   // Clear selected teacher
   const clearSelectedTeacher = () => {
     setSelectedTeacher(null);
-  };
-
-  // Helper function to get subject name
-  const getSubjectName = (subjectId: string) => {
-    const subject = subjects.find(s => s.id === subjectId);
-    return subject ? subject.name : subjectId;
   };
 
   // Color coding for departments
@@ -224,7 +219,7 @@ const AdminSchedules = () => {
               <div>
                 <h1 className="text-3xl font-bold text-gray-900">Schedule Management</h1>
                 <p className="text-gray-600 mt-2">
-                  Manage schedules by teacher and department
+                  View schedules by teacher and department
                 </p>
               </div>
             </div>
@@ -337,9 +332,9 @@ const AdminSchedules = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {sortedSchedules.map(schedule => (
+                        {sortedSchedules.map((schedule, index) => (
                           <motion.tr
-                            key={schedule.id}
+                            key={index} // Use index as key since schedules from subjects might not have unique IDs
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             transition={{ duration: 0.2 }}
@@ -347,14 +342,12 @@ const AdminSchedules = () => {
                           >
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="flex flex-col">
-                                <div className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getDepartmentColor(schedule.subjectDetails?.department || 'default')}`}>
-                                  {schedule.subjectDetails?.name || schedule.subject}
+                                <div className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getDepartmentColor(selectedTeacher.department)}`}>
+                                  {schedule.subject}
                                 </div>
-                                {schedule.subjectDetails && (
-                                  <span className="text-xs text-gray-500 mt-1">
-                                    {schedule.subjectDetails.department}
-                                  </span>
-                                )}
+                                <span className="text-xs text-gray-500 mt-1">
+                                  {selectedTeacher.department}
+                                </span>
                               </div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-gray-700">{schedule.day}</td>
@@ -374,7 +367,7 @@ const AdminSchedules = () => {
                   <div className="p-6 text-center">
                     <h3 className="text-lg font-medium text-gray-600">No Schedules Found</h3>
                     <p className="text-gray-500 mt-2">
-                      The selected teacher has no schedules assigned.
+                      The selected teacher has no schedules assigned in any subjects.
                     </p>
                   </div>
                 )}

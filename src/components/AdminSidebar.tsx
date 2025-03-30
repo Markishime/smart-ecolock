@@ -14,8 +14,9 @@ import {
   BuildingStorefrontIcon,
   ChartBarSquareIcon,
   LightBulbIcon
-} from '@heroicons/react/24/outline';
+} from '@heroicons/react/24/solid';
 import { useAuth } from '../Pages/AuthContext';
+import { motion } from 'framer-motion';
 
 const AdminSidebar = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -81,35 +82,46 @@ const AdminSidebar = () => {
   ];
 
   return (
-    <div 
-      className={`fixed inset-y-0 left-0 bg-white border-r border-gray-200 transition-all duration-300 ${
-        isCollapsed ? 'w-20' : 'w-64'
-      }`}
+    <motion.div
+      initial={{ width: isCollapsed ? 80 : 256 }}
+      animate={{ width: isCollapsed ? 80 : 256 }}
+      transition={{ duration: 0.3 }}
+      className="fixed inset-y-0 left-0 bg-gradient-to-b from-gray-900 to-blue-900 text-white font-mono border-r border-cyan-800 shadow-xl z-50"
     >
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full relative overflow-hidden">
+        {/* Background Effects */}
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'%3E%3Cpath d=\'M10 10 L90 90 M90 10 L10 90\' stroke=\'%2300b4d8\' stroke-width=\'1\' opacity=\'0.1\'/%3E%3C/svg%3E')] opacity-20"></div>
+        <motion.div
+          className="absolute -inset-2 bg-cyan-500/20 blur-xl"
+          animate={{ opacity: [0.2, 0.4, 0.2] }}
+          transition={{ duration: 3, repeat: Infinity }}
+        />
+
         {/* Logo and Toggle */}
-        <div className="flex items-center justify-between px-4 py-4 border-b border-gray-200">
+        <div className="flex items-center justify-between px-4 py-4 border-b border-cyan-800 relative z-10">
           {!isCollapsed && (
             <div className="flex items-center gap-2">
-              <AcademicCapIcon className="w-8 h-8 text-indigo-600" />
-              <span className="text-xl font-bold text-gray-900">Admin</span>
+              <AcademicCapIcon className="w-8 h-8 text-cyan-400" />
+              <span className="text-xl font-bold text-cyan-100">Admin</span>
             </div>
           )}
-          {isCollapsed && <AcademicCapIcon className="w-8 h-8 text-indigo-600 mx-auto" />}
-          <button
+          {isCollapsed && <AcademicCapIcon className="w-8 h-8 text-cyan-400 mx-auto" />}
+          <motion.button
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            className="p-2 rounded-lg hover:bg-gray-700 transition-colors"
           >
             {isCollapsed ? (
-              <ChevronDoubleRightIcon className="w-5 h-5 text-gray-500" />
+              <ChevronDoubleRightIcon className="w-5 h-5 text-cyan-400" />
             ) : (
-              <ChevronDoubleLeftIcon className="w-5 h-5 text-gray-500" />
+              <ChevronDoubleLeftIcon className="w-5 h-5 text-cyan-400" />
             )}
-          </button>
+          </motion.button>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto relative z-10">
           {navigationItems.map((item) => {
             const isActive = location.pathname === item.path;
             return (
@@ -118,8 +130,8 @@ const AdminSidebar = () => {
                 to={item.path}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive 
-                    ? 'bg-indigo-50 text-indigo-600' 
-                    : 'text-gray-700 hover:bg-gray-50'
+                    ? 'bg-cyan-800/50 text-cyan-100' 
+                    : 'text-cyan-300 hover:bg-gray-700/50'
                 }`}
                 title={isCollapsed ? item.name : ''}
               >
@@ -133,21 +145,23 @@ const AdminSidebar = () => {
         </nav>
 
         {/* Logout Button */}
-        <div className="p-4 border-t border-gray-200">
-          <button
+        <div className="p-4 border-t border-cyan-800 relative z-10">
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             onClick={logout}
-            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors ${
+            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-700/50 rounded-lg transition-colors ${
               isCollapsed ? 'justify-center' : 'w-full'
             }`}
             title={isCollapsed ? 'Logout' : ''}
           >
             <ArrowLeftOnRectangleIcon className="w-5 h-5" />
             {!isCollapsed && <span>Logout</span>}
-          </button>
+          </motion.button>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
-export default AdminSidebar; 
+export default AdminSidebar;
