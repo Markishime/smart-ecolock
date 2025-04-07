@@ -50,16 +50,6 @@ const AdminSidebar = () => {
       path: '/admin/sections'
     },
     {
-      name: 'Instructors',
-      icon: AcademicCapIcon,
-      path: '/admin/teachers'
-    },
-    {
-      name: 'Students',
-      icon: AcademicCapIcon,
-      path: '/admin/students'
-    },
-    {
       name: 'Rooms',
       icon: BuildingOfficeIcon,
       path: '/admin/rooms'

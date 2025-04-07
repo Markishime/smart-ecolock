@@ -30,18 +30,18 @@ interface Student {
   department: string;
   section: string;
   sectionId: string;
-  classStatus: 'Present' | 'Late' | 'Absent';
+  classStatus: string;
   timestamp: string;
   weight: number;
   sensor: string;
   role: string;
   date: string;
   action: string;
-  attendanceStatus?: 'present' | 'absent' | 'late' | 'pending';
+  attendanceStatus: string;
   rfidAuthenticated: boolean;
   weightAuthenticated: boolean;
-  confirmed?: boolean;
-  assignedSensorId?: string;
+  confirmed: boolean;
+  assignedSensorId: string;
 }
 
 interface Section {
@@ -124,7 +124,6 @@ const TakeAttendance: React.FC = () => {
         const sectionsRef = collection(db, 'sections');
         const q = query(sectionsRef, where('instructorId', '==', currentUser.uid));
         const sectionsSnapshot = await getDocs(q);
-        console.log('Fetched Sections:', sectionsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         const fetchedSections = sectionsSnapshot.docs.map((doc) => ({
           id: doc.id,
           code: doc.data().code || '',
@@ -156,7 +155,7 @@ const TakeAttendance: React.FC = () => {
     fetchSections();
   }, [currentUser]);
 
-  // Fetch students for the selected section from RTDB
+  // Fetch students for the selected section from RTDB with all details
   useEffect(() => {
     if (!selectedSection) {
       setStudents([]);
@@ -182,13 +181,6 @@ const TakeAttendance: React.FC = () => {
           .filter((rfidUid) => studentsData[rfidUid].sectionId === selectedSection.id)
           .map((rfidUid) => {
             const studentData = studentsData[rfidUid];
-            let status: 'present' | 'late' | 'absent' = 'absent';
-            if (studentData['Class Status'] === 'Present') {
-              status = 'present';
-            } else if (studentData['Class Status'] === 'Late') {
-              status = 'late';
-            }
-
             return {
               rfidUid,
               idNumber: studentData.idNumber || '',
@@ -198,18 +190,18 @@ const TakeAttendance: React.FC = () => {
               department: studentData.department || '',
               section: studentData.section || '',
               sectionId: studentData.sectionId || '',
-              classStatus: studentData['Class Status'] || '',
-              timestamp: studentData.times_tamp || '',
+              classStatus: studentData.classStatus || '',
+              timestamp: studentData.timestamp || '',
               weight: studentData.weight || 0,
               sensor: studentData.sensor || '',
               role: studentData.role || '',
               date: studentData.date || '',
               action: studentData.action || '',
-              attendanceStatus: status,
-              rfidAuthenticated: !!studentData['Class Status'],
-              weightAuthenticated: (studentData.weight || 0) > 20,
-              confirmed: (studentData.weight || 0) > 20,
-              assignedSensorId: studentData.sensor || '',
+              attendanceStatus: studentData.attendanceStatus || 'absent',
+              rfidAuthenticated: studentData.rfidAuthenticated || false,
+              weightAuthenticated: studentData.weightAuthenticated || false,
+              confirmed: studentData.confirmed || false,
+              assignedSensorId: studentData.assignedSensorId || studentData.sensor || '',
             };
           });
 
@@ -316,102 +308,97 @@ const TakeAttendance: React.FC = () => {
     setConfirmationTapTime(null);
   };
 
-  // Inside the TakeAttendance component
-const submitAttendance = async () => {
-  if (!selectedSection || !currentSchedule) {
-    toast.error('Please select a section and ensure schedule is loaded');
-    return;
-  }
-
-  if (!currentUser) {
-    toast.error('User not authenticated');
-    return;
-  }
-
-  try {
-    setLoading(true);
-
-    // Check for existing records
-    const today = new Date().toISOString().split('T')[0];
-    const attendanceRef = collection(db, 'attendanceRecords');
-    const q = query(
-      attendanceRef,
-      where('sectionId', '==', selectedSection.id),
-      where('date', '==', today),
-      where('submittedBy.id', '==', currentUser.uid)
-    );
-    const existingRecordsSnapshot = await getDocs(q);
-
-    if (!existingRecordsSnapshot.empty) {
-      const confirm = await Swal.fire({
-        title: 'Attendance Already Submitted',
-        text: 'Attendance for this section and date has already been submitted. Do you want to overwrite it?',
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, overwrite',
-        cancelButtonText: 'No, cancel',
-      });
-
-      if (!confirm.isConfirmed) {
-        setLoading(false);
-        return;
-      }
-
-      // Delete existing records
-      const deletePromises = existingRecordsSnapshot.docs.map((doc) =>
-        deleteDoc(doc.ref)
-      );
-      await Promise.all(deletePromises);
+  const submitAttendance = async () => {
+    if (!selectedSection || !currentSchedule) {
+      toast.error('Please select a section and ensure schedule is loaded');
+      return;
     }
 
-    // Submit new records
-    const attendanceRecords = students.map((student) => ({
-      studentId: student.rfidUid,
-      studentName: student.studentName,
-      studentEmail: student.email,
-      sectionId: selectedSection.id,
-      sectionName: selectedSection.name,
-      subject: selectedSection.subjectId,
-      room: currentSchedule.room,
-      status: student.attendanceStatus || 'absent',
-      confirmed: student.confirmed || false,
-      rfidAuthenticated: student.rfidAuthenticated || false,
-      weightAuthenticated: student.weightAuthenticated || false,
-      timestamp: Timestamp.fromDate(new Date(student.timestamp || new Date())),
-      date: today,
-      submittedBy: {
-        id: currentUser.uid,
-        name: currentUser.fullName || 'Instructor',
-        role: currentUser.role || 'instructor',
-      },
-    }));
+    if (!currentUser) {
+      toast.error('User not authenticated');
+      return;
+    }
 
-    const writePromises = attendanceRecords.map((record) =>
-      addDoc(collection(db, 'attendanceRecords'), record)
-    );
-    await Promise.all(writePromises);
+    try {
+      setLoading(true);
 
-    // Reset student attendance statuses
-    setStudents((prev) =>
-      prev.map((student) => ({
-        ...student,
-        attendanceStatus: undefined,
-        timestamp: '',
-        confirmed: false,
-        rfidAuthenticated: false,
-        weightAuthenticated: false,
-      }))
-    );
+      const today = new Date().toISOString().split('T')[0];
+      const attendanceRef = collection(db, 'attendanceRecords');
+      const q = query(
+        attendanceRef,
+        where('sectionId', '==', selectedSection.id),
+        where('date', '==', today),
+        where('submittedBy.id', '==', currentUser.uid)
+      );
+      const existingRecordsSnapshot = await getDocs(q);
 
-    toast.success('Attendance submitted successfully!');
-    navigate('/instructor/attendance-management');
-  } catch (error) {
-    console.error('Error submitting attendance to Firestore:', error);
-    toast.error('Failed to submit attendance. Please try again.');
-  } finally {
-    setLoading(false);
-  }
-};
+      if (!existingRecordsSnapshot.empty) {
+        const confirm = await Swal.fire({
+          title: 'Attendance Already Submitted',
+          text: 'Attendance for this section and date has already been submitted. Do you want to overwrite it?',
+          icon: 'warning',
+          showCancelButton: true,
+          confirmButtonText: 'Yes, overwrite',
+          cancelButtonText: 'No, cancel',
+        });
+
+        if (!confirm.isConfirmed) {
+          setLoading(false);
+          return;
+        }
+
+        const deletePromises = existingRecordsSnapshot.docs.map((doc) =>
+          deleteDoc(doc.ref)
+        );
+        await Promise.all(deletePromises);
+      }
+
+      const attendanceRecords = students.map((student) => ({
+        studentId: student.rfidUid,
+        studentName: student.studentName,
+        studentEmail: student.email,
+        sectionId: selectedSection.id,
+        sectionName: selectedSection.name,
+        subject: selectedSection.subjectId,
+        room: currentSchedule.room,
+        status: student.attendanceStatus || 'absent',
+        confirmed: student.confirmed,
+        rfidAuthenticated: student.rfidAuthenticated,
+        weightAuthenticated: student.weightAuthenticated,
+        timestamp: Timestamp.fromDate(new Date(student.timestamp || new Date())),
+        date: today,
+        submittedBy: {
+          id: currentUser.uid,
+          name: currentUser.fullName || 'Instructor',
+          role: currentUser.role || 'instructor',
+        },
+      }));
+
+      const writePromises = attendanceRecords.map((record) =>
+        addDoc(collection(db, 'attendanceRecords'), record)
+      );
+      await Promise.all(writePromises);
+
+      setStudents((prev) =>
+        prev.map((student) => ({
+          ...student,
+          attendanceStatus: 'absent',
+          timestamp: '',
+          confirmed: false,
+          rfidAuthenticated: false,
+          weightAuthenticated: false,
+        }))
+      );
+
+      toast.success('Attendance submitted successfully!');
+      navigate('/instructor/attendance-management');
+    } catch (error) {
+      console.error('Error submitting attendance to Firestore:', error);
+      toast.error('Failed to submit attendance. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const stats: AttendanceStats = useMemo(() => {
     const total = students.length;
@@ -450,8 +437,8 @@ const submitAttendance = async () => {
       }
       if (sortBy === 'status') {
         const statusOrder = { present: 1, late: 2, absent: 3, pending: 4, undefined: 5 };
-        const statusA = statusOrder[a.attendanceStatus || 'undefined'];
-        const statusB = statusOrder[b.attendanceStatus || 'undefined'];
+        const statusA = statusOrder[a.attendanceStatus as keyof typeof statusOrder || 'undefined'];
+        const statusB = statusOrder[b.attendanceStatus as keyof typeof statusOrder || 'undefined'];
         return sortOrder === 'asc' ? statusA - statusB : statusB - statusA;
       }
       if (sortBy === 'time') {
@@ -467,15 +454,18 @@ const submitAttendance = async () => {
 
   const exportAttendance = () => {
     const csvContent = [
-      ['Name', 'Email', 'UID', 'Status', 'Time', 'Weight', 'Weight Verified'],
+      ['Name', 'Email', 'UID', 'Status', 'Time', 'Weight', 'Weight Verified', 'Department', 'Section', 'Mobile'],
       ...students.map((student) => [
         student.studentName,
         student.email,
         student.rfidUid,
-        student.attendanceStatus || 'Not marked',
+        student.attendanceStatus,
         student.timestamp || '',
         student.weight ? student.weight.toFixed(1) : 'N/A',
         student.weightAuthenticated ? 'Yes' : 'No',
+        student.department,
+        student.section,
+        student.mobileNumber,
       ]),
     ]
       .map((row) => row.join(','))
@@ -512,7 +502,7 @@ const submitAttendance = async () => {
 
     try {
       const studentRef = ref(rtdb, `/Students/${rfidUid}`);
-      await set(studentRef, { ...student, sensor: sensorId });
+      await set(studentRef, { ...student, sensor: sensorId, assignedSensorId: sensorId });
 
       const sensorRef = ref(rtdb, `weightSensors/${roomId}/${sensorId}`);
       await set(sensorRef, {
@@ -678,7 +668,6 @@ const submitAttendance = async () => {
             </div>
           )}
 
-          {/* Filtering and Sorting Controls */}
           {selectedSection && (
             <div className="flex flex-wrap items-center gap-3 mb-6">
               <div className="relative flex-1 sm:flex-none">
@@ -804,6 +793,15 @@ const submitAttendance = async () => {
                         ) : (
                           <span className="text-red-600">No</span>
                         )}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Department:</span> {student.department}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Section:</span> {student.section}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Mobile:</span> {student.mobileNumber}
                       </p>
                       {student.assignedSensorId && (
                         <p className="text-sm">

@@ -9,7 +9,8 @@ import {
   ArrowsRightLeftIcon,
   BuildingOfficeIcon,
   ClockIcon,
-  ExclamationCircleIcon
+  ExclamationCircleIcon,
+  CalculatorIcon
 } from '@heroicons/react/24/solid';
 import { Line } from 'react-chartjs-2';
 import {
@@ -22,6 +23,9 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import { collection, getDocs } from 'firebase/firestore';
+import { ref, onValue, off } from 'firebase/database';
+import { db, rtdb } from '../firebase';
 import Swal from 'sweetalert2';
 
 ChartJS.register(
@@ -33,72 +37,6 @@ ChartJS.register(
   Tooltip,
   Legend
 );
-
-// Static JSON data
-const energyDataJson = {
-  "Alerts": {
-    "Tamper": "03-11-2025 12:27:21"
-  },
-  "Instructors": {
-    "1419CF": {
-      "AccessLogs": "e:03-10-2025 20:02:32",
-      "PZEMData": {
-        "Current": "0.16",
-        "Energy": "0.04",
-        "Frequency": "59.80",
-        "Power": "1.20",
-        "PowerFactor": "0.03",
-        "Voltage": "228.40"
-      }
-    },
-    "1419CFBA": {
-      "AccessLogs": "03-10-2025 20:02:32",
-      "PZEMData": {
-        "Current": "0.16",
-        "Energy": "0.04",
-        "Frequency": "59.80",
-        "Power": "1.20",
-        "PowerFactor": "0.03",
-        "Voltage": "228.40"
-      }
-    },
-    "74F8C4BA": {
-      "AccessLogs": "03-10-2025 21:12:31",
-      "PZEMData": {
-        "Current": "0.16",
-        "Energy": "0.04",
-        "Frequency": "60.10",
-        "Power": "1.10",
-        "PowerFactor": "0.03",
-        "Voltage": "226.50"
-      }
-    }
-  },
-  "RegisteredUIDs": {
-    "1419CF": "e:03-10-2025 20:18:05",
-    "1419CFBA": "03-10-2025 20:18:05",
-    "74F8C4BA": "03-10-2025 21:12:31"
-  },
-  "UnregisteredUIDs": {
-    "1419CF": { "AccessLogs": "e:03-10-2025 20:01:24" },
-    "7422B5BA": { "AccessLogs": "03-10-2025 21:12:44" },
-    "74F8C4": { "AccessLogs": "e:03-10-2025 20:19:21" },
-    "F429BA": { "AccessLogs": "e:03-11-2025 12:27:44" },
-    "F429BABA": { "AccessLogs": "03-11-2025 12:27:44" }
-  },
-  "rfid": {
-    "1419CFBA": {
-      "role": "instructor",
-      "timestamp": { "_methodName": "serverTimestamp" },
-      "uid": "T4TVOYRBpgTX3voUkXuxpAyte4r2"
-    },
-    "74F8C4BA": {
-      "role": "student",
-      "timestamp": { "_methodName": "serverTimestamp" },
-      "uid": "eEIYuVZ2B4MXwEBWRANowKdf7Hw1"
-    }
-  }
-};
 
 interface Room {
   id: string;
@@ -135,69 +73,110 @@ interface InstructorPZEMData {
   pzemData: PZEMData;
 }
 
+interface AdminPZEMData {
+  [roomId: string]: {
+    Current: string;
+    Energy: string;
+    Frequency: string;
+    Power: string;
+    PowerFactor: string;
+    Voltage: string;
+    timestamp: string;
+  };
+}
+
+const VECO_RATE_PER_KWH = 14; // Pesos per kWh
+
 const EnergyUsagePage: React.FC = () => {
   const [energyData, setEnergyData] = useState<EnergyUsage[]>([]);
   const [pzemData, setPzemData] = useState<InstructorPZEMData[]>([]);
+  const [adminPzemData, setAdminPzemData] = useState<AdminPZEMData>({});
   const [selectedClassroom, setSelectedClassroom] = useState<string>('');
   const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week'>('hour');
   const [loading, setLoading] = useState(true);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // Calculator states
+  const [calcPowerWatts, setCalcPowerWatts] = useState<string>('0');
+  const [calcHours, setCalcHours] = useState<string>('1');
+  const [calcResult, setCalcResult] = useState<{ kWh: string; cost: string } | null>(null);
 
-  // Simulated room data since we don't have Firestore
   useEffect(() => {
-    const mockRooms: Room[] = [
-      { id: "1", name: "705", building: "GLE Building", floor: "7th Floor" },
-      { id: "2", name: "706", building: "GLE Building", floor: "7th Floor" },
-    ];
-    setRooms(mockRooms.sort((a, b) => a.name.localeCompare(b.name)));
-    setSelectedClassroom(mockRooms[0].name);
+    const fetchRooms = async () => {
+      try {
+        const roomsCollection = collection(db, 'rooms');
+        const roomsSnapshot = await getDocs(roomsCollection);
+        const roomsData = roomsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name || '',
+          building: doc.data().building || '',
+          floor: doc.data().floor || ''
+        }) as Room);
+
+        const sortedRooms = roomsData.sort((a, b) => a.name.localeCompare(b.name));
+        setRooms(sortedRooms);
+        if (sortedRooms.length > 0) {
+          setSelectedClassroom(sortedRooms[0].name);
+        }
+      } catch (error) {
+        console.error('Error fetching rooms:', error);
+        Swal.fire('Error', 'Failed to fetch rooms', 'error');
+      }
+    };
+
+    fetchRooms();
   }, []);
 
-  // Simulated energy usage data (since original doesn't contain this)
+  useEffect(() => {
+    const adminPzemRef = ref(rtdb, 'AdminPZEM');
+    const unsubscribe = onValue(adminPzemRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        setAdminPzemData(data);
+      }
+    }, (error) => {
+      console.error('Error fetching AdminPZEM data:', error);
+      Swal.fire('Error', 'Failed to fetch AdminPZEM data', 'error');
+    });
+
+    return () => off(adminPzemRef, 'value', unsubscribe);
+  }, []);
+
   useEffect(() => {
     if (!selectedClassroom) return;
 
-    const mockEnergyData: EnergyUsage[] = [
-      {
-        id: "1",
-        classroomId: selectedClassroom,
-        timestamp: new Date("2025-03-10T20:00:00"),
-        consumptionKWh: 0.04,
-        devices: { lighting: 0.01, projection: 0.01, computers: 0.01, hvac: 0.01 }
-      },
-      {
-        id: "2",
-        classroomId: selectedClassroom,
-        timestamp: new Date("2025-03-10T21:00:00"),
-        consumptionKWh: 0.04,
-        devices: { lighting: 0.01, projection: 0.01, computers: 0.01, hvac: 0.01 }
-      },
-    ];
-
-    const filteredData = mockEnergyData.filter(entry => {
-      const startTime = getStartTime();
-      return entry.timestamp > startTime;
-    });
-
-    setEnergyData(filteredData);
-    setLoading(false);
-  }, [selectedClassroom, timeRange]);
-
-  // Fetch PZEM data from static JSON
-  useEffect(() => {
-    const fetchPZEMData = () => {
+    const processData = () => {
       try {
-        // Simulated room assignments
-        const roomAssignments: { [key: string]: string } = {
-          "1419CF": "705",
-          "1419CFBA": "705",
-          "74F8C4BA": "706",
-        };
+        const mockEnergyData: EnergyUsage[] = Object.entries(adminPzemData).map(([roomId, data]) => {
+          const room = rooms.find(r => r.id === roomId);
+          return {
+            id: roomId,
+            classroomId: room?.name || roomId,
+            timestamp: new Date(data.timestamp),
+            consumptionKWh: parseFloat(data.Energy) || 0,
+            devices: {
+              lighting: parseFloat(data.Energy) * 0.25 || 0,
+              projection: parseFloat(data.Energy) * 0.25 || 0,
+              computers: parseFloat(data.Energy) * 0.25 || 0,
+              hvac: parseFloat(data.Energy) * 0.25 || 0
+            }
+          };
+        });
 
-        const instructorsData = energyDataJson.Instructors;
+        const filteredEnergyData = mockEnergyData.filter(entry => {
+          const startTime = getStartTime();
+          return entry.classroomId === selectedClassroom && entry.timestamp > startTime;
+        });
+
+        setEnergyData(filteredEnergyData);
+
+        const roomAssignments: { [key: string]: string } = {};
+        rooms.forEach(room => {
+          roomAssignments[room.id] = room.name;
+        });
+
+        const instructorsData = energyData; // Replace with the correct variable or define energyDataJson if needed
         const pzemEntries: InstructorPZEMData[] = [];
-
         Object.entries(instructorsData).forEach(([instructorId, data]: [string, any]) => {
           const roomName = roomAssignments[instructorId] || 'Unknown';
           if (data.PZEMData) {
@@ -208,33 +187,29 @@ const EnergyUsagePage: React.FC = () => {
               Power: data.PZEMData.Power || '0',
               PowerFactor: data.PZEMData.PowerFactor || '0',
               Voltage: data.PZEMData.Voltage || '0',
-              timestamp: data.AccessLogs.replace('e:', ''), // Using AccessLogs as timestamp
+              timestamp: data.AccessLogs.replace('e:', ''),
             };
-            pzemEntries.push({
-              roomName,
-              pzemData,
-            });
+            pzemEntries.push({ roomName, pzemData });
           }
         });
 
-        const filteredPzemData = pzemEntries.filter((entry) => {
+        const filteredPzemData = pzemEntries.filter(entry => {
           const matchesRoom = !selectedClassroom || entry.roomName === selectedClassroom;
           const entryTime = new Date(entry.pzemData.timestamp || '');
           const startTime = getStartTime();
-          const matchesTime = entryTime > startTime;
-          return matchesRoom && matchesTime;
+          return matchesRoom && entryTime > startTime;
         });
 
         setPzemData(filteredPzemData);
         setLoading(false);
       } catch (error) {
-        console.error('Error processing PZEM data:', error);
-        Swal.fire('Error', 'Failed to process PZEM data', 'error');
+        console.error('Error processing data:', error);
+        Swal.fire('Error', 'Failed to process energy data', 'error');
       }
     };
 
-    fetchPZEMData();
-  }, [selectedClassroom, timeRange]);
+    processData();
+  }, [selectedClassroom, timeRange, adminPzemData, rooms]);
 
   const getStartTime = () => {
     const now = new Date();
@@ -285,9 +260,36 @@ const EnergyUsagePage: React.FC = () => {
   const totalConsumption = energyData.reduce((sum, entry) => sum + entry.consumptionKWh, 0);
   const averageConsumption = totalConsumption / (energyData.length || 1);
   const peakUsage = energyData.length > 0 ? Math.max(...energyData.map((d) => d.consumptionKWh)) : 0;
-
   const totalPzemPower = pzemData.reduce((sum, entry) => sum + parseFloat(entry.pzemData.Power || '0'), 0);
   const averagePzemPower = totalPzemPower / (pzemData.length || 1);
+
+  const calculatePowerCosts = () => {
+    const actualConsumptionKWh = totalConsumption;
+    const potentialConsumptionKWh = totalPzemPower / 1000;
+    const actualCost = actualConsumptionKWh * VECO_RATE_PER_KWH;
+    const potentialCost = potentialConsumptionKWh * VECO_RATE_PER_KWH;
+
+    return {
+      actualConsumptionKWh: actualConsumptionKWh.toFixed(2),
+      potentialConsumptionKWh: potentialConsumptionKWh.toFixed(2),
+      actualCost: actualCost.toFixed(2),
+      potentialCost: potentialCost.toFixed(2),
+      savings: (actualCost - potentialCost).toFixed(2)
+    };
+  };
+
+  const powerCosts = calculatePowerCosts();
+
+  const handleCalculate = () => {
+    const power = parseFloat(calcPowerWatts) || 0;
+    const hours = parseFloat(calcHours) || 0;
+    const kWh = (power * hours) / 1000; // Convert W*h to kWh
+    const cost = kWh * VECO_RATE_PER_KWH;
+    setCalcResult({
+      kWh: kWh.toFixed(2),
+      cost: cost.toFixed(2)
+    });
+  };
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -369,25 +371,25 @@ const EnergyUsagePage: React.FC = () => {
                   icon={BoltIcon}
                   title="Total Consumption"
                   value={`${totalConsumption.toFixed(2)} kWh`}
-                  description="Total energy used"
+                  description="Total energy used (Actual)"
                 />
                 <StatCard
                   icon={ChartBarIcon}
                   title="Average Consumption"
                   value={`${averageConsumption.toFixed(2)} kWh`}
-                  description="Average per reading"
+                  description="Average per reading (Actual)"
                 />
                 <StatCard
                   icon={PowerIcon}
                   title="Peak Usage"
                   value={`${peakUsage.toFixed(2)} kWh`}
-                  description="Highest consumption"
+                  description="Highest consumption (Actual)"
                 />
                 <StatCard
                   icon={ArrowsRightLeftIcon}
                   title="Readings"
                   value={energyData.length}
-                  description="Total data points"
+                  description="Total data points (Actual)"
                 />
               </div>
 
@@ -396,20 +398,93 @@ const EnergyUsagePage: React.FC = () => {
                   icon={BoltIcon}
                   title="Total PZEM Power"
                   value={`${totalPzemPower.toFixed(2)} W`}
-                  description="Total power from PZEM"
+                  description="Total power (Prototype)"
                 />
                 <StatCard
                   icon={ChartBarIcon}
                   title="Average PZEM Power"
                   value={`${averagePzemPower.toFixed(2)} W`}
-                  description="Average power reading"
+                  description="Average power (Prototype)"
                 />
                 <StatCard
                   icon={PowerIcon}
                   title="PZEM Readings"
                   value={pzemData.length}
-                  description="Total PZEM data points"
+                  description="Total PZEM points (Prototype)"
                 />
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
+                <h3 className="text-lg font-semibold mb-6 flex items-center">
+                  <CalculatorIcon className="w-5 h-5 mr-2 text-indigo-600" />
+                  Power Consumption Analysis
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <h4 className="font-medium text-gray-700 mb-2">Actual Room</h4>
+                    <p>Consumption: {powerCosts.actualConsumptionKWh} kWh</p>
+                    <p>Cost: ₱{powerCosts.actualCost}</p>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-700 mb-2">Prototype</h4>
+                    <p>Consumption: {powerCosts.potentialConsumptionKWh} kWh</p>
+                    <p>Cost: ₱{powerCosts.potentialCost}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className={`font-semibold ${parseFloat(powerCosts.savings) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      Potential Savings: ₱{powerCosts.savings}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
+                <h3 className="text-lg font-semibold mb-6 flex items-center">
+                  <CalculatorIcon className="w-5 h-5 mr-2 text-indigo-600" />
+                  Interactive Power Calculator
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Power (Watts)
+                    </label>
+                    <input
+                      type="number"
+                      value={calcPowerWatts}
+                      onChange={(e) => setCalcPowerWatts(e.target.value)}
+                      className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3"
+                      min="0"
+                      step="0.01"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Hours Used
+                    </label>
+                    <input
+                      type="number"
+                      value={calcHours}
+                      onChange={(e) => setCalcHours(e.target.value)}
+                      className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3"
+                      min="0"
+                      step="0.01"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <button
+                      onClick={handleCalculate}
+                      className="w-full md:w-auto px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                    >
+                      Calculate
+                    </button>
+                    {calcResult && (
+                      <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                        <p>Energy Consumption: {calcResult.kWh} kWh</p>
+                        <p>Cost (@ ₱{VECO_RATE_PER_KWH}/kWh): ₱{calcResult.cost}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
@@ -420,52 +495,28 @@ const EnergyUsagePage: React.FC = () => {
 
               {pzemData.length > 0 && (
                 <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
-                  <h3 className="text-lg font-semibold mb-6">PZEM Power Readings</h3>
+                  <h3 className="text-lg font-semibold mb-6">PZEM Power Readings (Prototype)</h3>
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Room Name
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Power (W)
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Voltage (V)
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Current (A)
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Energy (kWh)
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Timestamp
-                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room Name</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Power (W)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Voltage (V)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current (A)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Energy (kWh)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {pzemData.map((entry, index) => (
                           <tr key={index} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {entry.roomName}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {parseFloat(entry.pzemData.Power || '0').toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {parseFloat(entry.pzemData.Voltage || '0').toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {parseFloat(entry.pzemData.Current || '0').toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {parseFloat(entry.pzemData.Energy || '0').toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {new Date(entry.pzemData.timestamp || '').toLocaleString()}
-                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{entry.roomName}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{parseFloat(entry.pzemData.Power || '0').toFixed(2)}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{parseFloat(entry.pzemData.Voltage || '0').toFixed(2)}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{parseFloat(entry.pzemData.Current || '0').toFixed(2)}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{parseFloat(entry.pzemData.Energy || '0').toFixed(2)}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{new Date(entry.pzemData.timestamp || '').toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -476,7 +527,7 @@ const EnergyUsagePage: React.FC = () => {
 
               {energyData.length > 0 && (
                 <div className="bg-white p-6 rounded-xl shadow-sm">
-                  <h3 className="text-lg font-semibold mb-6">Device Energy Breakdown</h3>
+                  <h3 className="text-lg font-semibold mb-6">Device Energy Breakdown (Actual Room)</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <DeviceEnergy
                       label="Lighting"

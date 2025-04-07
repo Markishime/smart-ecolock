@@ -12,8 +12,6 @@ import EnergyUsagePage from '../Pages/EnergyUsagePage';
 import StudentDashboard from '../Pages/StudentDashboard';
 import Reports from '../Pages/Reports';
 import Users from '../Pages/Users';
-import TeachersPage from '../Pages/TeachersPage';
-import StudentsPage from '../Pages/StudentsPage';
 import SettingsPage from '../Pages/SettingsPage';
 import ClassesPage from '../Pages/ClassesPage';
 import InstructorSchedules from '../Pages/Schedules';
@@ -49,8 +47,6 @@ const App = () => {
           <Route path="/admin/insights" element={<PrivateRoute roles={['admin']}><Reports /></PrivateRoute>} />
           <Route path="/admin/security-logs" element={<PrivateRoute roles={['admin']}><SecurityLogsPage /></PrivateRoute>} />
           <Route path="/admin/settings" element={<PrivateRoute roles={['admin']}><SettingsPage /></PrivateRoute>} />
-          <Route path="/admin/teachers" element={<PrivateRoute roles={['admin']}><TeachersPage /></PrivateRoute>} />
-          <Route path="/admin/students" element={<PrivateRoute roles={['admin']}><StudentsPage /></PrivateRoute>} />
           <Route path="/admin/energyusage" element={<PrivateRoute roles={['admin']}><EnergyUsagePage /></PrivateRoute>} />
           <Route path="/admin/schedules" element={<PrivateRoute roles={['admin']}><AdminSchedules /></PrivateRoute>} />
           <Route path="/admin/sections" element={<PrivateRoute roles={['admin']}><AdminSections /></PrivateRoute>} />
