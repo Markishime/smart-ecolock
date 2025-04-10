@@ -9,10 +9,15 @@ import {
   query, 
   where,
   arrayUnion,
-  arrayRemove, // Added for removing items from arrays
+  arrayRemove,
   setDoc
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { 
+  ref, 
+  set, 
+  remove 
+} from 'firebase/database';
+import { db, rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
 import AdminSidebar from '../components/AdminSidebar';
 import Modal from '../components/Modal';
@@ -191,7 +196,7 @@ const AdminSubjects: React.FC = () => {
     setFormData({ ...formData, instructors: updatedInstructors });
   };
 
-  // Add or update subject and store full subject details in teachers collection
+  // Add or update subject, store in Firestore and Realtime Database
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -200,7 +205,7 @@ const AdminSubjects: React.FC = () => {
       let subjectDataWithId: Subject;
 
       if (formData.id) {
-        // Update existing subject
+        // Update existing subject in Firestore
         const subjectRef = doc(db, 'subjects', formData.id);
         const { id, ...subjectData } = formData;
         await updateDoc(subjectRef, subjectData);
@@ -212,7 +217,7 @@ const AdminSubjects: React.FC = () => {
           )
         );
       } else {
-        // Add new subject
+        // Add new subject to Firestore
         const { id, ...newSubjectData } = formData;
         const newSubjectRef = await addDoc(subjectsCollection, newSubjectData);
         subjectId = newSubjectRef.id;
@@ -223,7 +228,7 @@ const AdminSubjects: React.FC = () => {
         ]);
       }
 
-      // Update teachers collection with full subject details
+      // Update teachers collection in Firestore with full subject details including schedules
       const prevSubject = subjects.find(s => s.id === subjectId);
       const prevInstructors = prevSubject ? prevSubject.instructors : [];
       const newInstructors = formData.instructors;
@@ -235,29 +240,51 @@ const AdminSubjects: React.FC = () => {
         await updateDoc(teacherRef, {
           assignedSubjects: arrayRemove({ ...prevSubject }) // Remove old subject data
         });
+
+        // Remove from Realtime Database
+        const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
+        await remove(rtdbRef);
       }
 
-      // Add or update subject details for assigned instructors
+      // Add or update subject details for assigned instructors in Firestore
       for (const instructorId of newInstructors) {
         const teacherRef = doc(db, 'teachers', instructorId);
-        // Fetch existing teacher data to preserve other fields
         const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('__name__', '==', instructorId)));
         if (!teacherDoc.empty) {
           const existingData = teacherDoc.docs[0].data();
           const existingAssignedSubjects = (existingData.assignedSubjects || []).filter(
             (sub: Subject) => sub.id !== subjectId
           );
+          // Include schedules in the Firestore update
           await updateDoc(teacherRef, {
             assignedSubjects: [...existingAssignedSubjects, subjectDataWithId]
           });
         } else {
-          // Create new teacher document if it doesn't exist
+          // Include schedules in the initial Firestore set
           await setDoc(teacherRef, {
             fullName: instructors.find(i => i.id === instructorId)?.fullName || 'Unknown',
             department: instructors.find(i => i.id === instructorId)?.department || '',
             assignedSubjects: [subjectDataWithId]
           });
         }
+
+        // Update Realtime Database without schedules
+        const instructor = instructors.find(i => i.id === instructorId);
+        const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
+        await set(rtdbRef, {
+          uid: subjectId,
+          name: subjectDataWithId.name,
+          department: subjectDataWithId.department,
+          details: subjectDataWithId.details || '',
+          code: subjectDataWithId.code || '',
+          credits: subjectDataWithId.credits || 0,
+          prerequisites: subjectDataWithId.prerequisites || [],
+          learningObjectives: subjectDataWithId.learningObjectives || [],
+          status: subjectDataWithId.status,
+          instructors: subjectDataWithId.instructors,
+          instructorFullName: instructor?.fullName || 'Unknown',
+          updatedAt: new Date().toISOString()
+        });
       }
 
       // Reset form and close modal
@@ -285,7 +312,7 @@ const AdminSubjects: React.FC = () => {
         timer: 3000
       });
     } catch (error) {
-      console.error('Error saving subject or updating teachers:', error);
+      console.error('Error saving subject or updating instructors:', error);
       Swal.fire({
         icon: 'error',
         title: 'Error',
@@ -294,7 +321,7 @@ const AdminSubjects: React.FC = () => {
     }
   };
 
-  // Delete subject and remove its details from teachers collection
+  // Delete subject and remove its details from both Firestore and Realtime Database
   const handleDelete = async (subjectId: string) => {
     const result = await Swal.fire({
       title: 'Are you sure?',
@@ -308,18 +335,23 @@ const AdminSubjects: React.FC = () => {
 
     if (result.isConfirmed) {
       try {
-        // Remove subject details from assigned instructors in teachers collection
+        // Remove subject details from assigned instructors
         const subjectToDelete = subjects.find(s => s.id === subjectId);
         if (subjectToDelete && subjectToDelete.instructors.length > 0) {
           for (const instructorId of subjectToDelete.instructors) {
+            // Remove from Firestore (includes schedules)
             const teacherRef = doc(db, 'teachers', instructorId);
             await updateDoc(teacherRef, {
               assignedSubjects: arrayRemove(subjectToDelete)
             });
+
+            // Remove from Realtime Database
+            const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
+            await remove(rtdbRef);
           }
         }
 
-        // Delete the subject from subjects collection
+        // Delete the subject from subjects collection in Firestore
         await deleteDoc(doc(db, 'subjects', subjectId));
         setSubjects(prev => prev.filter(subject => subject.id !== subjectId));
         Swal.fire({

@@ -128,7 +128,7 @@ const EnergyUsagePage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const adminPzemRef = ref(rtdb, 'AdminPZEM');
+    const adminPzemRef = ref(rtdb, 'Instructors');
     const unsubscribe = onValue(adminPzemRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
