@@ -10,17 +10,8 @@ import {
   where,
   arrayUnion,
   arrayRemove,
-<<<<<<< HEAD
-  setDoc
-=======
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
 } from 'firebase/firestore';
-import { 
-  ref, 
-  set, 
-  remove 
-} from 'firebase/database';
-import { db, rtdb } from '../firebase';
+import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import AdminSidebar from '../components/AdminSidebar';
 import Modal from '../components/Modal';
@@ -193,43 +184,7 @@ const AdminSubjects: React.FC = () => {
       : subjects.filter((subject) => subject.department === selectedDepartment);
   }, [subjects, selectedDepartment]);
 
-<<<<<<< HEAD
-  // Handle schedule addition
-  const addSchedule = () => {
-    setFormData({
-      ...formData,
-      schedules: [...formData.schedules, { day: '', startTime: '', endTime: '', room: '' }]
-    });
-  };
-
-  // Handle schedule change
-  const handleScheduleChange = (index: number, field: keyof Schedule, value: string) => {
-    const updatedSchedules = formData.schedules.map((schedule, i) =>
-      i === index ? { ...schedule, [field]: value } : schedule
-    );
-    setFormData({ ...formData, schedules: updatedSchedules });
-  };
-
-  // Remove schedule
-  const removeSchedule = (index: number) => {
-    setFormData({
-      ...formData,
-      schedules: formData.schedules.filter((_, i) => i !== index)
-    });
-  };
-
-  // Handle instructor assignment
-  const handleInstructorChange = (instructorId: string) => {
-    const updatedInstructors = formData.instructors.includes(instructorId)
-      ? formData.instructors.filter(id => id !== instructorId)
-      : [...formData.instructors, instructorId];
-    setFormData({ ...formData, instructors: updatedInstructors });
-  };
-
-  // Add or update subject, store in Firestore and Realtime Database
-=======
   // Add or update subject and sync with teachers' assignedSubjects
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -261,34 +216,13 @@ const AdminSubjects: React.FC = () => {
         ]);
       }
 
-<<<<<<< HEAD
-      // Update teachers collection in Firestore with full subject details including schedules
-      const prevSubject = subjects.find(s => s.id === subjectId);
-      const prevInstructors = prevSubject ? prevSubject.instructors : [];
-      const newInstructors = formData.instructors;
-=======
       // Update teachers' assignedSubjects based on sections
       const relatedSections = sections.filter((s) => s.subjectId === subjectId);
       const instructorIds = Array.from(new Set(relatedSections.map((s) => s.instructorId)));
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
 
       // For each instructor in the sections, update their assignedSubjects
       for (const instructorId of instructorIds) {
         const teacherRef = doc(db, 'teachers', instructorId);
-<<<<<<< HEAD
-        await updateDoc(teacherRef, {
-          assignedSubjects: arrayRemove({ ...prevSubject }) // Remove old subject data
-        });
-
-        // Remove from Realtime Database
-        const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
-        await remove(rtdbRef);
-      }
-
-      // Add or update subject details for assigned instructors in Firestore
-      for (const instructorId of newInstructors) {
-        const teacherRef = doc(db, 'teachers', instructorId);
-=======
         const assignedSections = relatedSections
           .filter((s) => s.instructorId === instructorId)
           .map((section) => ({
@@ -301,18 +235,13 @@ const AdminSubjects: React.FC = () => {
           }));
 
         // Fetch existing teacher data
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
         const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('__name__', '==', instructorId)));
         if (!teacherDoc.empty) {
           const existingData = teacherDoc.docs[0].data();
           const existingAssignedSubjects = (existingData.assignedSubjects || []).filter(
             (sub: Subject) => sub.id !== subjectId
           );
-<<<<<<< HEAD
-          // Include schedules in the Firestore update
-=======
 
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
           await updateDoc(teacherRef, {
             assignedSubjects: [
               ...existingAssignedSubjects,
@@ -323,13 +252,6 @@ const AdminSubjects: React.FC = () => {
             ],
           });
         } else {
-<<<<<<< HEAD
-          // Include schedules in the initial Firestore set
-          await setDoc(teacherRef, {
-            fullName: instructors.find(i => i.id === instructorId)?.fullName || 'Unknown',
-            department: instructors.find(i => i.id === instructorId)?.department || '',
-            assignedSubjects: [subjectDataWithId]
-=======
           // If teacher doesn't exist, create a minimal document (unlikely case)
           await updateDoc(teacherRef, {
             fullName: instructors.find((i) => i.id === instructorId)?.fullName || 'Unknown',
@@ -340,27 +262,8 @@ const AdminSubjects: React.FC = () => {
                 sections: assignedSections,
               },
             ],
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
           });
         }
-
-        // Update Realtime Database without schedules
-        const instructor = instructors.find(i => i.id === instructorId);
-        const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
-        await set(rtdbRef, {
-          uid: subjectId,
-          name: subjectDataWithId.name,
-          department: subjectDataWithId.department,
-          details: subjectDataWithId.details || '',
-          code: subjectDataWithId.code || '',
-          credits: subjectDataWithId.credits || 0,
-          prerequisites: subjectDataWithId.prerequisites || [],
-          learningObjectives: subjectDataWithId.learningObjectives || [],
-          status: subjectDataWithId.status,
-          instructors: subjectDataWithId.instructors,
-          instructorFullName: instructor?.fullName || 'Unknown',
-          updatedAt: new Date().toISOString()
-        });
       }
 
       // Reset form and close modal
@@ -386,7 +289,7 @@ const AdminSubjects: React.FC = () => {
         timer: 3000,
       });
     } catch (error) {
-      console.error('Error saving subject or updating instructors:', error);
+      console.error('Error saving subject or updating teachers:', error);
       Swal.fire({
         icon: 'error',
         title: 'Error',
@@ -395,11 +298,7 @@ const AdminSubjects: React.FC = () => {
     }
   };
 
-<<<<<<< HEAD
-  // Delete subject and remove its details from both Firestore and Realtime Database
-=======
   // Delete subject and remove it from teachers' assignedSubjects
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
   const handleDelete = async (subjectId: string) => {
     const result = await Swal.fire({
       title: 'Are you sure?',
@@ -413,14 +312,6 @@ const AdminSubjects: React.FC = () => {
 
     if (result.isConfirmed) {
       try {
-<<<<<<< HEAD
-        // Remove subject details from assigned instructors
-        const subjectToDelete = subjects.find(s => s.id === subjectId);
-        if (subjectToDelete && subjectToDelete.instructors.length > 0) {
-          for (const instructorId of subjectToDelete.instructors) {
-            // Remove from Firestore (includes schedules)
-            const teacherRef = doc(db, 'teachers', instructorId);
-=======
         const relatedSections = sections.filter((s) => s.subjectId === subjectId);
         const instructorIds = Array.from(new Set(relatedSections.map((s) => s.instructorId)));
 
@@ -433,21 +324,12 @@ const AdminSubjects: React.FC = () => {
             const updatedAssignedSubjects = (existingData.assignedSubjects || []).filter(
               (sub: Subject) => sub.id !== subjectId
             );
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
             await updateDoc(teacherRef, {
               assignedSubjects: updatedAssignedSubjects,
             });
-
-            // Remove from Realtime Database
-            const rtdbRef = ref(rtdb, `Instructors/${instructorId}/AssignedSubjects/${subjectId}`);
-            await remove(rtdbRef);
           }
         }
 
-<<<<<<< HEAD
-        // Delete the subject from subjects collection in Firestore
-=======
->>>>>>> 8a891e9b65519aa1127fcc5a4f38968e44f887d2
         await deleteDoc(doc(db, 'subjects', subjectId));
         setSubjects((prev) => prev.filter((subject) => subject.id !== subjectId));
         Swal.fire({

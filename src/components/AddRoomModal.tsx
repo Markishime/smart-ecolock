@@ -3,19 +3,13 @@ import { motion } from 'framer-motion';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { theme } from '../styles/theme';
 
-interface AddRoomModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (roomData: RoomData) => void;
-}
-
+// Align RoomData with RoomsPage's Room interface
 interface RoomData {
   name: string;
   building: string;
   floor: string;
   capacity: number;
   type: 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room';
-  // Added 'faculty_room' to the type options
   status: 'available' | 'occupied' | 'maintenance';
   facilities: {
     hasProjector: boolean;
@@ -25,9 +19,15 @@ interface RoomData {
   };
   energyStatus: {
     lights: boolean;
-    aircon: boolean;
-    computers: boolean;
+    fans: boolean;
+    tampering: boolean;
   };
+}
+
+interface AddRoomModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (roomData: Partial<RoomData>) => void; // Use Partial to match RoomsPage
 }
 
 const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }) => {
@@ -42,13 +42,13 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
       hasProjector: false,
       hasAC: false,
       hasComputers: false,
-      hasWifi: false
+      hasWifi: false,
     },
     energyStatus: {
       lights: false,
-      aircon: false,
-      computers: false
-    }
+      fans: false,
+      tampering: false,
+    },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -65,13 +65,13 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
         hasProjector: false,
         hasAC: false,
         hasComputers: false,
-        hasWifi: false
+        hasWifi: false,
       },
       energyStatus: {
         lights: false,
-        aircon: false,
-        computers: false
-      }
+        fans: false,
+        tampering: false,
+      },
     });
   };
 
@@ -99,9 +99,7 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Room Name/Number
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Room Name/Number</label>
             <input
               type="text"
               value={formData.name}
@@ -114,9 +112,7 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Building
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Building</label>
               <input
                 type="text"
                 value={formData.building}
@@ -127,9 +123,7 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Floor
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Floor</label>
               <input
                 type="text"
                 value={formData.floor}
@@ -143,12 +137,15 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Room Type
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Room Type</label>
               <select
                 value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value as 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room' })}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    type: e.target.value as RoomData['type'],
+                  })
+                }
                 className={theme.components.input}
                 required
               >
@@ -160,14 +157,14 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Capacity
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Capacity</label>
               <input
                 type="number"
                 min="1"
-                value={formData.capacity}
-                onChange={(e) => setFormData({ ...formData, capacity: parseInt(e.target.value) })}
+                value={formData.capacity || ''} // Handle empty input gracefully
+                onChange={(e) =>
+                  setFormData({ ...formData, capacity: parseInt(e.target.value) || 0 })
+                }
                 className={theme.components.input}
                 required
                 placeholder="e.g., 30"
@@ -176,12 +173,15 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Status
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
             <select
               value={formData.status}
-              onChange={(e) => setFormData({ ...formData, status: e.target.value as 'available' | 'occupied' | 'maintenance' })}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  status: e.target.value as RoomData['status'],
+                })
+              }
               className={theme.components.input}
               required
             >
@@ -192,21 +192,18 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Facilities
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Facilities</label>
             <div className="grid grid-cols-2 gap-4">
               <label className="flex items-center space-x-2">
                 <input
                   type="checkbox"
                   checked={formData.facilities.hasProjector}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    facilities: {
-                      ...formData.facilities,
-                      hasProjector: e.target.checked
-                    }
-                  })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      facilities: { ...formData.facilities, hasProjector: e.target.checked },
+                    })
+                  }
                   className="rounded text-indigo-600"
                 />
                 <span className="text-sm text-gray-700">Projector</span>
@@ -215,13 +212,12 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
                 <input
                   type="checkbox"
                   checked={formData.facilities.hasAC}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    facilities: {
-                      ...formData.facilities,
-                      hasAC: e.target.checked
-                    }
-                  })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      facilities: { ...formData.facilities, hasAC: e.target.checked },
+                    })
+                  }
                   className="rounded text-indigo-600"
                 />
                 <span className="text-sm text-gray-700">Air Conditioning</span>
@@ -230,13 +226,12 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
                 <input
                   type="checkbox"
                   checked={formData.facilities.hasComputers}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    facilities: {
-                      ...formData.facilities,
-                      hasComputers: e.target.checked
-                    }
-                  })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      facilities: { ...formData.facilities, hasComputers: e.target.checked },
+                    })
+                  }
                   className="rounded text-indigo-600"
                 />
                 <span className="text-sm text-gray-700">Computers</span>
@@ -245,13 +240,12 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
                 <input
                   type="checkbox"
                   checked={formData.facilities.hasWifi}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    facilities: {
-                      ...formData.facilities,
-                      hasWifi: e.target.checked
-                    }
-                  })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      facilities: { ...formData.facilities, hasWifi: e.target.checked },
+                    })
+                  }
                   className="rounded text-indigo-600"
                 />
                 <span className="text-sm text-gray-700">WiFi</span>
@@ -260,17 +254,10 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
           </div>
 
           <div className="flex justify-end space-x-4 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className={theme.components.button.secondary}
-            >
+            <button type="button" onClick={onClose} className={theme.components.button.secondary}>
               Cancel
             </button>
-            <button
-              type="submit"
-              className={theme.components.button.primary}
-            >
+            <button type="submit" className={theme.components.button.primary}>
               Add Room
             </button>
           </div>
@@ -280,4 +267,4 @@ const AddRoomModal: React.FC<AddRoomModalProps> = ({ isOpen, onClose, onSubmit }
   );
 };
 
-export default AddRoomModal; 
+export default AddRoomModal;
