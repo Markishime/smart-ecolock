@@ -55,6 +55,18 @@ interface Section {
   instructorId: string;
 }
 
+interface Subject {
+  id: string;
+  code: string;
+  name: string;
+  credits: number;
+  department: string;
+  details: string;
+  learningObjectives: string[];
+  prerequisites: string[];
+  sections: Section[];
+}
+
 interface AttendanceStats {
   totalStudents: number;
   present: number;
@@ -78,10 +90,13 @@ const TakeAttendance: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const [sections, setSections] = useState<Section[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedSection, setSelectedSection] = useState<Section | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [sectionsLoading, setSectionsLoading] = useState(true);
+  const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [classStartTime, setClassStartTime] = useState<Date | null>(null);
   const [confirmationStudent, setConfirmationStudent] = useState<Student | null>(null);
@@ -107,6 +122,42 @@ const TakeAttendance: React.FC = () => {
       navigate('/login');
     }
   }, [currentUser, navigate]);
+
+  // Fetch subjects from Firestore 'subjects' collection
+  useEffect(() => {
+    const fetchSubjects = async () => {
+      if (!currentUser) return;
+
+      try {
+        setSubjectsLoading(true);
+        const subjectsRef = collection(db, 'subjects');
+        const subjectsSnapshot = await getDocs(subjectsRef);
+        const fetchedSubjects = subjectsSnapshot.docs.map((doc) => ({
+          id: doc.id,
+          code: doc.data().code || '',
+          name: doc.data().name || '',
+          credits: doc.data().credits || 0,
+          department: doc.data().department || '',
+          details: doc.data().details || '',
+          learningObjectives: doc.data().learningObjectives || [],
+          prerequisites: doc.data().prerequisites || [],
+          sections: doc.data().sections || [],
+        })) as Subject[];
+
+        setSubjects(fetchedSubjects);
+        if (fetchedSubjects.length > 0) {
+          setSelectedSubject(fetchedSubjects[0]); // Default to first subject
+        }
+      } catch (error) {
+        console.error('Error fetching subjects from Firestore:', error);
+        toast.error('Failed to load subjects');
+      } finally {
+        setSubjectsLoading(false);
+      }
+    };
+
+    fetchSubjects();
+  }, [currentUser]);
 
   // Fetch instructor's sections from Firestore using instructorId
   useEffect(() => {
@@ -136,12 +187,7 @@ const TakeAttendance: React.FC = () => {
         })) as Section[];
         setSections(fetchedSections);
         if (fetchedSections.length > 0) {
-          const sectionFromImage = fetchedSections.find(
-            (section) => section.id === 'GfcHRfxVYBVNDsSTG67h'
-          );
-          setSelectedSection(sectionFromImage || fetchedSections[0]);
-        } else {
-          setSelectedSection(null);
+          setSelectedSection(fetchedSections[0]); // Default to first section
         }
       } catch (error) {
         console.error('Error fetching sections from Firestore:', error);
@@ -155,7 +201,7 @@ const TakeAttendance: React.FC = () => {
     fetchSections();
   }, [currentUser]);
 
-  // Fetch students for the selected section from RTDB with all details
+  // Fetch students for the selected section from RTDB
   useEffect(() => {
     if (!selectedSection) {
       setStudents([]);
@@ -188,7 +234,7 @@ const TakeAttendance: React.FC = () => {
               email: studentData.email || '',
               mobileNumber: studentData.mobileNumber || '',
               department: studentData.department || '',
-              section: studentData.section || '',
+              section: studentData.section || 'Unknown',
               sectionId: studentData.sectionId || '',
               classStatus: studentData.classStatus || '',
               timestamp: studentData.timestamp || '',
@@ -309,8 +355,8 @@ const TakeAttendance: React.FC = () => {
   };
 
   const submitAttendance = async () => {
-    if (!selectedSection || !currentSchedule) {
-      toast.error('Please select a section and ensure schedule is loaded');
+    if (!selectedSection || !selectedSubject || !currentSchedule) {
+      toast.error('Please select a section, subject, and ensure schedule is loaded');
       return;
     }
 
@@ -327,6 +373,7 @@ const TakeAttendance: React.FC = () => {
       const q = query(
         attendanceRef,
         where('sectionId', '==', selectedSection.id),
+        where('subjectId', '==', selectedSubject.id),
         where('date', '==', today),
         where('submittedBy.id', '==', currentUser.uid)
       );
@@ -335,7 +382,7 @@ const TakeAttendance: React.FC = () => {
       if (!existingRecordsSnapshot.empty) {
         const confirm = await Swal.fire({
           title: 'Attendance Already Submitted',
-          text: 'Attendance for this section and date has already been submitted. Do you want to overwrite it?',
+          text: 'Attendance for this section, subject, and date has already been submitted. Do you want to overwrite it?',
           icon: 'warning',
           showCancelButton: true,
           confirmButtonText: 'Yes, overwrite',
@@ -347,9 +394,7 @@ const TakeAttendance: React.FC = () => {
           return;
         }
 
-        const deletePromises = existingRecordsSnapshot.docs.map((doc) =>
-          deleteDoc(doc.ref)
-        );
+        const deletePromises = existingRecordsSnapshot.docs.map((doc) => deleteDoc(doc.ref));
         await Promise.all(deletePromises);
       }
 
@@ -359,7 +404,8 @@ const TakeAttendance: React.FC = () => {
         studentEmail: student.email,
         sectionId: selectedSection.id,
         sectionName: selectedSection.name,
-        subject: selectedSection.subjectId,
+        subjectId: selectedSubject.id,
+        subjectName: selectedSubject.name,
         room: currentSchedule.room,
         status: student.attendanceStatus || 'absent',
         confirmed: student.confirmed,
@@ -454,7 +500,7 @@ const TakeAttendance: React.FC = () => {
 
   const exportAttendance = () => {
     const csvContent = [
-      ['Name', 'Email', 'UID', 'Status', 'Time', 'Weight', 'Weight Verified', 'Department', 'Section', 'Mobile'],
+      ['Name', 'Email', 'UID', 'Status', 'Time', 'Weight', 'Weight Verified', 'Department', 'Section', 'Mobile', 'Subject'],
       ...students.map((student) => [
         student.studentName,
         student.email,
@@ -466,6 +512,7 @@ const TakeAttendance: React.FC = () => {
         student.department,
         student.section,
         student.mobileNumber,
+        selectedSubject?.name || 'N/A',
       ]),
     ]
       .map((row) => row.join(','))
@@ -475,7 +522,7 @@ const TakeAttendance: React.FC = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance_${selectedSection?.name || 'unnamed'}_${new Date().toLocaleDateString()}.csv`;
+    a.download = `attendance_${selectedSection?.name || 'unnamed'}_${selectedSubject?.name || 'unnamed'}_${new Date().toLocaleDateString()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -600,7 +647,40 @@ const TakeAttendance: React.FC = () => {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 space-y-4 md:space-y-0">
             <div className="flex items-center space-x-4">
               <h1 className="text-2xl font-bold text-gray-800">Take Attendance</h1>
-              {sectionsLoading ? (
+              {/* Subject Dropdown */}
+              {subjectsLoading ? (
+                <div className="flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-indigo-600"></div>
+                  <span className="text-gray-600">Loading subjects...</span>
+                </div>
+              ) : (
+                <select
+                  value={selectedSubject?.id || ''}
+                  onChange={(e) => {
+                    const subject = subjects.find((s) => s.id === e.target.value) || null;
+                    setSelectedSubject(subject);
+                    if (subject && subject.sections.length > 0) {
+                      setSelectedSection(subject.sections[0]); // Default to first section of selected subject
+                    }
+                  }}
+                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
+                >
+                  <option value="" disabled>
+                    Select Subject
+                  </option>
+                  {subjects.length > 0 ? (
+                    subjects.map((subject) => (
+                      <option key={subject.id} value={subject.id}>
+                        {subject.name} ({subject.code})
+                      </option>
+                    ))
+                  ) : (
+                    <option disabled>No subjects available</option>
+                  )}
+                </select>
+              )}
+              {/* Section Dropdown */}
+              {sectionsLoading || !selectedSubject ? (
                 <div className="flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-indigo-600"></div>
                   <span className="text-gray-600">Loading sections...</span>
@@ -609,7 +689,7 @@ const TakeAttendance: React.FC = () => {
                 <select
                   value={selectedSection?.id || ''}
                   onChange={(e) => {
-                    const section = sections.find((s) => s.id === e.target.value) || null;
+                    const section = selectedSubject?.sections.find((s) => s.id === e.target.value) || sections.find((s) => s.id === e.target.value) || null;
                     setSelectedSection(section);
                   }}
                   className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
@@ -617,7 +697,13 @@ const TakeAttendance: React.FC = () => {
                   <option value="" disabled>
                     Select Section
                   </option>
-                  {sections.length > 0 ? (
+                  {selectedSubject?.sections.length > 0 ? (
+                    selectedSubject.sections.map((section) => (
+                      <option key={section.id} value={section.id}>
+                        {section.name} ({section.code})
+                      </option>
+                    ))
+                  ) : sections.length > 0 ? (
                     sections.map((section) => (
                       <option key={section.id} value={section.id}>
                         {section.name} ({section.code})
@@ -642,13 +728,13 @@ const TakeAttendance: React.FC = () => {
             </div>
           </div>
 
-          {currentSchedule && selectedSection && (
+          {currentSchedule && selectedSection && selectedSubject && (
             <div className="mb-6 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 text-white shadow-lg">
               <div className="flex justify-between items-start">
                 <div>
-                  <h3 className="text-lg font-semibold">{currentSchedule.subject}</h3>
+                  <h3 className="text-lg font-semibold">{selectedSubject.name}</h3>
                   <div className="mt-1 text-blue-100">
-                    <p>Room {currentSchedule.room} • Section {currentSchedule.section}</p>
+                    <p>Room {currentSchedule.room} • Section {selectedSection.name}</p>
                     <p>
                       {currentSchedule.startTime} - {currentSchedule.endTime} • {currentSchedule.day}
                     </p>
@@ -783,6 +869,21 @@ const TakeAttendance: React.FC = () => {
                         <span className="font-medium text-gray-700">Status:</span> {getStatusDisplay(student)}
                       </p>
                       <p className="text-sm">
+                        <span className="font-medium text-gray-700">Email:</span> {student.email || 'N/A'}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Mobile:</span> {student.mobileNumber || 'N/A'}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Department:</span> {student.department || 'N/A'}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Section:</span> {student.section || 'Unknown'}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium text-gray-700">Subject:</span> {selectedSubject?.name || 'N/A'}
+                      </p>
+                      <p className="text-sm">
                         <span className="font-medium text-gray-700">Weight:</span>{' '}
                         {student.weight ? `${student.weight.toFixed(1)} kg` : 'N/A'}
                       </p>
@@ -793,15 +894,6 @@ const TakeAttendance: React.FC = () => {
                         ) : (
                           <span className="text-red-600">No</span>
                         )}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Department:</span> {student.department}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Section:</span> {student.section}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Mobile:</span> {student.mobileNumber}
                       </p>
                       {student.assignedSensorId && (
                         <p className="text-sm">
@@ -816,7 +908,7 @@ const TakeAttendance: React.FC = () => {
               <p className="text-gray-600 text-center py-4">No students found for this section.</p>
             )
           ) : (
-            <p className="text-gray-600 text-center py-4">Please select a section to view students.</p>
+            <p className="text-gray-600 text-center py-4">Please select a subject and section to view students.</p>
           )}
 
           <div className="mt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -837,7 +929,7 @@ const TakeAttendance: React.FC = () => {
               <button
                 onClick={submitAttendance}
                 className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition flex items-center gap-2"
-                disabled={!selectedSection || students.length === 0}
+                disabled={!selectedSection || !selectedSubject || students.length === 0}
               >
                 <CheckCircleIcon className="w-5 h-5" />
                 Submit Attendance

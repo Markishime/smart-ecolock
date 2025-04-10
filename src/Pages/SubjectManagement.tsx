@@ -5,12 +5,11 @@ import {
   addDoc, 
   deleteDoc, 
   doc, 
-  updateDoc, 
-  query, 
+  updateDoc,
+  query,
   where,
   arrayUnion,
-  arrayRemove, // Added for removing items from arrays
-  setDoc
+  arrayRemove,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
@@ -24,10 +23,10 @@ import {
   PencilIcon, 
   FunnelIcon,
   CalendarIcon,
-  UserIcon
+  UserIcon,
 } from '@heroicons/react/24/solid';
 
-// Define Room interface
+// Define Room interface (still used elsewhere, but not for schedules)
 interface Room {
   id: string;
   name: string;
@@ -40,7 +39,7 @@ interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  room: string;
+  roomName: string; // Changed from roomId to roomName
 }
 
 // Define Instructor interface
@@ -50,7 +49,21 @@ interface Instructor {
   department: string;
 }
 
-// Define Subject interface
+// Define Section interface (aligned with AdminSectionPage)
+interface Section {
+  id: string;
+  name: string;
+  code: string;
+  capacity: number;
+  currentEnrollment: number;
+  subjectId: string;
+  instructorRfidUid: string;
+  instructorId: string;
+  schedules: Schedule[];
+  students: string[];
+}
+
+// Define Subject interface (simplified for editing)
 interface Subject {
   id?: string;
   name: string;
@@ -61,8 +74,6 @@ interface Subject {
   prerequisites?: string[];
   learningObjectives?: string[];
   status: 'active' | 'inactive';
-  schedules: Schedule[];
-  instructors: string[];
 }
 
 // Department color mapping
@@ -72,7 +83,7 @@ const DEPARTMENT_COLORS: { [key: string]: string } = {
   'Physics': 'bg-purple-100 text-purple-800',
   'Biology': 'bg-teal-100 text-teal-800',
   'Chemistry': 'bg-red-100 text-red-800',
-  'default': 'bg-gray-100 text-gray-800'
+  'default': 'bg-gray-100 text-gray-800',
 };
 
 const AdminSubjects: React.FC = () => {
@@ -80,7 +91,8 @@ const AdminSubjects: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [instructors, setInstructors] = useState<Instructor[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]); // Kept for potential other uses
+  const [sections, setSections] = useState<Section[]>([]);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -93,58 +105,71 @@ const AdminSubjects: React.FC = () => {
     prerequisites: [],
     learningObjectives: [],
     status: 'active',
-    schedules: [],
-    instructors: []
   });
 
-  // Fetch subjects, departments, instructors, and rooms
+  // Fetch subjects, departments, instructors, rooms, and sections
   useEffect(() => {
     const fetchData = async () => {
       try {
         // Fetch subjects
         const subjectsCollection = collection(db, 'subjects');
         const subjectsSnapshot = await getDocs(subjectsCollection);
-        const subjectsData = subjectsSnapshot.docs.map(doc => ({
+        const subjectsData = subjectsSnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
-          schedules: doc.data().schedules || [],
-          instructors: doc.data().instructors || []
-        } as Subject));
-        
+        })) as Subject[];
+
         // Fetch departments and instructors from teachers
         const teachersCollection = collection(db, 'teachers');
         const teachersSnapshot = await getDocs(teachersCollection);
         
         const uniqueDepartments = Array.from(
-          new Set(teachersSnapshot.docs.map(doc => doc.data().department).filter(Boolean))
+          new Set(teachersSnapshot.docs.map((doc) => doc.data().department).filter(Boolean))
         );
 
-        const instructorsData = teachersSnapshot.docs.map(doc => ({
+        const instructorsData = teachersSnapshot.docs.map((doc) => ({
           id: doc.id,
           fullName: doc.data().fullName || '',
-          department: doc.data().department || ''
-        } as Instructor));
+          department: doc.data().department || '',
+        })) as Instructor[];
 
-        // Fetch rooms
+        // Fetch rooms (optional now for schedules, kept for consistency)
         const roomsCollection = collection(db, 'rooms');
         const roomsSnapshot = await getDocs(roomsCollection);
-        const roomsData = roomsSnapshot.docs.map(doc => ({
+        const roomsData = roomsSnapshot.docs.map((doc) => ({
           id: doc.id,
           name: doc.data().name || '',
           capacity: doc.data().capacity,
-          location: doc.data().location
-        } as Room));
+          location: doc.data().location,
+        })) as Room[];
+
+        // Fetch sections
+        const sectionsCollection = collection(db, 'sections');
+        const sectionsSnapshot = await getDocs(sectionsCollection);
+        const sectionsData = sectionsSnapshot.docs.map((doc) => ({
+          id: doc.id,
+          name: doc.data().name || '',
+          code: doc.data().code || '',
+          capacity: doc.data().capacity || 0,
+          currentEnrollment: doc.data().students?.length || 0,
+          subjectId: doc.data().subjectId || '',
+          instructorRfidUid: doc.data().instructorRfidUid || '',
+          instructorId: doc.data().instructorId || '',
+          schedules: doc.data().schedules || [],
+          students: doc.data().students || [],
+        })) as Section[];
 
         setSubjects(subjectsData);
         setDepartments(uniqueDepartments);
         setInstructors(instructorsData);
         setRooms(roomsData);
+        setSections(sectionsData);
       } catch (error) {
         console.error('Error fetching data:', error);
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to fetch data. Please try again.'
+          text: 'Failed to fetch data. Please try again.',
         });
       }
     };
@@ -156,42 +181,10 @@ const AdminSubjects: React.FC = () => {
   const filteredSubjects = useMemo(() => {
     return selectedDepartment === 'all'
       ? subjects
-      : subjects.filter(subject => subject.department === selectedDepartment);
+      : subjects.filter((subject) => subject.department === selectedDepartment);
   }, [subjects, selectedDepartment]);
 
-  // Handle schedule addition
-  const addSchedule = () => {
-    setFormData({
-      ...formData,
-      schedules: [...formData.schedules, { day: '', startTime: '', endTime: '', room: '' }]
-    });
-  };
-
-  // Handle schedule change
-  const handleScheduleChange = (index: number, field: keyof Schedule, value: string) => {
-    const updatedSchedules = formData.schedules.map((schedule, i) =>
-      i === index ? { ...schedule, [field]: value } : schedule
-    );
-    setFormData({ ...formData, schedules: updatedSchedules });
-  };
-
-  // Remove schedule
-  const removeSchedule = (index: number) => {
-    setFormData({
-      ...formData,
-      schedules: formData.schedules.filter((_, i) => i !== index)
-    });
-  };
-
-  // Handle instructor assignment
-  const handleInstructorChange = (instructorId: string) => {
-    const updatedInstructors = formData.instructors.includes(instructorId)
-      ? formData.instructors.filter(id => id !== instructorId)
-      : [...formData.instructors, instructorId];
-    setFormData({ ...formData, instructors: updatedInstructors });
-  };
-
-  // Add or update subject and store full subject details in teachers collection
+  // Add or update subject and sync with teachers' assignedSubjects
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -200,62 +193,75 @@ const AdminSubjects: React.FC = () => {
       let subjectDataWithId: Subject;
 
       if (formData.id) {
-        // Update existing subject
+        // Update existing subject in Firestore
         const subjectRef = doc(db, 'subjects', formData.id);
         const { id, ...subjectData } = formData;
         await updateDoc(subjectRef, subjectData);
         subjectId = formData.id;
         subjectDataWithId = { ...formData };
-        setSubjects(prev => 
-          prev.map(subject => 
+        setSubjects((prev) =>
+          prev.map((subject) =>
             subject.id === formData.id ? { ...formData } : subject
           )
         );
       } else {
-        // Add new subject
+        // Add new subject to Firestore
         const { id, ...newSubjectData } = formData;
         const newSubjectRef = await addDoc(subjectsCollection, newSubjectData);
         subjectId = newSubjectRef.id;
         subjectDataWithId = { ...formData, id: subjectId };
-        setSubjects(prev => [
-          ...prev, 
-          subjectDataWithId
+        setSubjects((prev) => [
+          ...prev,
+          subjectDataWithId,
         ]);
       }
 
-      // Update teachers collection with full subject details
-      const prevSubject = subjects.find(s => s.id === subjectId);
-      const prevInstructors = prevSubject ? prevSubject.instructors : [];
-      const newInstructors = formData.instructors;
+      // Update teachers' assignedSubjects based on sections
+      const relatedSections = sections.filter((s) => s.subjectId === subjectId);
+      const instructorIds = Array.from(new Set(relatedSections.map((s) => s.instructorId)));
 
-      // Remove subject from instructors who were unassigned
-      const unassignedInstructors = prevInstructors.filter(id => !newInstructors.includes(id));
-      for (const instructorId of unassignedInstructors) {
+      // For each instructor in the sections, update their assignedSubjects
+      for (const instructorId of instructorIds) {
         const teacherRef = doc(db, 'teachers', instructorId);
-        await updateDoc(teacherRef, {
-          assignedSubjects: arrayRemove({ ...prevSubject }) // Remove old subject data
-        });
-      }
+        const assignedSections = relatedSections
+          .filter((s) => s.instructorId === instructorId)
+          .map((section) => ({
+            id: section.id,
+            name: section.name,
+            code: section.code,
+            capacity: section.capacity,
+            currentEnrollment: section.currentEnrollment,
+            schedules: section.schedules,
+          }));
 
-      // Add or update subject details for assigned instructors
-      for (const instructorId of newInstructors) {
-        const teacherRef = doc(db, 'teachers', instructorId);
-        // Fetch existing teacher data to preserve other fields
+        // Fetch existing teacher data
         const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('__name__', '==', instructorId)));
         if (!teacherDoc.empty) {
           const existingData = teacherDoc.docs[0].data();
           const existingAssignedSubjects = (existingData.assignedSubjects || []).filter(
             (sub: Subject) => sub.id !== subjectId
           );
+
           await updateDoc(teacherRef, {
-            assignedSubjects: [...existingAssignedSubjects, subjectDataWithId]
+            assignedSubjects: [
+              ...existingAssignedSubjects,
+              {
+                ...subjectDataWithId,
+                sections: assignedSections,
+              },
+            ],
           });
         } else {
-          // Create new teacher document if it doesn't exist
-          await setDoc(teacherRef, {
-            fullName: instructors.find(i => i.id === instructorId)?.fullName || 'Unknown',
-            department: instructors.find(i => i.id === instructorId)?.department || '',
-            assignedSubjects: [subjectDataWithId]
+          // If teacher doesn't exist, create a minimal document (unlikely case)
+          await updateDoc(teacherRef, {
+            fullName: instructors.find((i) => i.id === instructorId)?.fullName || 'Unknown',
+            department: instructors.find((i) => i.id === instructorId)?.department || '',
+            assignedSubjects: [
+              {
+                ...subjectDataWithId,
+                sections: assignedSections,
+              },
+            ],
           });
         }
       }
@@ -270,8 +276,6 @@ const AdminSubjects: React.FC = () => {
         prerequisites: [],
         learningObjectives: [],
         status: 'active',
-        schedules: [],
-        instructors: []
       });
       setIsModalOpen(false);
 
@@ -282,19 +286,19 @@ const AdminSubjects: React.FC = () => {
         toast: true,
         position: 'top-end',
         showConfirmButton: false,
-        timer: 3000
+        timer: 3000,
       });
     } catch (error) {
       console.error('Error saving subject or updating teachers:', error);
       Swal.fire({
         icon: 'error',
         title: 'Error',
-        text: 'Failed to save subject or update instructors. Please try again.'
+        text: 'Failed to save subject or update teachers. Please try again.',
       });
     }
   };
 
-  // Delete subject and remove its details from teachers collection
+  // Delete subject and remove it from teachers' assignedSubjects
   const handleDelete = async (subjectId: string) => {
     const result = await Swal.fire({
       title: 'Are you sure?',
@@ -303,25 +307,31 @@ const AdminSubjects: React.FC = () => {
       showCancelButton: true,
       confirmButtonColor: '#d33',
       cancelButtonColor: '#3085d6',
-      confirmButtonText: 'Yes, delete it!'
+      confirmButtonText: 'Yes, delete it!',
     });
 
     if (result.isConfirmed) {
       try {
-        // Remove subject details from assigned instructors in teachers collection
-        const subjectToDelete = subjects.find(s => s.id === subjectId);
-        if (subjectToDelete && subjectToDelete.instructors.length > 0) {
-          for (const instructorId of subjectToDelete.instructors) {
-            const teacherRef = doc(db, 'teachers', instructorId);
+        const relatedSections = sections.filter((s) => s.subjectId === subjectId);
+        const instructorIds = Array.from(new Set(relatedSections.map((s) => s.instructorId)));
+
+        // Remove subject from each instructor's assignedSubjects
+        for (const instructorId of instructorIds) {
+          const teacherRef = doc(db, 'teachers', instructorId);
+          const teacherDoc = await getDocs(query(collection(db, 'teachers'), where('__name__', '==', instructorId)));
+          if (!teacherDoc.empty) {
+            const existingData = teacherDoc.docs[0].data();
+            const updatedAssignedSubjects = (existingData.assignedSubjects || []).filter(
+              (sub: Subject) => sub.id !== subjectId
+            );
             await updateDoc(teacherRef, {
-              assignedSubjects: arrayRemove(subjectToDelete)
+              assignedSubjects: updatedAssignedSubjects,
             });
           }
         }
 
-        // Delete the subject from subjects collection
         await deleteDoc(doc(db, 'subjects', subjectId));
-        setSubjects(prev => prev.filter(subject => subject.id !== subjectId));
+        setSubjects((prev) => prev.filter((subject) => subject.id !== subjectId));
         Swal.fire({
           icon: 'success',
           title: 'Deleted!',
@@ -329,20 +339,19 @@ const AdminSubjects: React.FC = () => {
           toast: true,
           position: 'top-end',
           showConfirmButton: false,
-          timer: 3000
+          timer: 3000,
         });
       } catch (error) {
         console.error('Error deleting subject:', error);
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to delete subject. Please try again.'
+          text: 'Failed to delete subject. Please try again.',
         });
       }
     }
   };
 
-  // Prevent unauthorized access
   if (!currentUser || currentUser.role !== 'admin') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -364,7 +373,7 @@ const AdminSubjects: React.FC = () => {
             <div className="flex justify-between items-center mb-8">
               <div>
                 <h1 className="text-3xl font-bold text-gray-900">Subject Management</h1>
-                <p className="text-gray-600 mt-2">Manage subjects, schedules, and instructors</p>
+                <p className="text-gray-600 mt-2">Manage subjects and view related sections</p>
               </div>
               <motion.button
                 whileHover={{ scale: 1.05 }}
@@ -379,8 +388,6 @@ const AdminSubjects: React.FC = () => {
                     prerequisites: [],
                     learningObjectives: [],
                     status: 'active',
-                    schedules: [],
-                    instructors: []
                   });
                   setIsModalOpen(true);
                 }}
@@ -409,7 +416,7 @@ const AdminSubjects: React.FC = () => {
                   onChange={(e) => setSelectedDepartment(e.target.value)}
                 >
                   <option value="all">All Departments</option>
-                  {departments.map(dept => (
+                  {departments.map((dept) => (
                     <option key={dept} value={dept}>{dept}</option>
                   ))}
                 </select>
@@ -423,96 +430,126 @@ const AdminSubjects: React.FC = () => {
               transition={{ duration: 0.3 }}
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
             >
-              {filteredSubjects.map(subject => (
-                <motion.div
-                  key={subject.id}
-                  whileHover={{ scale: 1.05 }}
-                  className={`
-                    bg-white rounded-xl shadow-lg p-6 
-                    border-l-4 ${DEPARTMENT_COLORS[subject.department] || DEPARTMENT_COLORS['default']}
-                  `}
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-bold">{subject.name}</h3>
-                    <div className="flex space-x-2">
-                      <motion.button
-                        whileHover={{ scale: 1.1 }}
-                        onClick={() => {
-                          setFormData(subject);
-                          setIsModalOpen(true);
-                        }}
-                        className="text-indigo-600 hover:text-indigo-800"
-                      >
-                        <PencilIcon className="h-5 w-5" />
-                      </motion.button>
-                      <motion.button
-                        whileHover={{ scale: 1.1 }}
-                        onClick={() => handleDelete(subject.id!)}
-                        className="text-red-600 hover:text-red-800"
-                      >
-                        <TrashIcon className="h-5 w-5" />
-                      </motion.button>
+              {filteredSubjects.map((subject) => {
+                // Aggregate data from sections
+                const relatedSections = sections.filter((s) => s.subjectId === subject.id);
+                const schedules = relatedSections.flatMap((s) => s.schedules);
+                const instructorIds = Array.from(new Set(relatedSections.map((s) => s.instructorId)));
+                const sectionIds = relatedSections.map((s) => s.id);
+
+                return (
+                  <motion.div
+                    key={subject.id}
+                    whileHover={{ scale: 1.05 }}
+                    className={`
+                      bg-white rounded-xl shadow-lg p-6 
+                      border-l-4 ${DEPARTMENT_COLORS[subject.department] || DEPARTMENT_COLORS['default']}
+                    `}
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-xl font-bold">{subject.name}</h3>
+                      <div className="flex space-x-2">
+                        <motion.button
+                          whileHover={{ scale: 1.1 }}
+                          onClick={() => {
+                            setFormData(subject);
+                            setIsModalOpen(true);
+                          }}
+                          className="text-indigo-600 hover:text-indigo-800"
+                        >
+                          <PencilIcon className="h-5 w-5" />
+                        </motion.button>
+                        <motion.button
+                          whileHover={{ scale: 1.1 }}
+                          onClick={() => handleDelete(subject.id!)}
+                          className="text-red-600 hover:text-red-800"
+                        >
+                          <TrashIcon className="h-5 w-5" />
+                        </motion.button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-gray-600 mb-2">{subject.details || 'No details provided'}</p>
-                    {subject.code && (
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-medium text-gray-500">Code:</span>
-                        <span className="text-sm bg-gray-100 px-2 py-1 rounded">{subject.code}</span>
-                      </div>
-                    )}
-                    {subject.credits !== undefined && (
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-medium text-gray-500">Credits:</span>
-                        <span className="text-sm bg-gray-100 px-2 py-1 rounded">{subject.credits}</span>
-                      </div>
-                    )}
-                    {subject.schedules.length > 0 && (
-                      <div>
-                        <span className="text-sm font-medium text-gray-500">Schedules:</span>
-                        <ul className="list-disc list-inside text-sm text-gray-600 mt-1">
-                          {subject.schedules.map((schedule, index) => (
-                            <li key={index}>
-                              {schedule.day}: {schedule.startTime} - {schedule.endTime} ({schedule.room})
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {subject.instructors.length > 0 && (
-                      <div>
-                        <span className="text-sm font-medium text-gray-500">Instructors:</span>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {subject.instructors.map((instructorId, index) => {
-                            const instructor = instructors.find(i => i.id === instructorId);
-                            return (
-                              <span 
-                                key={index} 
-                                className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded"
-                              >
-                                {instructor?.fullName || 'Unknown'}
-                              </span>
-                            );
-                          })}
+                    <div className="space-y-2">
+                      <p className="text-gray-600 mb-2">{subject.details || 'No details provided'}</p>
+                      {subject.code && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-medium text-gray-500">Code:</span>
+                          <span className="text-sm bg-gray-100 px-2 py-1 rounded">{subject.code}</span>
                         </div>
+                      )}
+                      {subject.credits !== undefined && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-medium text-gray-500">Credits:</span>
+                          <span className="text-sm bg-gray-100 px-2 py-1 rounded">{subject.credits}</span>
+                        </div>
+                      )}
+                      {schedules.length > 0 && (
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 flex items-center">
+                            <CalendarIcon className="h-4 w-4 mr-1" /> Schedules:
+                          </span>
+                          <ul className="list-disc list-inside text-sm text-gray-600 mt-1">
+                            {schedules.map((schedule, index) => (
+                              <li key={index}>
+                                {schedule.day}: {schedule.startTime} - {schedule.endTime} ({schedule.roomName})
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {instructorIds.length > 0 && (
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 flex items-center">
+                            <UserIcon className="h-4 w-4 mr-1" /> Instructors:
+                          </span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {instructorIds.map((instructorId, index) => {
+                              const instructor = instructors.find((i) => i.id === instructorId);
+                              return (
+                                <span 
+                                  key={index} 
+                                  className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded"
+                                >
+                                  {instructor?.fullName || 'Unknown'}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {sectionIds.length > 0 && (
+                        <div>
+                          <span className="text-sm font-medium text-gray-500">Sections:</span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {sectionIds.map((sectionId, index) => {
+                              const section = sections.find((s) => s.id === sectionId);
+                              return (
+                                <span 
+                                  key={index} 
+                                  className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded"
+                                >
+                                  {section?.name || 'Unknown'} ({section?.code || 'N/A'}) - {section?.currentEnrollment}/{section?.capacity}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center mt-2">
+                        <span className={`
+                          px-2 py-1 rounded-full text-xs font-medium
+                          ${subject.status === 'active' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-red-100 text-red-800'
+                          }
+                        `}>
+                          {subject.status}
+                        </span>
+                        <span className="text-sm text-gray-500">{subject.department}</span>
                       </div>
-                    )}
-                    <div className="flex justify-between items-center mt-2">
-                      <span className={`
-                        px-2 py-1 rounded-full text-xs font-medium
-                        ${subject.status === 'active' 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-red-100 text-red-800'
-                        }
-                      `}>
-                        {subject.status}
-                      </span>
-                      <span className="text-sm text-gray-500">{subject.department}</span>
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </motion.div>
 
             {/* Subject Modal */}
@@ -542,7 +579,7 @@ const AdminSubjects: React.FC = () => {
                       onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                     >
                       <option value="">Select Department</option>
-                      {departments.map(dept => (
+                      {departments.map((dept) => (
                         <option key={dept} value={dept}>{dept}</option>
                       ))}
                     </select>
@@ -589,83 +626,6 @@ const AdminSubjects: React.FC = () => {
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>
-                </div>
-
-                {/* Schedules */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium">Schedules</label>
-                    <button
-                      type="button"
-                      onClick={addSchedule}
-                      className="text-indigo-600 hover:text-indigo-800 flex items-center"
-                    >
-                      <PlusIcon className="h-5 w-5 mr-1" /> Add Schedule
-                    </button>
-                  </div>
-                  {formData.schedules.map((schedule, index) => (
-                    <div key={index} className="flex flex-col md:flex-row gap-2 mb-2 items-center">
-                      <select
-                        className="w-full md:w-1/4 p-2 border rounded-lg"
-                        value={schedule.day}
-                        onChange={(e) => handleScheduleChange(index, 'day', e.target.value)}
-                      >
-                        <option value="">Day</option>
-                        {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => (
-                          <option key={day} value={day}>{day}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="time"
-                        className="w-full md:w-1/4 p-2 border rounded-lg"
-                        value={schedule.startTime}
-                        onChange={(e) => handleScheduleChange(index, 'startTime', e.target.value)}
-                      />
-                      <input
-                        type="time"
-                        className="w-full md:w-1/4 p-2 border rounded-lg"
-                        value={schedule.endTime}
-                        onChange={(e) => handleScheduleChange(index, 'endTime', e.target.value)}
-                      />
-                      <select
-                        className="w-full md:w-1/4 p-2 border rounded-lg"
-                        value={schedule.room}
-                        onChange={(e) => handleScheduleChange(index, 'room', e.target.value)}
-                      >
-                        <option value="">Select Room</option>
-                        {rooms.map(room => (
-                          <option key={room.id} value={room.name}>
-                            {room.name} {room.capacity ? `(${room.capacity} seats)` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => removeSchedule(index)}
-                        className="text-red-600 hover:text-red-800"
-                      >
-                        <TrashIcon className="h-5 w-5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Instructors */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">Instructors</label>
-                  <div className="max-h-40 overflow-y-auto border rounded-lg p-2">
-                    {instructors.map(instructor => (
-                      <div key={instructor.id} className="flex items-center mb-2">
-                        <input
-                          type="checkbox"
-                          checked={formData.instructors.includes(instructor.id)}
-                          onChange={() => handleInstructorChange(instructor.id)}
-                          className="mr-2"
-                        />
-                        <label className="text-sm">{instructor.fullName} ({instructor.department})</label>
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
                 <div className="flex justify-end space-x-3 mt-6">

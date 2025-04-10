@@ -1,13 +1,13 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { collection, query, where, onSnapshot, doc, getDocs } from 'firebase/firestore';
-import { ref, onValue } from 'firebase/database';
+import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { ref, onValue, off } from 'firebase/database';
 import { auth, db, rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
-import { 
-  BookOpenIcon, 
-  CalendarIcon, 
-  MapPinIcon, 
+import {
+  BookOpenIcon,
+  CalendarIcon,
+  MapPinIcon,
   ClockIcon,
   ClipboardDocumentCheckIcon,
   UsersIcon,
@@ -16,16 +16,9 @@ import {
 import { motion } from 'framer-motion';
 import NavBar from '../components/NavBar';
 import Swal from 'sweetalert2';
-import { SparklesIcon, ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/solid';
+import { ChatBubbleLeftRightIcon, ClipboardDocumentCheckIcon as SolidClipboard, SparklesIcon, XMarkIcon } from '@heroicons/react/24/solid';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-
-// Define Interfaces
-interface Message {
-  id: string;
-  content: string;
-  sender: 'user' | 'ai';
-  timestamp: Date;
-}
+import { Message } from '../types';
 
 interface Schedule {
   id: string;
@@ -36,11 +29,25 @@ interface Schedule {
   status?: 'ongoing' | 'upcoming' | 'completed';
 }
 
+interface Section {
+  capacity: number;
+  code: string;
+  currentEnrollment: number;
+  id: string;
+  name: string;
+  schedules: { day: string; startTime: string; endTime: string; roomName?: string }[];
+}
+
 interface Subject {
   id: string;
   code: string;
   name: string;
-  schedules?: Schedule[];
+  credits: number;
+  department: string;
+  details: string;
+  learningObjectives: string[];
+  prerequisites: string[];
+  sections: Section[];
 }
 
 interface InstructorData {
@@ -51,14 +58,6 @@ interface InstructorData {
   schedules: Schedule[];
   subjects: Subject[];
   assignedStudents: string[];
-}
-
-interface AttendanceRecord {
-  id: string;
-  studentId: string;
-  status: 'present' | 'absent' | 'late';
-  timestamp: number;
-  section: string;
 }
 
 interface RoomStatus {
@@ -129,25 +128,31 @@ const InstructorDashboard = () => {
 
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
 
-    // Fetch Instructor Data including schedules from assignedSubjects
+    // Fetch Instructor Data from Firestore 'teachers' collection
     const teacherRef = doc(db, 'teachers', currentUser.uid);
-    const unsubscribeTeacher = onSnapshot(teacherRef, async (docSnap) => {
+    const unsubscribeTeacher = onSnapshot(teacherRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        const subjects = data.assignedSubjects || []; // Assuming 'assignedSubjects' field
+        const subjects: Subject[] = data.assignedSubjects || [];
         const allSchedules: Schedule[] = [];
 
-        // Fetch schedules from assigned subjects
-        for (const subject of subjects) {
-          const subjectSchedules = (subject.schedules || []).map((s: any) => ({
-            id: `${currentUser.uid}_${subject.name}_${s.day}`,
-            day: s.day,
-            subject: subject.name,
-            classes: [{ time: `${s.startTime} - ${s.endTime}`, subject: subject.name }],
-            room: s.room,
-          }));
-          allSchedules.push(...subjectSchedules);
-        }
+        // Extract schedules from sections within assignedSubjects
+        subjects.forEach((subject: Subject) => {
+          if (subject.sections && Array.isArray(subject.sections)) {
+            subject.sections.forEach((section) => {
+              if (section.schedules && Array.isArray(section.schedules)) {
+                const sectionSchedules = section.schedules.map((s, index) => ({
+                  id: `${currentUser.uid}_${subject.name}_${section.code}_${s.day}_${index}`,
+                  day: s.day,
+                  subject: subject.name,
+                  classes: [{ time: `${s.startTime} - ${s.endTime}`, subject: subject.name }],
+                  room: s.roomName,
+                }));
+                allSchedules.push(...sectionSchedules);
+              }
+            });
+          }
+        });
 
         setInstructorData({
           id: currentUser.uid,
@@ -160,26 +165,31 @@ const InstructorDashboard = () => {
         });
       } else {
         Swal.fire('Error', 'Instructor data not found', 'error');
+        setInstructorData(null);
       }
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching instructor data:', error);
+      Swal.fire('Error', 'Failed to load instructor data', 'error');
       setLoading(false);
     });
 
-    // Fetch Total Students under the current instructor
+    // Fetch Total Students
     const studentsQuery = query(collection(db, 'students'), where('teacherId', '==', currentUser.uid));
     const unsubscribeStudents = onSnapshot(studentsQuery, (snapshot) => {
       setTotalStudents(snapshot.size);
     });
 
-    // Fetch Attendance Rate based on section
+    // Fetch Attendance Rate
     const attendanceQuery = query(collection(db, 'attendance'), where('teacherId', '==', currentUser.uid));
     const unsubscribeAttendance = onSnapshot(attendanceQuery, (snapshot) => {
-      const records = snapshot.docs.map(doc => doc.data() as AttendanceRecord);
+      const records = snapshot.docs.map(doc => doc.data() as any);
       const totalRecords = records.length;
       const presentRecords = records.filter(r => r.status === 'present').length;
       setAttendanceRate(totalRecords > 0 ? (presentRecords / totalRecords) * 100 : 0);
     });
 
-    // Fetch Active Classes from teachers db
+    // Fetch Active Classes
     const fetchActiveClasses = () => {
       const now = new Date();
       const currentTimeStr = now.toLocaleTimeString('en-US', { hour12: false });
@@ -198,7 +208,7 @@ const InstructorDashboard = () => {
       setActiveClasses(active);
     };
 
-    // Fetch Room Usage from rooms db
+    // Fetch Room Usage from Realtime Database 'rooms'
     const roomsRef = ref(rtdb, 'rooms');
     const unsubscribeRooms = onValue(roomsRef, (snapshot) => {
       const data = snapshot.val();
@@ -213,7 +223,7 @@ const InstructorDashboard = () => {
     });
 
     fetchActiveClasses();
-    const interval = setInterval(fetchActiveClasses, 60000); // Update every minute
+    const interval = setInterval(fetchActiveClasses, 60000);
 
     return () => {
       clearInterval(timer);
@@ -221,12 +231,12 @@ const InstructorDashboard = () => {
       unsubscribeTeacher();
       unsubscribeStudents();
       unsubscribeAttendance();
-      unsubscribeRooms();
+      off(roomsRef);
     };
   }, [currentUser, navigate, instructorData?.schedules]);
 
   const todaySchedule = useMemo(() => {
-    const today = currentTime.toLocaleString('en-US', { weekday: 'short' });
+    const today = currentTime.toLocaleString('en-US', { weekday: 'short' }); // e.g., "Wed"
     return instructorData?.schedules
       .filter(s => s.day.toLowerCase().startsWith(today.toLowerCase()))
       .sort((a, b) => a.classes[0].time.localeCompare(b.classes[0].time)) || [];
@@ -456,7 +466,7 @@ const InstructorDashboard = () => {
               className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-gray-100/50"
             >
               <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center">
-                <ClipboardDocumentCheckIcon className="h-6 w-6 text-indigo-600 mr-2" />
+                <SolidClipboard className="h-6 w-6 text-indigo-600 mr-2" />
                 Quick Actions
               </h2>
               <Link
@@ -469,9 +479,8 @@ const InstructorDashboard = () => {
             </motion.section>
           </div>
         </div>
+        <GeminiChatbot />
       </main>
-
-      <GeminiChatbot />
     </div>
   );
 };
@@ -480,70 +489,162 @@ const GeminiChatbot: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const messagesEndRef = useRef<null | HTMLDivElement>(null);
   const { currentUser } = useAuth();
 
+  // Initialize Gemini with API key
   const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API || '');
 
   const fetchGeminiResponse = async (query: string): Promise<string> => {
     try {
-      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-      const prompt = `You are a helpful AI assistant for ${currentUser?.fullName || 'a user'} at Cebu Institute of Technology - University. Respond to: ${query}`;
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      // Add context about the user
+      const prompt = `You are a helpful AI assistant that can answer any questions accurately, including about Mark Lloyd Cuizon, Clarence Emmanuel Jamora, and Jean Ricka Rosalita - Creators of Smart EcoLock.
+
+They are 4th-year BS Computer Engineering students from Cebu Institute of Technology - University (CIT-U). Their project, Smart EcoLock, addresses energy management, attendance control, and security for CIT-U's rooms and offices.
+
+Smart EcoLock utilizes an ESP32 microcontroller for efficient sensor handling and low power consumption, leveraging its dual-core architecture and built-in Wi-Fi capabilities. With occupancy recognition, it detects room usage through a combination of PZEM for power monitoring and weight sensors, automatically turning off lights and electronics in unoccupied rooms to reduce energy waste. LDR (Light-Dependent Resistor) sensors measure ambient light levels, adjusting classroom lighting dynamically to optimize energy use based on natural daylight availability.
+
+Attendance tracking is achieved through a multi-layered approach. Access control data from RFID (Radio-Frequency Identification) tags ensures only authorized individuals enter, logging entry times into a unified database. Additionally, weight sensors embedded in chairs provide precise occupancy detection by measuring the presence of individuals (e.g., detecting weights above a threshold like 20 kg to confirm a person is seated). This data cross-references RFID logs to validate attendance, reducing errors from manual tracking or proxy entries. The system uploads real-time updates to a Firebase Realtime Database, enabling administrators to monitor occupancy and attendance seamlessly.
+
+Security is enhanced via RFID authentication, restricting access to authorized personnel and students, while weight sensors add an extra layer of verification by confirming physical presence. The system features a React.js website with a Firebase backend, offering an intuitive interface for monitoring room status, controlling devices, and generating attendance reports.
+
+This system boosts sustainability by minimizing energy consumption, improves management efficiency with automated tracking, and enhances security at CIT-U through integrated technology.
+
+Provide complete answers, ensuring clarity and professionalism. Always include full code implementations when relevant and internet sources for additional information, even if the question is unrelated to Smart EcoLock. Format responses to facilitate prompt chatbot replies. As an AI assistant helping ${currentUser?.fullName || 'a user'} who is an ${currentUser?.role || 'user'} at the institution, respond professionally and concisely to the following query: ${query}.`;
+
       const result = await model.generateContent(prompt);
-      return result.response.text();
+      const response = await result.response;
+      return response.text();
     } catch (error) {
       console.error('Error generating response:', error);
       return 'Sorry, I encountered an error. Please try again.';
     }
   };
 
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const generateId = () => Math.random().toString(36).substr(2, 9);
+
   const handleSendMessage = async () => {
     if (!input.trim()) return;
-    const userMessage: Message = { id: Date.now().toString(), content: input, sender: 'user', timestamp: new Date() };
+  
+    // Add user message to chat
+    const userMessage: Message = {
+      id: generateId(),
+      content: input,
+      sender: 'user',
+      timestamp: new Date()
+    };
+  
     setMessages(prev => [...prev, userMessage]);
     setInput('');
-    const aiResponse = await fetchGeminiResponse(input);
-    const aiMessage: Message = { id: (Date.now() + 1).toString(), content: aiResponse, sender: 'ai', timestamp: new Date() };
-    setMessages(prev => [...prev, aiMessage]);
+  
+    try {
+      // Fetch AI response
+      const aiResponse = await fetchGeminiResponse(input);
+  
+      // Construct AI response message
+      const aiMessage: Message = {
+        id: generateId(),
+        content: aiResponse,
+        sender: 'ai',
+        timestamp: new Date()
+      };
+  
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Gemini API Error:', error);
+  
+      // Provide a more informative error response
+      const errorMessage: Message = {
+        id: generateId(),
+        content: "🚨 **Error:** I encountered an issue while processing your request. Please check your input or try again later.",
+        sender: 'ai',
+        timestamp: new Date()
+      };
+  
+      setMessages(prev => [...prev, errorMessage]);
+    }
   };
+
+  const toggleChatbot = () => setIsOpen(!isOpen);
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
-      {isOpen && (
-        <div className="w-96 h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden transform transition-all duration-300 scale-100">
-          <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-4 flex justify-between items-center">
-            <div className="flex items-center space-x-2">
-              <SparklesIcon className="w-6 h-6" />
-              <h2 className="text-lg font-semibold">Smart EcoLock Assistant</h2>
-            </div>
-            <button onClick={() => setIsOpen(false)} className="hover:bg-indigo-700 rounded-full p-1 transition-colors">
-              <XMarkIcon className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="flex-grow overflow-y-auto p-4 space-y-3 bg-gray-50">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] px-4 py-2 rounded-2xl shadow-sm ${msg.sender === 'user' ? 'bg-indigo-100 text-indigo-800' : 'bg-white text-gray-800'}`}>
-                  {msg.content}
-                </div>
+      <div>
+        {isOpen && (
+          <div 
+            className="w-96 h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+          >
+            {/* Chatbot Header */}
+            <div className="bg-gradient-to-r from-indigo-600 to-indigo-600 text-white p-4 flex justify-between items-center">
+              <div className="flex items-center space-x-2">
+                <SparklesIcon className="w-6 h-6" />
+                <h2 className="text-lg font-semibold">Smart EcoLock Assistant</h2>
               </div>
-            ))}
+              <button 
+                onClick={toggleChatbot}
+                className="hover:bg-indigo-700 rounded-full p-1 transition-colors"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Messages Container */}
+            <div className="flex-grow overflow-y-auto p-4 space-y-3">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div 
+                    className={`max-w-[80%] px-4 py-2 rounded-2xl ${
+                      msg.sender === 'user' 
+                        ? 'bg-indigo-100 text-indigo-800' 
+                        : 'bg-gray-100 text-gray-800'
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input Area */}
+            <div className="p-4 border-t border-gray-200 flex space-x-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                placeholder="Ask me anything..."
+                className="flex-grow px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              />
+              <button 
+                onClick={handleSendMessage}
+                className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                Send
+              </button>
+            </div>
           </div>
-          <div className="p-4 border-t border-gray-200 flex space-x-2 bg-white">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder="Ask me anything..."
-              className="flex-grow px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-300"
-            />
-            <button onClick={handleSendMessage} className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-4 py-2 rounded-full hover:from-indigo-600 hover:to-purple-700 transition-all duration-300">
-              Send
-            </button>
-          </div>
-        </div>
-      )}
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-full shadow-2xl hover:from-indigo-600 hover:to-purple-700 transition-all duration-300">
+        )}
+      </div>
+
+      {/* Chatbot Trigger Button */}
+      <button
+        onClick={toggleChatbot}
+        className="bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 transition-colors"
+      >
         <ChatBubbleLeftRightIcon className="w-6 h-6" />
       </button>
     </div>

@@ -1,498 +1,391 @@
-import React, { useEffect, useState } from 'react';
-import { initializeApp, getApps } from 'firebase/app';
-import { getDatabase, ref, onValue, off } from 'firebase/database';
-import { 
-  BookOpenIcon, 
-  UserIcon, 
-  ScaleIcon, 
-  BoltIcon, 
-  ExclamationCircleIcon,
-  ShieldCheckIcon,
+import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { ref, onValue } from 'firebase/database';
+import { rtdb, listenForNewRFIDTag } from '../firebase'; // Adjust path to your firebase.js
+import AdminSidebar from '../components/AdminSidebar'; // Import AdminSidebar
+import {
   ClockIcon,
-  UserCircleIcon,
-} from '@heroicons/react/24/outline';
-import { Line } from 'react-chartjs-2';
-import { Chart as ChartJS, LineElement, PointElement, LinearScale, TimeScale, Title, Tooltip, Legend } from 'chart.js';
-import 'chartjs-adapter-date-fns';
-import { format, parse, subDays } from 'date-fns';
-import AdminSidebar from '../components/AdminSidebar';
+  UserGroupIcon,
+  AcademicCapIcon,
+  BellIcon,
+  ChartBarIcon,
+  HomeIcon,
+  BoltIcon,
+  TagIcon,
+} from '@heroicons/react/24/solid';
 
-// Register Chart.js components
-ChartJS.register(LineElement, PointElement, LinearScale, TimeScale, Title, Tooltip, Legend);
-
-// Firebase Configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyDQIMqO4bJ-k4-pjjGnHGwCbCYUFUQe7Hw",
-  databaseURL: "https://smartecolock-default-rtdb.asia-southeast1.firebasedatabase.app/",
-};
-
-// Initialize Firebase only if it hasn't been initialized yet
-if (getApps().length === 0) {
-  initializeApp(firebaseConfig);
+// Interfaces reflecting the JSON structure
+interface InstructorProfile {
+  createdAt: string;
+  department: string;
+  email: string;
+  fullName: string;
+  idNumber: string;
+  mobileNumber: string;
+  role: string;
+  schedules: Schedule[];
 }
 
-const database = getDatabase();
+interface Instructor {
+  Profile: InstructorProfile;
+  AccessLogs?: Record<string, { action: string; timestamp: string }>;
+  ClassStatus?: { Status: string; dateTime: string };
+}
 
-// Interfaces for Data Structure
-interface InstructorLog {
-  AccessLogs: string; // Timestamp
-  PZEMData?: {
-    Voltage: string;
-    Current: string;
-    Power: string;
-    Energy: string;
-    Frequency: string;
-    PowerFactor: string;
+interface Schedule {
+  day: string;
+  startTime: string;
+  endTime: string;
+  room: string;
+  subject: string;
+  section: string;
+}
+
+interface Student {
+  fullName: string;
+  email: string;
+  department: string;
+  status: string;
+  timeIn: string;
+  timeOut: string;
+  role: string;
+  schedules: Schedule[];
+  section: string;
+}
+
+interface AccessLog {
+  action: string;
+  fullName: string;
+  role: string;
+  timestamp: string;
+}
+
+interface Alert {
+  startTime: string;
+  endTime?: string;
+  status: string;
+  resolvedByFullName?: string;
+  resolvedByUID?: string;
+}
+
+interface Admin {
+  createdAt: string;
+  email: string;
+  fullName: string;
+  idNumber: string;
+  lastTamperStop: string;
+  rfidUid: string;
+  role: string;
+}
+
+interface AdminPZEM {
+  Current: string;
+  Energy: string;
+  Frequency: string;
+  Power: string;
+  PowerFactor: string;
+  Voltage: string;
+  roomDetails: {
+    building: string;
+    floor: string;
+    name: string;
+    status: string;
+    type: string;
   };
-  ClassEnd?: string;
-}
-
-interface StudentLog {
-  AttendanceRecords: string; // Timestamp
-  Weight?: string; // Weight in kg
-}
-
-interface AdminLog {
-  AccessLogs: string; // Timestamp
-  LastTap?: string;
-}
-
-interface SystemLog {
-  [key: string]: string; // e.g., "System:Event Time:Timestamp"
-}
-
-interface UnregisteredLog {
-  AccessLogs: string; // Timestamp
-}
-
-interface TamperAlert {
-  Tamper: string; // Timestamp
-}
-
-interface StatCardProps {
-  title: string;
-  value: string | number;
-  icon: React.ReactNode;
-}
-
-interface LogEntryProps {
-  uid: string;
-  timestamp: string;
-  weight?: string;
-  type: 'Instructor' | 'Student' | 'Admin' | 'Unregistered';
-}
-
-interface SystemLogEntryProps {
-  event: string;
   timestamp: string;
 }
 
-interface PowerMetrics {
-  timestamp: string;
-  voltage: number;
-  current: number;
-  power: number;
-  energy: number;
-  frequency: number;
-  powerFactor: number;
-}
+const Dashboard: React.FC = () => {
+  const [instructors, setInstructors] = useState<Record<string, Instructor>>({});
+  const [students, setStudents] = useState<Record<string, Student>>({});
+  const [admins, setAdmins] = useState<Record<string, Admin>>({});
+  const [accessLogs, setAccessLogs] = useState<Record<string, Record<string, AccessLog>>>({});
+  const [alerts, setAlerts] = useState<Record<string, Alert>>({});
+  const [adminPZEM, setAdminPZEM] = useState<Record<string, Record<string, AdminPZEM>>>({});
+  const [newRFIDTag, setNewRFIDTag] = useState<string | null>(null);
+  const [stats, setStats] = useState({
+    totalInstructors: 0,
+    totalStudents: 0,
+    totalAdmins: 0,
+    activeAlerts: 0,
+    totalAccessToday: 0,
+  });
 
-// Main Dashboard Component
-const SmartEcoLockDashboard: React.FC = () => {
-  const [instructorLogs, setInstructorLogs] = useState<Record<string, InstructorLog>>({});
-  const [studentLogs, setStudentLogs] = useState<Record<string, StudentLog>>({});
-  const [adminLogs, setAdminLogs] = useState<Record<string, AdminLog>>({});
-  const [systemLogs, setSystemLogs] = useState<SystemLog>({});
-  const [unregisteredLogs, setUnregisteredLogs] = useState<Record<string, UnregisteredLog>>({});
-  const [tamperAlert, setTamperAlert] = useState<TamperAlert | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [dateFilter, setDateFilter] = useState<string>('');
-  const [uidFilter, setUidFilter] = useState<string>('');
-  const [typeFilter, setTypeFilter] = useState<string>('All');
-
-  // Fetch Data from Firebase
   useEffect(() => {
-    const instructorsRef = ref(database, '/Instructors');
-    const studentsRef = ref(database, '/Students');
-    const adminRef = ref(database, '/Admin');
-    const systemLogsRef = ref(database, '/SystemLogs');
-    const unregisteredRef = ref(database, '/UnregisteredUIDs');
-    const tamperRef = ref(database, '/Alerts/Tamper');
+    const instructorsRef = ref(rtdb, 'Instructors');
+    const studentsRef = ref(rtdb, 'Students');
+    const adminsRef = ref(rtdb, 'Admin');
+    const accessLogsRef = ref(rtdb, 'AccessLogs');
+    const alertsRef = ref(rtdb, 'Alerts/Tamper');
+    const adminPZEMRef = ref(rtdb, 'AdminPZEM');
 
-    const handleError = (err: any) => {
-      setError('Failed to connect to Firebase: ' + err.message);
-      setLoading(false);
-    };
+    onValue(instructorsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setInstructors(data);
+      setStats(prev => ({ ...prev, totalInstructors: Object.keys(data).length }));
+    });
 
-    const listeners = [
-      onValue(instructorsRef, (snapshot) => setInstructorLogs(snapshot.val() || {}), handleError),
-      onValue(studentsRef, (snapshot) => {
-        setStudentLogs(snapshot.val() || {});
-        setLoading(false);
-      }, handleError),
-      onValue(adminRef, (snapshot) => setAdminLogs(snapshot.val() || {}), handleError),
-      onValue(systemLogsRef, (snapshot) => setSystemLogs(snapshot.val() || {}), handleError),
-      onValue(unregisteredRef, (snapshot) => setUnregisteredLogs(snapshot.val() || {}), handleError),
-      onValue(tamperRef, (snapshot) => setTamperAlert(snapshot.val() ? { Tamper: snapshot.val() } : null), handleError),
-    ];
+    onValue(studentsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setStudents(data);
+      setStats(prev => ({ ...prev, totalStudents: Object.keys(data).length }));
+    });
 
-    return () => listeners.forEach((listener, idx) => off([instructorsRef, studentsRef, adminRef, systemLogsRef, unregisteredRef, tamperRef][idx], 'value', listener));
+    onValue(adminsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setAdmins(data);
+      setStats(prev => ({ ...prev, totalAdmins: Object.keys(data).length }));
+    });
+
+    onValue(accessLogsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setAccessLogs(data);
+      const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+      const todayLogs = Object.values(data).flatMap(userLogs => 
+        Array.isArray(userLogs) 
+          ? userLogs.filter(log => log.timestamp.includes(today)) 
+          : Object.values(userLogs || {}).filter((log: any) => log.timestamp.includes(today))
+      );
+      setStats(prev => ({ ...prev, totalAccessToday: todayLogs.length }));
+    });
+
+    onValue(alertsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setAlerts(data);
+      const activeAlerts = Object.values(data as Record<string, Alert>).filter(alert => alert.status === 'active').length;
+      setStats(prev => ({ ...prev, activeAlerts }));
+    });
+
+    onValue(adminPZEMRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setAdminPZEM(data);
+    });
+
+    const unsubscribe: () => void = listenForNewRFIDTag((uid: string) => {
+      setNewRFIDTag(uid);
+      setTimeout(() => setNewRFIDTag(null), 5000);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  // Metrics
-  const totalInstructors = Object.keys(instructorLogs).length;
-  const totalStudents = Object.keys(studentLogs).length;
-  const totalAdmins = Object.keys(adminLogs).length;
-  const totalUnregistered = Object.keys(unregisteredLogs).length;
-  const averageWeight = Object.values(studentLogs)
-    .filter((log) => log.Weight)
-    .reduce((sum, log) => sum + parseFloat(log.Weight || '0'), 0) / (totalStudents || 1);
-  const totalPowerConsumption = Object.values(instructorLogs)
-    .filter((log) => log.PZEMData?.Energy)
-    .reduce((sum, log) => sum + parseFloat(log.PZEMData!.Energy || '0'), 0);
-  const tamperEvents = tamperAlert ? 1 : 0;
-
-  // Filtered Logs
-  const filteredInstructorLogs = Object.entries(instructorLogs).filter(([uid, log]) => {
-    const matchesDate = !dateFilter || log.AccessLogs.includes(dateFilter);
-    const matchesUid = !uidFilter || uid.toLowerCase().includes(uidFilter.toLowerCase());
-    const matchesType = typeFilter === 'All' || typeFilter === 'Instructor';
-    return matchesDate && matchesUid && matchesType;
-  });
-
-  const filteredStudentLogs = Object.entries(studentLogs).filter(([uid, log]) => {
-    const matchesDate = !dateFilter || log.AttendanceRecords.includes(dateFilter);
-    const matchesUid = !uidFilter || uid.toLowerCase().includes(uidFilter.toLowerCase());
-    const matchesType = typeFilter === 'All' || typeFilter === 'Student';
-    return matchesDate && matchesUid && matchesType;
-  });
-
-  const filteredAdminLogs = Object.entries(adminLogs).filter(([uid, log]) => {
-    const matchesDate = !dateFilter || log.AccessLogs.includes(dateFilter);
-    const matchesUid = !uidFilter || uid.toLowerCase().includes(uidFilter.toLowerCase());
-    const matchesType = typeFilter === 'All' || typeFilter === 'Admin';
-    return matchesDate && matchesUid && matchesType;
-  });
-
-  const filteredUnregisteredLogs = Object.entries(unregisteredLogs).filter(([uid, log]) => {
-    const matchesDate = !dateFilter || log.AccessLogs.includes(dateFilter);
-    const matchesUid = !uidFilter || uid.toLowerCase().includes(uidFilter.toLowerCase());
-    const matchesType = typeFilter === 'All' || typeFilter === 'Unregistered';
-    return matchesDate && matchesUid && matchesType;
-  });
-
-  const filteredSystemLogs = Object.entries(systemLogs).filter(([_, entry]) => {
-    const timestamp = entry.split(' Time:')[1];
-    const matchesDate = !dateFilter || timestamp?.includes(dateFilter);
-    return matchesDate;
-  });
-
-  // Power Metrics Data
-  const powerMetricsData: PowerMetrics[] = filteredInstructorLogs
-    .filter(([, log]) => log.PZEMData)
-    .map(([, log]) => ({
-      timestamp: log.AccessLogs,
-      voltage: parseFloat(log.PZEMData!.Voltage || '0'),
-      current: parseFloat(log.PZEMData!.Current || '0'),
-      power: parseFloat(log.PZEMData!.Power || '0'),
-      energy: parseFloat(log.PZEMData!.Energy || '0'),
-      frequency: parseFloat(log.PZEMData!.Frequency || '0'),
-      powerFactor: parseFloat(log.PZEMData!.PowerFactor || '0'),
-    }));
-
-  // Chart Data
-  const powerChartData = {
-    labels: powerMetricsData.map((data) => new Date(data.timestamp)),
-    datasets: [
-      { label: 'Voltage (V)', data: powerMetricsData.map((d) => d.voltage), borderColor: '#FF6384', fill: false },
-      { label: 'Current (A)', data: powerMetricsData.map((d) => d.current), borderColor: '#36A2EB', fill: false },
-      { label: 'Power (W)', data: powerMetricsData.map((d) => d.power), borderColor: '#FFCE56', fill: false },
-      { label: 'Energy (Wh)', data: powerMetricsData.map((d) => d.energy), borderColor: '#4BC0C0', fill: false },
-      { label: 'Frequency (Hz)', data: powerMetricsData.map((d) => d.frequency), borderColor: '#9966FF', fill: false },
-      { label: 'Power Factor', data: powerMetricsData.map((d) => d.powerFactor), borderColor: '#FF9F40', fill: false },
-    ],
-  };
-
-  const weightChartData = {
-    labels: filteredStudentLogs.map(([, log]) => new Date(log.AttendanceRecords)),
-    datasets: [
-      {
-        label: 'Student Weight (kg)',
-        data: filteredStudentLogs.map(([, log]) => parseFloat(log.Weight || '0')),
-        borderColor: '#10B981',
-        backgroundColor: 'rgba(16, 185, 129, 0.2)',
-        fill: true,
-        tension: 0.4,
-      },
-    ],
-  };
-
-  const chartOptions = {
-    responsive: true,
-    scales: {
-      x: { type: 'time' as const, time: { unit: 'day' as const }, title: { display: true, text: 'Time' } },
-      y: { title: { display: true, text: 'Value' } },
-    },
-    plugins: { legend: { position: 'top' as const }, tooltip: { mode: 'index' as const, intersect: false } },
-  };
+  const StatCard = ({ title, value, icon, color }: { title: string; value: number; icon: React.ReactNode; color: string }) => (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`p-6 bg-white rounded-xl shadow-lg flex items-center space-x-4 hover:shadow-xl transition-all ${color}`}
+    >
+      <div className="p-3 bg-opacity-20 rounded-full">{icon}</div>
+      <div>
+        <h3 className="text-sm font-medium text-gray-600">{title}</h3>
+        <p className="text-2xl font-bold text-gray-800">{value}</p>
+      </div>
+    </motion.div>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 flex flex-col md:flex-row animate-fade-in">
+    <div className="flex h-screen bg-gradient-to-br from-gray-100 to-gray-200">
+      {/* Add AdminSidebar */}
       <AdminSidebar />
 
-      <main className="flex-1 ml-0 md:ml-64 p-6 transition-all duration-300">
-        <header className="mb-8">
-          <h1 className="text-4xl font-extrabold text-gray-900 flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent animate-pulse-once">
-            <BoltIcon className="h-9 w-9 text-indigo-600" />
-            Smart Ecolock Insights
-          </h1>
-          <p className="text-gray-700 mt-2 text-lg animate-fade-in-delay">Real-time insights into RFID, attendance, power, and system status.</p>
-        </header>
+      {/* Main content with adjusted margin */}
+      <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-8 overflow-y-auto">
+        <motion.h1
+          initial={{ opacity: 0, y: -50 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-4xl font-extrabold text-center mb-8 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600"
+        >
+          Smart Eco Lock Dashboard
+        </motion.h1>
 
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-800 rounded-xl flex items-center gap-3 shadow-md animate-slide-in">
-            <ExclamationCircleIcon className="h-6 w-6" />
-            <span className="font-medium">{error}</span>
-          </div>
-        )}
-
-        {/* Filters */}
-        <div className="mb-8 flex flex-col md:flex-row gap-4">
-          <div className="relative w-full md:w-auto">
-            <input
-              type="date"
-              value={dateFilter ? format(new Date(dateFilter), 'yyyy-MM-dd') : ''}
-              onChange={(e) => setDateFilter(e.target.value ? format(new Date(e.target.value), 'MM-dd-yyyy') : '')}
-              className="w-full p-3 pl-10 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm transition-all duration-200 hover:shadow-md"
-            />
-            <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">📅</span>
-          </div>
-          <div className="relative w-full md:w-auto">
-            <input
-              type="text"
-              value={uidFilter}
-              onChange={(e) => setUidFilter(e.target.value)}
-              className="w-full p-3 pl-10 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm transition-all duration-200 hover:shadow-md"
-              placeholder="Filter by UID"
-            />
-            <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">🔍</span>
-          </div>
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="w-full md:w-auto p-3 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm transition-all duration-200 hover:shadow-md"
-          >
-            <option value="All">All Types</option>
-            <option value="Instructor">Instructor</option>
-            <option value="Student">Student</option>
-            <option value="Admin">Admin</option>
-            <option value="Unregistered">Unregistered</option>
-          </select>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+          <StatCard title="Total Instructors" value={stats.totalInstructors} icon={<UserGroupIcon className="w-8 h-8 text-blue-500" />} color="border-blue-100" />
+          <StatCard title="Total Students" value={stats.totalStudents} icon={<AcademicCapIcon className="w-8 h-8 text-green-500" />} color="border-green-100" />
+          <StatCard title="Total Admins" value={stats.totalAdmins} icon={<UserGroupIcon className="w-8 h-8 text-purple-500" />} color="border-purple-100" />
+          <StatCard title="Active Alerts" value={stats.activeAlerts} icon={<BellIcon className="w-8 h-8 text-red-500" />} color="border-red-100" />
+          <StatCard title="Access Today" value={stats.totalAccessToday} icon={<ChartBarIcon className="w-8 h-8 text-indigo-500" />} color="border-indigo-100" />
         </div>
 
-        {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <div className="animate-spin h-12 w-12 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* Quick Stats */}
-            <StatCard title="Total Instructors" value={totalInstructors} icon={<UserIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Total Students" value={totalStudents} icon={<BookOpenIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Avg. Student Weight" value={`${averageWeight.toFixed(2)} kg`} icon={<ScaleIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Total Energy Usage" value={`${totalPowerConsumption.toFixed(2)} Wh`} icon={<BoltIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Admin Access" value={totalAdmins} icon={<ShieldCheckIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Unregistered UIDs" value={totalUnregistered} icon={<UserCircleIcon className="h-6 w-6 text-indigo-600" />} />
-            <StatCard title="Tamper Events" value={tamperEvents} icon={<ExclamationCircleIcon className="h-6 w-6 text-indigo-600" />} />
-
-            {/* Instructor Logs */}
-            <div className="col-span-1 sm:col-span-2 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <UserIcon className="h-6 w-6 text-indigo-600" />
-                Instructor Logs
-              </h2>
-              <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                {filteredInstructorLogs.length > 0 ? (
-                  filteredInstructorLogs.map(([uid, log]) => (
-                    <LogEntry key={uid} uid={uid} timestamp={log.AccessLogs} type="Instructor" />
-                  ))
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No matching logs found.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Student Attendance */}
-            <div className="col-span-1 sm:col-span-2 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <BookOpenIcon className="h-6 w-6 text-indigo-600" />
-                Student Attendance
-              </h2>
-              <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                {filteredStudentLogs.length > 0 ? (
-                  filteredStudentLogs.map(([uid, log]) => (
-                    <LogEntry key={uid} uid={uid} timestamp={log.AttendanceRecords} weight={log.Weight} type="Student" />
-                  ))
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No matching logs found.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Admin Logs */}
-            <div className="col-span-1 sm:col-span-2 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <ShieldCheckIcon className="h-6 w-6 text-indigo-600" />
-                Admin Logs
-              </h2>
-              <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                {filteredAdminLogs.length > 0 ? (
-                  filteredAdminLogs.map(([uid, log]) => (
-                    <LogEntry key={uid} uid={uid} timestamp={log.AccessLogs} type="Admin" />
-                  ))
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No matching logs found.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Unregistered UID Logs */}
-            <div className="col-span-1 sm:col-span-2 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <UserCircleIcon className="h-6 w-6 text-indigo-600" />
-                Unregistered UID Logs
-              </h2>
-              <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                {filteredUnregisteredLogs.length > 0 ? (
-                  filteredUnregisteredLogs.map(([uid, log]) => (
-                    <LogEntry key={uid} uid={uid} timestamp={log.AccessLogs} type="Unregistered" />
-                  ))
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No matching logs found.</p>
-                )}
-              </div>
-            </div>
-
-            {/* System Logs */}
-            <div className="col-span-1 sm:col-span-2 lg:col-span-4 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <ClockIcon className="h-6 w-6 text-indigo-600" />
-                System Logs
-              </h2>
-              <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                {filteredSystemLogs.length > 0 ? (
-                  filteredSystemLogs.map(([_, entry], index) => {
-                    const [eventPart, timestampPart] = entry.split(' Time:');
-                    return <SystemLogEntry key={index} event={eventPart.replace('System:', '')} timestamp={timestampPart} />;
-                  })
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No matching logs found.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Power Metrics Chart */}
-            <div className="col-span-1 sm:col-span-2 lg:col-span-4 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <BoltIcon className="h-6 w-6 text-indigo-600" />
-                Power Metrics Trend
-              </h2>
-              <Line data={powerChartData} options={{ ...chartOptions, scales: { ...chartOptions.scales, y: { title: { display: true, text: 'Value' } } } }} />
-            </div>
-
-            {/* Weight Trend Chart */}
-            <div className="col-span-1 sm:col-span-2 lg:col-span-4 bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-fade-in">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <ScaleIcon className="h-6 w-6 text-indigo-600" />
-                Student Weight Trend
-              </h2>
-              <Line data={weightChartData} options={{ ...chartOptions, scales: { ...chartOptions.scales, y: { title: { display: true, text: 'Weight (kg)' } } } }} />
-            </div>
-
-            {/* Tamper Alert */}
-            {tamperAlert && (
-              <div className="col-span-1 sm:col-span-2 lg:col-span-4 bg-red-50 rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300 animate-slide-in">
-                <h2 className="text-xl font-semibold text-red-800 mb-4 flex items-center gap-2">
-                  <ExclamationCircleIcon className="h-6 w-6 text-red-600" />
-                  Tamper Alert
-                </h2>
-                <p className="text-sm text-red-600">Tamper Detected: {tamperAlert.Tamper}</p>
-              </div>
-            )}
-          </div>
+        {newRFIDTag && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-4 right-4 bg-green-100 border border-green-300 text-green-800 p-4 rounded-lg shadow-lg flex items-center"
+          >
+            <TagIcon className="w-6 h-6 mr-2" />
+            <p>New RFID Tag Detected: <span className="font-bold">{newRFIDTag}</span></p>
+          </motion.div>
         )}
-      </main>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <motion.div
+            initial={{ opacity: 0, x: -50 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-white rounded-xl shadow-lg p-6 col-span-1"
+          >
+            <h2 className="text-xl font-semibold mb-4 flex items-center">
+              <UserGroupIcon className="w-6 h-6 mr-2 text-indigo-600" />
+              Personnel
+            </h2>
+            <div className="space-y-4 max-h-[400px] overflow-y-auto">
+              {Object.entries(admins).map(([id, admin]) => (
+                <motion.div
+                  key={id}
+                  whileHover={{ scale: 1.02 }}
+                  className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition"
+                >
+                  <h3 className="font-medium text-gray-800">{admin.fullName}</h3>
+                  <p className="text-sm text-gray-600">Role: {admin.role}</p>
+                  <p className="text-xs text-gray-500">Email: {admin.email}</p>
+                </motion.div>
+              ))}
+              {Object.entries(instructors).map(([id, instructor]) => (
+                <motion.div
+                  key={id}
+                  whileHover={{ scale: 1.02 }}
+                  className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition"
+                >
+                  <h3 className="font-medium text-gray-800">{instructor.Profile?.fullName || 'Unknown'}</h3>
+                  <p className="text-sm text-gray-600">{instructor.Profile?.department || 'N/A'}</p>
+                  <p className="text-xs text-gray-500">Email: {instructor.Profile?.email || 'N/A'}</p>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="col-span-2 space-y-8"
+          >
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h2 className="text-xl font-semibold mb-4 flex items-center">
+                <ClockIcon className="w-6 h-6 mr-2 text-indigo-600" />
+                Instructor Schedules
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto">
+                {Object.values(instructors).flatMap(instructor =>
+                  instructor.Profile?.schedules && Array.isArray(instructor.Profile.schedules)
+                    ? instructor.Profile.schedules.map((schedule, index) => (
+                        <motion.div
+                          key={`${instructor.Profile.fullName}-${index}`}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+                        >
+                          <p className="font-medium">{schedule.subject || 'N/A'}</p>
+                          <p className="text-sm text-gray-600">{instructor.Profile.fullName || 'Unknown'}</p>
+                          <p className="text-sm text-gray-600">{schedule.day}: {schedule.startTime} - {schedule.endTime}</p>
+                          <p className="text-sm text-gray-600">Room: {schedule.room || 'N/A'}</p>
+                        </motion.div>
+                      ))
+                    : []
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h2 className="text-xl font-semibold mb-4 flex items-center">
+                <BellIcon className="w-6 h-6 mr-2 text-red-600" />
+                Alerts
+              </h2>
+              <div className="space-y-4 max-h-[300px] overflow-y-auto">
+                {Object.entries(alerts).map(([id, alert]) => (
+                  <motion.div
+                    key={id}
+                    whileHover={{ scale: 1.02 }}
+                    className={`p-4 rounded-lg border ${alert.status === 'active' ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}
+                  >
+                    <p className="font-medium">Tamper Alert</p>
+                    <p className="text-sm text-gray-600">Started: {alert.startTime}</p>
+                    {alert.endTime && <p className="text-sm text-gray-600">Ended: {alert.endTime}</p>}
+                    <p className="text-sm text-gray-600">Status: {alert.status}</p>
+                    {alert.resolvedByFullName && (
+                      <p className="text-sm text-gray-600">Resolved by: {alert.resolvedByFullName}</p>
+                    )}
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-xl shadow-lg p-6"
+          >
+            <h2 className="text-xl font-semibold mb-4 flex items-center">
+              <HomeIcon className="w-6 h-6 mr-2 text-indigo-600" />
+              Access Logs
+            </h2>
+            <div className="space-y-4 max-h-[400px] overflow-y-auto">
+              {Object.entries(accessLogs).flatMap(([uid, logs]) =>
+                Object.entries(logs).map(([timestamp, log]) => (
+                  <motion.div
+                    key={`${uid}-${timestamp}`}
+                    whileHover={{ scale: 1.02 }}
+                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition"
+                  >
+                    <p className="font-medium">{log.fullName}</p>
+                    <p className="text-sm text-gray-600">Action: {log.action}</p>
+                    <p className="text-sm text-gray-600">Role: {log.role}</p>
+                    <p className="text-sm text-gray-600">Time: {log.timestamp}</p>
+                  </motion.div>
+                ))
+              )}
+              {Object.entries(instructors).flatMap(([uid, instructor]) =>
+                instructor.AccessLogs
+                  ? Object.entries(instructor.AccessLogs).map(([key, log]) => (
+                      <motion.div
+                        key={`${uid}-${key}`}
+                        whileHover={{ scale: 1.02 }}
+                        className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition"
+                      >
+                        <p className="font-medium">{instructor.Profile?.fullName || 'Unknown'}</p>
+                        <p className="text-sm text-gray-600">Action: {log.action}</p>
+                        <p className="text-sm text-gray-600">Role: {instructor.Profile?.role || 'N/A'}</p>
+                        <p className="text-sm text-gray-600">Time: {log.timestamp}</p>
+                      </motion.div>
+                    ))
+                  : []
+              )}
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-xl shadow-lg p-6"
+          >
+            <h2 className="text-xl font-semibold mb-4 flex items-center">
+              <BoltIcon className="w-6 h-6 mr-2 text-yellow-600" />
+              Power Monitoring
+            </h2>
+            <div className="space-y-4 max-h-[400px] overflow-y-auto">
+              {Object.entries(adminPZEM).flatMap(([uid, logs]) =>
+                Object.entries(logs).map(([timestamp, log]) => (
+                  <motion.div
+                    key={`${uid}-${timestamp}`}
+                    whileHover={{ scale: 1.02 }}
+                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition"
+                  >
+                    <p className="font-medium">Room: {log.roomDetails.name} ({log.roomDetails.building})</p>
+                    <p className="text-sm text-gray-600">Voltage: {log.Voltage}V</p>
+                    <p className="text-sm text-gray-600">Power: {log.Power}W</p>
+                    <p className="text-sm text-gray-600">Energy: {log.Energy}kWh</p>
+                    <p className="text-sm text-gray-600">Time: {log.timestamp}</p>
+                  </motion.div>
+                ))
+              )}
+            </div>
+          </motion.div>
+        </div>
+      </div>
     </div>
   );
 };
 
-// Stat Card Component
-const StatCard: React.FC<StatCardProps> = ({ title, value, icon }) => (
-  <div className="bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-md p-6 flex items-center gap-4 hover:shadow-lg hover:scale-105 transition-all duration-300 animate-fade-in-delay">
-    <div className="bg-indigo-100 p-3 rounded-full">{icon}</div>
-    <div>
-      <p className="text-sm text-gray-600 font-medium">{title}</p>
-      <p className="text-2xl font-extrabold text-gray-900">{value}</p>
-    </div>
-  </div>
-);
-
-// Log Entry Component
-const LogEntry: React.FC<LogEntryProps> = ({ uid, timestamp, weight, type }) => (
-  <div className="p-4 border-b border-gray-200 hover:bg-indigo-50 transition-colors duration-200 animate-fade-in">
-    <p className="text-sm font-semibold text-gray-900">{type} UID: <span className="text-indigo-600">{uid}</span></p>
-    <p className="text-sm text-gray-600">Time: {timestamp}</p>
-    {weight && <p className="text-sm text-gray-600">Weight: <span className="font-medium">{weight} kg</span></p>}
-  </div>
-);
-
-// System Log Entry Component
-const SystemLogEntry: React.FC<SystemLogEntryProps> = ({ event, timestamp }) => (
-  <div className="p-4 border-b border-gray-200 hover:bg-indigo-50 transition-colors duration-200 animate-fade-in">
-    <p className="text-sm font-semibold text-gray-900">Event: <span className="text-indigo-600">{event}</span></p>
-    <p className="text-sm text-gray-600">Time: {timestamp}</p>
-  </div>
-);
-
-// Custom CSS for Scrollbar and Animations
-const style = document.createElement('style');
-style.innerHTML = `
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 8px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 10px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #888;
-    border-radius: 10px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #555;
-  }
-  @keyframes fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  @keyframes fade-in-delay {
-    0% { opacity: 0; transform: translateY(20px); }
-    100% { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes slide-in {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(0); }
-  }
-  @keyframes pulse-once {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
-  }
-  .animate-fade-in { animation: fade-in 0.5s ease-in-out; }
-  .animate-fade-in-delay { animation: fade-in-delay 0.7s ease-in-out; }
-  .animate-slide-in { animation: slide-in 0.5s ease-out; }
-  .animate-pulse-once { animation: pulse-once 1.5s ease-in-out 1; }
-`;
-document.head.appendChild(style);
-
-export default SmartEcoLockDashboard;
+export default Dashboard;

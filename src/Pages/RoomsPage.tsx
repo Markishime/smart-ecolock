@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, rtdb } from '../firebase'; // Import rtdb for Realtime Database
+import { ref, onValue, off } from 'firebase/database'; // Realtime Database imports
 import AdminSidebar from '../components/AdminSidebar';
 import {
-  BuildingOfficeIcon, 
+  BuildingOfficeIcon,
   PlusIcon,
   LightBulbIcon,
   ComputerDesktopIcon,
@@ -11,6 +12,7 @@ import {
   UserIcon,
   ClockIcon,
   WrenchIcon,
+  CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import { motion } from 'framer-motion';
 import Swal from 'sweetalert2';
@@ -36,6 +38,7 @@ interface Room {
     aircon: boolean;
     computers: boolean;
   };
+  powerInUse?: boolean; // New field for power consumption status
 }
 
 interface Schedule {
@@ -67,12 +70,31 @@ interface Teacher {
 interface RoomAssignment {
   instructorName: string | null;
   schedules: Schedule[];
+  isOccupied: boolean;
+}
+
+interface AdminPZEM {
+  Current: string;
+  Energy: string;
+  Frequency: string;
+  Power: string;
+  PowerFactor: string;
+  Voltage: string;
+  roomDetails: {
+    building: string;
+    floor: string;
+    name: string;
+    status: string;
+    type: string;
+  };
+  timestamp: string;
 }
 
 const RoomsPage = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [adminPZEM, setAdminPZEM] = useState<Record<string, Record<string, AdminPZEM>>>({}); // For power data
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<Room['status'] | 'all'>('all');
@@ -82,11 +104,15 @@ const RoomsPage = () => {
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
-      await Promise.all([fetchRooms(), fetchTeachers(), fetchSubjects()]);
+      await Promise.all([fetchRooms(), fetchTeachers(), fetchSubjects(), fetchPowerData()]);
       setLastUpdated(new Date());
       setIsLoading(false);
     };
     fetchData();
+
+    return () => {
+      off(ref(rtdb, 'AdminPZEM')); // Cleanup Realtime Database listener
+    };
   }, []);
 
   const fetchRooms = async () => {
@@ -114,7 +140,8 @@ const RoomsPage = () => {
             aircon: false,
             computers: false,
             ...(data.energyStatus || {})
-          }
+          },
+          powerInUse: false, // Initialize as false, updated by AdminPZEM
         } as Room;
       });
       console.log('Fetched rooms:', roomsData);
@@ -167,9 +194,41 @@ const RoomsPage = () => {
     }
   };
 
-  const getAssignedInstructorAndStatus = (roomName: string) => {
-    const now = new Date(); // Current date and time (March 28, 2025, based on system)
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }); // e.g., "Friday"
+  const fetchPowerData = async () => {
+    try {
+      const adminPZEMRef = ref(rtdb, 'AdminPZEM');
+      onValue(adminPZEMRef, (snapshot) => {
+        const data = snapshot.val() || {};
+        setAdminPZEM(data);
+        updateRoomsWithPowerData(data);
+      });
+    } catch (error) {
+      console.error('Error fetching AdminPZEM data:', error);
+      Swal.fire('Error', 'Failed to fetch power data', 'error');
+    }
+  };
+
+  const updateRoomsWithPowerData = (pzemData: Record<string, Record<string, AdminPZEM>>) => {
+    setRooms(prevRooms => {
+      const updatedRooms = prevRooms.map(room => {
+        let powerInUse = false;
+        Object.values(pzemData).forEach(userLogs => {
+          Object.values(userLogs).forEach(log => {
+            if (log.roomDetails.name === room.name && parseFloat(log.Power) > 0) {
+              powerInUse = true;
+            }
+          });
+        });
+        return { ...room, powerInUse };
+      });
+      console.log('Updated rooms with power data:', updatedRooms);
+      return updatedRooms;
+    });
+  };
+
+  const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
+    const now = new Date(); // Current date: April 9, 2025
+    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }); // e.g., "Wednesday"
     const currentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }); // e.g., "14:30"
 
     let instructorName: string | null = null;
@@ -180,13 +239,12 @@ const RoomsPage = () => {
       const matchingSchedules = subject.schedules.filter(schedule => schedule.room === roomName);
       if (matchingSchedules.length > 0) {
         roomSchedules.push(...matchingSchedules);
-        if (!instructorName) { // Set once from first matching subject
+        if (!instructorName) {
           const instructorUid = subject.instructors[0];
           const instructor = teachers.find(t => t.uid === instructorUid || t.id === instructorUid);
           instructorName = instructor ? instructor.fullName : 'Unknown';
         }
 
-        // Check if current time falls within any schedule
         for (const schedule of matchingSchedules) {
           if (schedule.day === currentDay && currentTime >= schedule.startTime && currentTime <= schedule.endTime) {
             isOccupied = true;
@@ -214,11 +272,9 @@ const RoomsPage = () => {
         energyStatus: updatedStatus
       });
 
-      setRooms(prevRooms => 
-        prevRooms.map(r => 
-          r.id === roomId 
-            ? { ...r, energyStatus: updatedStatus }
-            : r
+      setRooms(prevRooms =>
+        prevRooms.map(r =>
+          r.id === roomId ? { ...r, energyStatus: updatedStatus } : r
         )
       );
 
@@ -271,11 +327,9 @@ const RoomsPage = () => {
         status: 'maintenance'
       });
 
-      setRooms(prevRooms => 
-        prevRooms.map(r => 
-          r.id === roomId 
-            ? { ...r, status: 'maintenance' }
-            : r
+      setRooms(prevRooms =>
+        prevRooms.map(r =>
+          r.id === roomId ? { ...r, status: 'maintenance' } : r
         )
       );
 
@@ -288,6 +342,30 @@ const RoomsPage = () => {
     } catch (error) {
       console.error('Error setting room to maintenance:', error);
       Swal.fire('Error', 'Failed to set room to maintenance', 'error');
+    }
+  };
+
+  const handleSetAvailable = async (roomId: string) => {
+    try {
+      await updateDoc(doc(db, 'rooms', roomId), {
+        status: 'available'
+      });
+
+      setRooms(prevRooms =>
+        prevRooms.map(r =>
+          r.id === roomId ? { ...r, status: 'available' } : r
+        )
+      );
+
+      Swal.fire({
+        icon: 'success',
+        title: 'Room set to Available',
+        showConfirmButton: false,
+        timer: 1500
+      });
+    } catch (error) {
+      console.error('Error setting room to available:', error);
+      Swal.fire('Error', 'Failed to set room to available', 'error');
     }
   };
 
@@ -313,7 +391,7 @@ const RoomsPage = () => {
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
       <AdminSidebar />
-      
+
       <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-8 overflow-y-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -325,7 +403,7 @@ const RoomsPage = () => {
             </h1>
             <p className="mt-1 text-blue-600/80">Manage and monitor classroom facilities</p>
           </div>
-        
+
           <div className="flex items-center space-x-4">
             <button
               onClick={() => setIsAddModalOpen(true)}
@@ -432,6 +510,12 @@ const RoomsPage = () => {
                       <span className="text-sm text-gray-500">None</span>
                     )}
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Power Usage</span>
+                    <span className="text-sm font-medium">
+                      {room.powerInUse ? 'In Use' : 'Not in Use'}
+                    </span>
+                  </div>
                   {room.assignedSchedules.length > 0 && (
                     <div className="flex flex-col">
                       <span className="text-sm text-gray-600 flex items-center mb-1">
@@ -480,7 +564,7 @@ const RoomsPage = () => {
                   </div>
                 </div>
 
-                <div className="mt-4">
+                <div className="mt-4 flex space-x-2">
                   <button
                     onClick={() => handleSetMaintenance(room.id)}
                     className="flex items-center justify-center w-full p-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
@@ -488,6 +572,14 @@ const RoomsPage = () => {
                   >
                     <WrenchIcon className="w-5 h-5 mr-2" />
                     Set to Maintenance
+                  </button>
+                  <button
+                    onClick={() => handleSetAvailable(room.id)}
+                    className="flex items-center justify-center w-full p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    disabled={room.status !== 'maintenance'}
+                  >
+                    <CheckCircleIcon className="w-5 h-5 mr-2" />
+                    Set to Available
                   </button>
                 </div>
               </motion.div>

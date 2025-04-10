@@ -27,17 +27,24 @@ interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  room: string;
-  subject?: string; // Subject name (optional, for display purposes)
+  roomName: string; // Changed from roomId to roomName
 }
 
-interface Subject {
+interface Section {
+  id: string;
+  name: string;
+  code: string;
+  capacity: number;
+  currentEnrollment: number;
+  schedules: Schedule[];
+}
+
+interface AssignedSubject {
   id: string;
   name: string;
   department: string;
   status: 'active' | 'inactive';
-  instructors: string[]; // Array of instructor IDs (uids or teacher IDs)
-  schedules: Schedule[];
+  sections: Section[];
 }
 
 interface Teacher {
@@ -46,11 +53,11 @@ interface Teacher {
   email: string;
   department: string;
   uid?: string; // Optional Firebase UID
+  assignedSubjects: AssignedSubject[];
 }
 
 const AdminSchedules = () => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
@@ -62,7 +69,7 @@ const AdminSchedules = () => {
   const [loading, setLoading] = useState(false);
   const { currentUser } = useAuth();
 
-  // Fetch teachers, subjects, and departments
+  // Fetch teachers and departments
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -73,23 +80,12 @@ const AdminSchedules = () => {
         const teachersSnapshot = await getDocs(teachersCollection);
         const teachersData = teachersSnapshot.docs.map(doc => ({
           id: doc.id,
-          fullName: doc.data().fullName,
-          email: doc.data().email,
-          department: doc.data().department,
+          fullName: doc.data().fullName || 'Unknown',
+          email: doc.data().email || '',
+          department: doc.data().department || 'Unknown',
           uid: doc.data().uid || doc.id, // Fallback to doc.id if uid is missing
+          assignedSubjects: doc.data().assignedSubjects || [],
         } as Teacher));
-
-        // Fetch subjects
-        const subjectsCollection = collection(db, 'subjects');
-        const subjectsSnapshot = await getDocs(subjectsCollection);
-        const subjectsData = subjectsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name,
-          department: doc.data().department,
-          status: doc.data().status || 'active',
-          instructors: doc.data().instructors || [],
-          schedules: doc.data().schedules || [],
-        } as Subject));
 
         // Extract unique departments from teachers
         const uniqueDepartments = Array.from(
@@ -97,7 +93,6 @@ const AdminSchedules = () => {
         ).filter(Boolean);
 
         setTeachers(teachersData);
-        setSubjects(subjectsData);
         setDepartments(uniqueDepartments);
         setLoading(false);
       } catch (error) {
@@ -105,7 +100,7 @@ const AdminSchedules = () => {
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to fetch teachers and subjects',
+          text: 'Failed to fetch teachers',
         });
         setLoading(false);
       }
@@ -133,21 +128,20 @@ const AdminSchedules = () => {
     Sunday: 7,
   };
 
-  // Get schedules for the selected teacher from subjects
+  // Get schedules for the selected teacher from assignedSubjects
   const sortedSchedules = useMemo(() => {
     if (!selectedTeacher) return [];
 
-    // Filter subjects where the selected teacher is an instructor
-    const teacherSubjects = subjects.filter(subject =>
-      subject.instructors.includes(selectedTeacher.uid || selectedTeacher.id)
-    );
-
-    // Flatten schedules from these subjects and add subject name
-    const schedules = teacherSubjects.flatMap(subject =>
-      subject.schedules.map(schedule => ({
-        ...schedule,
-        subject: subject.name, // Add subject name to each schedule
-      }))
+    // Flatten schedules from assignedSubjects
+    const schedules = selectedTeacher.assignedSubjects.flatMap(subject =>
+      subject.sections.flatMap(section =>
+        section.schedules.map(schedule => ({
+          ...schedule,
+          subject: subject.name, // Add subject name to each schedule
+          section: section.name, // Add section name for display
+          room: schedule.roomName, // Use roomName directly
+        }))
+      )
     );
 
     // Sort schedules
@@ -164,7 +158,7 @@ const AdminSchedules = () => {
         return sortConfig.direction === 'asc' ? comparisonResult : -comparisonResult;
       }
     });
-  }, [selectedTeacher, subjects, sortConfig]);
+  }, [selectedTeacher, sortConfig]);
 
   const filteredTeachers = useMemo(() => {
     return selectedDepartment === 'all'
@@ -313,10 +307,10 @@ const AdminSchedules = () => {
                     <table className="w-full">
                       <thead className="bg-gray-50">
                         <tr>
-                          {(['subject', 'day', 'startTime', 'room'] as (keyof Schedule)[]).map(key => (
+                          {(['subject', 'section', 'day', 'startTime', 'room'] as const).map(key => (
                             <th
                               key={key}
-                              onClick={() => toggleSort(key)}
+                              onClick={() => toggleSort(key as keyof Schedule)}
                               className="px-6 py-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
                             >
                               <div className="flex items-center">
@@ -334,7 +328,7 @@ const AdminSchedules = () => {
                       <tbody className="divide-y divide-gray-200">
                         {sortedSchedules.map((schedule, index) => (
                           <motion.tr
-                            key={index} // Use index as key since schedules from subjects might not have unique IDs
+                            key={index} // Use index as key since schedules might not have unique IDs
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             transition={{ duration: 0.2 }}
@@ -350,6 +344,7 @@ const AdminSchedules = () => {
                                 </span>
                               </div>
                             </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-gray-700">{schedule.section}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-gray-700">{schedule.day}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-gray-700">
                               <div className="flex items-center">
@@ -367,7 +362,7 @@ const AdminSchedules = () => {
                   <div className="p-6 text-center">
                     <h3 className="text-lg font-medium text-gray-600">No Schedules Found</h3>
                     <p className="text-gray-500 mt-2">
-                      The selected teacher has no schedules assigned in any subjects.
+                      The selected teacher has no schedules assigned in their assigned subjects.
                     </p>
                   </div>
                 )}
