@@ -15,7 +15,17 @@ import {
 } from '@heroicons/react/24/solid';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { format, parseISO, isToday } from 'date-fns';
-import { collection, query, where, getDocs, orderBy, limit, doc, getDoc } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  limit,
+  doc,
+  getDoc,
+  onSnapshot,
+} from 'firebase/firestore';
 import { db } from '../firebase';
 
 interface AttendanceRecord {
@@ -37,8 +47,18 @@ interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  room?: string;
-  subject?: string;
+  roomName: string; // Changed from 'room' to 'roomName' to match Firestore
+}
+
+interface EnrolledSubject {
+  subjectId: string;
+  name: string;
+  department: string;
+  sectionId: string;
+  sectionName: string;
+  schedules: Schedule[];
+  instructorId?: string;
+  instructorName?: string;
 }
 
 interface Subject {
@@ -66,8 +86,7 @@ interface Instructor {
 }
 
 interface EnhancedStudent extends Student {
-  section: string;
-  enrolledSubjects?: string[];
+  enrolledSubjects?: EnrolledSubject[];
 }
 
 const StudentDashboard = () => {
@@ -82,53 +101,92 @@ const StudentDashboard = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
 
   useEffect(() => {
-    const storedData = localStorage.getItem('userData');
-    if (storedData) {
-      setStudentData(JSON.parse(storedData));
-    }
-
     if (!currentUser || localStorage.getItem('userRole') !== 'student') {
       navigate('/login');
+      return;
     }
 
     const fetchStudentData = async () => {
       if (!currentUser) return;
+
       try {
         setIsLoading(true);
+
+        // Real-time listener for student data
         const studentQuery = query(
           collection(db, 'students'),
           where('uid', '==', currentUser.uid)
         );
-        const studentSnapshot = await getDocs(studentQuery);
+        const unsubscribeStudent = onSnapshot(
+          studentQuery,
+          async (studentSnapshot) => {
+            if (!studentSnapshot.empty) {
+              const studentDoc = studentSnapshot.docs[0];
+              const studentData = { id: studentDoc.id, ...studentDoc.data() } as EnhancedStudent;
 
-        if (!studentSnapshot.empty) {
-          const studentDoc = studentSnapshot.docs[0];
-          const studentData = { id: studentDoc.id, ...studentDoc.data() } as EnhancedStudent;
-          setStudentData(studentData);
+              // Fetch schedules for enrolled subjects from sections collection
+              if (studentData.enrolledSubjects && studentData.enrolledSubjects.length > 0) {
+                const updatedEnrolledSubjects = await Promise.all(
+                  studentData.enrolledSubjects.map(async (subject) => {
+                    const sectionDocRef = doc(db, 'sections', subject.sectionId);
+                    const sectionDoc = await getDoc(sectionDocRef);
+                    if (sectionDoc.exists()) {
+                      const sectionData = sectionDoc.data() as Section;
+                      return {
+                        ...subject,
+                        schedules: sectionData.schedules || [], // Ensure schedules include roomName
+                      };
+                    }
+                    return subject; // Fallback to original subject if section not found
+                  })
+                );
+                setStudentData({ ...studentData, enrolledSubjects: updatedEnrolledSubjects });
+              } else {
+                setStudentData(studentData);
+              }
+              localStorage.setItem('userData', JSON.stringify(studentData));
+            } else {
+              setStudentData(null);
+            }
+            setIsLoading(false);
+          },
+          (error) => {
+            console.error('Error listening to student data:', error);
+            setIsLoading(false);
+          }
+        );
 
+        // Fetch additional data (attendance, notifications, section, instructor, subjects)
+        const studentDocSnapshot = await getDocs(studentQuery);
+        if (!studentDocSnapshot.empty) {
+          const studentId = studentDocSnapshot.docs[0].id;
+
+          // Fetch attendance
           const attendanceQuery = query(
             collection(db, 'attendance'),
-            where('studentId', '==', studentData.id)
+            where('studentId', '==', studentId)
           );
           const attendanceSnapshot = await getDocs(attendanceQuery);
           setAttendance(attendanceSnapshot.docs.map((d) => d.data() as AttendanceRecord));
 
+          // Fetch notifications
           const notificationsQuery = query(
             collection(db, 'notifications'),
-            where('studentId', '==', studentData.id),
+            where('studentId', '==', studentId),
             orderBy('date', 'desc'),
             limit(5)
           );
           const notificationsSnapshot = await getDocs(notificationsQuery);
           setNotifications(notificationsSnapshot.docs.map((d) => d.data() as Notification));
 
-          if (studentData.section) {
+          // Fetch section data
+          const studentData = studentDocSnapshot.docs[0].data() as EnhancedStudent;
+          if (studentData.enrolledSubjects && studentData.enrolledSubjects.length > 0) {
             const sectionQuery = query(
               collection(db, 'sections'),
-              where('code', '==', studentData.section)
+              where('id', '==', studentData.enrolledSubjects[0].sectionId)
             );
             const sectionSnapshot = await getDocs(sectionQuery);
-
             if (!sectionSnapshot.empty) {
               const sectionData = {
                 id: sectionSnapshot.docs[0].id,
@@ -137,6 +195,7 @@ const StudentDashboard = () => {
               } as Section;
               setSection(sectionData);
 
+              // Fetch instructor data
               if (sectionData.instructorId) {
                 const instructorDoc = await getDoc(doc(db, 'teachers', sectionData.instructorId));
                 if (instructorDoc.exists()) {
@@ -162,9 +221,10 @@ const StudentDashboard = () => {
             }
           }
         }
+
+        return () => unsubscribeStudent();
       } catch (error) {
-        console.error('Error fetching student data:', error);
-      } finally {
+        console.error('Error fetching initial student data:', error);
         setIsLoading(false);
       }
     };
@@ -217,12 +277,21 @@ const StudentDashboard = () => {
   const enrolledSubjects = studentData.enrolledSubjects || [];
   const totalSubjects = enrolledSubjects.length;
   const todaySchedule =
-    instructor?.schedules?.filter(
-      (s) => enrolledSubjects.includes(s.subject || '') && isToday(new Date(s.day))
-    ) || [];
+    enrolledSubjects
+      .flatMap((subject) =>
+        (subject.schedules || []).map((schedule) => ({
+          ...schedule,
+          subject: subject.name,
+        }))
+      )
+      .filter((schedule) => {
+        const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const todayDay = daysOfWeek[new Date().getDay()];
+        return schedule.day === todayDay;
+      }) || [];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <StudentNavbar student={studentData} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-12">
@@ -242,7 +311,7 @@ const StudentDashboard = () => {
                   Welcome, {studentData.fullName}!
                 </h1>
                 <p className="text-sm md:text-base opacity-90">
-                  {studentData.department} • Year {studentData.yearLevel} • {studentData.section}
+                  {studentData.department} • Year {studentData.yearLevel}
                 </p>
               </div>
             </div>
@@ -287,7 +356,7 @@ const StudentDashboard = () => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
               whileHover={{ scale: 1.05 }}
-              className={`${stat.color} rounded-2xl p-6 text-white shadow-lg`}
+              className={`${stat.color} rounded-2xl p-6 text-white shadow-lg hover:shadow-xl transition-shadow duration-300`}
             >
               <div className="flex items-center justify-between">
                 <div>
@@ -302,13 +371,13 @@ const StudentDashboard = () => {
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column: Profile, Schedule, Enrolled Subjects, and Enrollment */}
+          {/* Left Column: Profile, Enrolled Subjects with Schedules, and Enrollment */}
           <div className="space-y-8 lg:col-span-2">
             {/* Student Profile */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6"
+              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
             >
               <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                 <UserCircleIcon className="h-7 w-7 text-indigo-600" />
@@ -338,36 +407,58 @@ const StudentDashboard = () => {
                     <p className="text-sm text-gray-500">Year Level</p>
                     <p className="text-lg font-medium text-gray-900">{studentData.yearLevel}</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Section</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.section}</p>
-                  </div>
                 </div>
               </div>
             </motion.div>
 
-            {/* Enrolled Subjects */}
+            {/* Enrolled Subjects with Schedules */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6"
+              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
             >
               <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                 <BookOpenIcon className="h-7 w-7 text-indigo-600" />
-                Enrolled Subjects
+                Enrolled Subjects & Schedules
               </h2>
               {enrolledSubjects.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
+                <div className="space-y-6">
                   {enrolledSubjects.map((subject, index) => (
-                    <motion.span
+                    <motion.div
                       key={index}
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.1 }}
-                      className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
+                      className="p-4 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors duration-200"
                     >
-                      {subject}
-                    </motion.span>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="bg-indigo-100 p-3 rounded-xl">
+                            <BookOpenIcon className="h-6 w-6 text-indigo-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">{subject.name}</p>
+                            <p className="text-sm text-gray-500">Department: {subject.department}</p>
+                            <p className="text-sm text-gray-500">Section: {subject.sectionName}</p>
+                            {subject.instructorName && (
+                              <p className="text-sm text-gray-500">Instructor: {subject.instructorName}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-4">
+                        <p className="text-sm font-medium text-gray-700">Schedules:</p>
+                        {subject.schedules && subject.schedules.length > 0 ? (
+                          subject.schedules.map((schedule, idx) => (
+                            <p key={idx} className="text-sm text-gray-600">
+                              {schedule.day}: {schedule.startTime} - {schedule.endTime} (Room: {schedule.roomName})
+                            </p>
+                          ))
+                        ) : (
+                          <p className="text-sm text-gray-500">No schedules available.</p>
+                        )}
+                      </div>
+                    </motion.div>
                   ))}
                 </div>
               ) : (
@@ -375,88 +466,30 @@ const StudentDashboard = () => {
               )}
             </motion.div>
 
-            {/* Current Schedule */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6"
-            >
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <CalendarIcon className="h-7 w-7 text-indigo-600" />
-                Your Schedule
-              </h2>
-              {enrolledSubjects.length > 0 && instructor?.schedules && instructor.schedules.length > 0 ? (
-                <div className="space-y-4">
-                  {instructor.schedules
-                    .filter((s) => enrolledSubjects.includes(s.subject || ''))
-                    .map((schedule, index) => (
-                      <motion.div
-                        key={index}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.1 }}
-                        className={`p-4 rounded-xl ${
-                          isToday(new Date(schedule.day))
-                            ? 'bg-indigo-50 border-indigo-200 border'
-                            : 'bg-gray-50'
-                        } hover:bg-gray-100 transition-colors`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                            <div className="bg-indigo-100 p-3 rounded-xl">
-                              <ClockIcon className="h-6 w-6 text-indigo-600" />
-                            </div>
-                            <div>
-                              <p className="font-medium text-gray-900">
-                                {schedule.day} • {schedule.subject || 'N/A'}
-                              </p>
-                              <p className="text-sm text-gray-500">
-                                {schedule.startTime} - {schedule.endTime} • Room: {schedule.room || 'TBD'}
-                              </p>
-                            </div>
-                          </div>
-                          {isToday(new Date(schedule.day)) && (
-                            <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-sm font-medium">
-                              Today
-                            </span>
-                          )}
-                        </div>
-                      </motion.div>
-                    ))}
-                </div>
-              ) : (
-                <p className="text-gray-500 text-center">
-                  {enrolledSubjects.length === 0
-                    ? 'Please select subjects to view your schedule.'
-                    : 'No schedule available.'}
-                </p>
-              )}
-            </motion.div>
-
             {/* Manage Enrollment */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6"
+              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
             >
               <h2 className="text-2xl font-bold text-gray-800 mb-4">Manage Enrollment</h2>
               <p className="text-gray-600 mb-4">Choose the subjects you want to enroll in.</p>
               <Link
                 to="/student/subject-selection"
-                className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200"
               >
                 Select Subjects
               </Link>
             </motion.div>
           </div>
 
-          {/* Right Column: Attendance and Instructor */}
+          {/* Right Column: Attendance, Instructor, and Today's Schedule */}
           <div className="space-y-8">
             {/* Attendance Overview */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6"
+              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
             >
               <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                 <ChartBarIcon className="h-7 w-7 text-indigo-600" />
@@ -474,9 +507,9 @@ const StudentDashboard = () => {
                       paddingAngle={5}
                       dataKey="value"
                     >
-                      <Cell fill="#4F46E5" />
-                      <Cell fill="#F59E0B" />
-                      <Cell fill="#EF4444" />
+                      {getAttendanceStats().map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
                     </Pie>
                     <Tooltip />
                   </PieChart>
@@ -492,11 +525,56 @@ const StudentDashboard = () => {
               </div>
             </motion.div>
 
+            {/* Today's Schedule */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+            >
+              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <CalendarIcon className="h-7 w-7 text-indigo-600" />
+                Today's Schedule
+              </h2>
+              {todaySchedule.length > 0 ? (
+                <div className="space-y-4">
+                  {todaySchedule.map((schedule, index) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      className="p-4 rounded-xl bg-indigo-50 border-indigo-200 border hover:bg-indigo-100 transition-colors duration-200"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="bg-indigo-100 p-3 rounded-xl">
+                            <ClockIcon className="h-6 w-6 text-indigo-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">{schedule.subject || 'N/A'}</p>
+                            <p className="text-sm text-gray-500">
+                              {schedule.startTime} - {schedule.endTime} • Room: {schedule.roomName}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-sm font-medium">
+                          Today
+                        </span>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 text-center">No classes scheduled for today.</p>
+              )}
+            </motion.div>
+
+            {/* Instructor Information */}
             {instructor && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-white rounded-2xl shadow-lg p-6"
+                className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
               >
                 <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                   <UserIcon className="h-7 w-7 text-indigo-600" />
@@ -514,17 +592,21 @@ const StudentDashboard = () => {
                 </div>
                 <div className="mt-4">
                   <p className="text-sm font-medium text-gray-700 mb-2">Assigned Subjects</p>
-                  {instructor.subjects && instructor.subjects.filter((subject) => enrolledSubjects.includes(subject)).length > 0 ? (
-                    instructor.subjects
-                      .filter((subject) => enrolledSubjects.includes(subject))
-                      .map((subject, index) => (
-                        <span
-                          key={index}
-                          className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
-                        >
-                          {subject}
-                        </span>
-                      ))
+                  {instructor.subjects &&
+                  instructor.subjects.filter((subject) => enrolledSubjects.some((s) => s.name === subject))
+                    .length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {instructor.subjects
+                        .filter((subject) => enrolledSubjects.some((s) => s.name === subject))
+                        .map((subject, index) => (
+                          <span
+                            key={index}
+                            className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
+                          >
+                            {subject}
+                          </span>
+                        ))}
+                    </div>
                   ) : (
                     <p className="text-sm text-gray-500">No matching subjects assigned.</p>
                   )}
@@ -538,7 +620,7 @@ const StudentDashboard = () => {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-lg p-6 mt-8"
+          className="bg-white rounded-2xl shadow-lg p-6 mt-8 hover:shadow-xl transition-shadow duration-300"
         >
           <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
             <BellIcon className="h-7 w-7 text-indigo-600" />
@@ -551,7 +633,7 @@ const StudentDashboard = () => {
                   key={notification.id}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  className="p-4 bg-gray-50 rounded-xl"
+                  className="p-4 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors duration-200"
                 >
                   <p className="font-medium text-gray-900">{notification.title}</p>
                   <p className="text-sm text-gray-500">{notification.message}</p>
@@ -571,4 +653,3 @@ const StudentDashboard = () => {
 };
 
 export default StudentDashboard;
-

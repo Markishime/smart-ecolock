@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, getDocs, orderBy, Timestamp, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import NavBar from '../components/NavBar';
@@ -32,7 +32,7 @@ interface Student {
 interface Section {
   id: string;
   name: string;
-  students: string[];
+  students: string[]; // Array of student fullNames
   instructorId?: string;
   room?: string;
   subjectId: string;
@@ -51,19 +51,24 @@ interface AttendanceRecord {
   studentEmail: string;
   sectionId: string;
   sectionName: string;
-  subject: string;
+  subjectId: string; // Updated to subjectId for consistency
   room: string;
   status: 'present' | 'absent' | 'late';
   confirmed: boolean;
   rfidAuthenticated: boolean;
   weightAuthenticated: boolean;
-  timestamp: Timestamp;
+  timestamp: any; // Changed from Timestamp to any to avoid type issues
   date: string;
   submittedBy: { id: string };
 }
 
+interface AttendanceSummary {
+  weekly: { present: number; late: number; absent: number };
+  monthly: { present: number; late: number; absent: number };
+}
+
 interface AttendanceStats {
-  totalRecords: number;
+  totalStudents: number;
   present: number;
   late: number;
   absent: number;
@@ -90,7 +95,7 @@ const AttendanceManagement: React.FC = () => {
         const sectionsRef = collection(db, 'sections');
         const q = query(sectionsRef, where('instructorId', '==', currentUser.uid));
         const sectionsSnapshot = await getDocs(q);
-        const fetchedSections = sectionsSnapshot.docs.map(doc => ({
+        const fetchedSections = sectionsSnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         } as Section));
@@ -113,7 +118,7 @@ const AttendanceManagement: React.FC = () => {
       try {
         const subjectsRef = collection(db, 'subjects');
         const subjectsSnapshot = await getDocs(subjectsRef);
-        const fetchedSubjects = subjectsSnapshot.docs.map(doc => ({
+        const fetchedSubjects = subjectsSnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         } as Subject));
@@ -133,7 +138,7 @@ const AttendanceManagement: React.FC = () => {
       try {
         const studentsRef = collection(db, 'students');
         const studentsSnapshot = await getDocs(studentsRef);
-        const fetchedStudents = studentsSnapshot.docs.map(doc => ({
+        const fetchedStudents = studentsSnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         } as Student));
@@ -178,6 +183,30 @@ const AttendanceManagement: React.FC = () => {
 
     return () => unsubscribe();
   }, [selectedSection]);
+
+  // Calculate attendance summaries
+  const getAttendanceSummary = (studentName: string): AttendanceSummary => {
+    const now = new Date();
+    const weekStart = new Date(now.setDate(now.getDate() - now.getDay())); // Start of current week (Sunday)
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1); // Start of current month
+
+    const studentRecords = attendanceRecords.filter((record) => record.studentName === studentName);
+    const weeklyRecords = studentRecords.filter((record) => new Date(record.date) >= weekStart);
+    const monthlyRecords = studentRecords.filter((record) => new Date(record.date) >= monthStart);
+
+    return {
+      weekly: {
+        present: weeklyRecords.filter((r) => r.status === 'present').length,
+        late: weeklyRecords.filter((r) => r.status === 'late').length,
+        absent: weeklyRecords.filter((r) => r.status === 'absent').length,
+      },
+      monthly: {
+        present: monthlyRecords.filter((r) => r.status === 'present').length,
+        late: monthlyRecords.filter((r) => r.status === 'late').length,
+        absent: monthlyRecords.filter((r) => r.status === 'absent').length,
+      },
+    };
+  };
 
   // Handle editing an attendance record
   const handleEditAttendance = async (recordId: string, currentStatus: string) => {
@@ -237,57 +266,59 @@ const AttendanceManagement: React.FC = () => {
     }
   };
 
-  // Filter records
-  const filteredRecords = useMemo(() => {
-    let filtered = [...attendanceRecords];
+  // Filter students
+  const filteredStudents = useMemo(() => {
+    const section = sections.find((s) => s.id === selectedSection);
+    if (!section) return [];
+
+    let filtered = students.filter((student) => section.students.includes(student.fullName));
 
     if (searchQuery) {
-      filtered = filtered.filter((record) =>
-        record.studentName.toLowerCase().includes(searchQuery.toLowerCase())
+      filtered = filtered.filter((student) =>
+        student.fullName.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
-    if (dateFilter) {
-      filtered = filtered.filter((record) => record.date === dateFilter);
-    }
-
     return filtered;
-  }, [attendanceRecords, searchQuery, dateFilter]);
+  }, [students, sections, selectedSection, searchQuery]);
 
-  // Calculate stats
+  // Calculate overall stats
   const stats: AttendanceStats = useMemo(() => {
-    const total = filteredRecords.length;
-    const present = filteredRecords.filter((r) => r.status === 'present').length;
-    const late = filteredRecords.filter((r) => r.status === 'late').length;
-    const absent = filteredRecords.filter((r) => r.status === 'absent').length;
-    const attendanceRate = total ? ((present + late) / total) * 100 : 0;
+    const section = sections.find((s) => s.id === selectedSection);
+    const totalStudents = section ? section.students.length : 0;
+    const present = attendanceRecords.filter((r) => r.status === 'present').length;
+    const late = attendanceRecords.filter((r) => r.status === 'late').length;
+    const absent = attendanceRecords.filter((r) => r.status === 'absent').length;
+    const attendanceRate = totalStudents ? ((present + late) / (present + late + absent)) * 100 : 0;
 
     return {
-      totalRecords: total,
+      totalStudents,
       present,
       late,
       absent,
       attendanceRate,
     };
-  }, [filteredRecords]);
+  }, [attendanceRecords, sections, selectedSection]);
 
   // Export to CSV
   const exportAttendance = () => {
+    const section = sections.find((s) => s.id === selectedSection);
+    const subject = subjects.find((s) => s.id === section?.subjectId);
     const csvContent = [
-      ['Student Name', 'ID Number', 'Section', 'Subject', 'Status', 'Date', 'Time', 'Verified'],
-      ...filteredRecords.map((record) => {
-        const student = students.find((s) => s.id === record.studentId);
-        const section = sections.find((s) => s.id === record.sectionId);
-        const subject = subjects.find((s) => s.id === (section?.subjectId || record.subject));
+      ['Student Name', 'ID Number', 'Section', 'Subject', 'Weekly Present', 'Weekly Late', 'Weekly Absent', 'Monthly Present', 'Monthly Late', 'Monthly Absent'],
+      ...filteredStudents.map((student) => {
+        const summary = getAttendanceSummary(student.fullName);
         return [
-          record.studentName,
-          student?.idNumber || '',
-          record.sectionName,
-          subject?.name || record.subject,
-          record.status,
-          record.date,
-          record.timestamp.toDate().toLocaleTimeString(),
-          record.confirmed ? 'Yes' : 'No',
+          student.fullName,
+          student.idNumber,
+          section?.name || '',
+          subject?.name || '',
+          summary.weekly.present,
+          summary.weekly.late,
+          summary.weekly.absent,
+          summary.monthly.present,
+          summary.monthly.late,
+          summary.monthly.absent,
         ];
       }),
     ]
@@ -298,16 +329,10 @@ const AttendanceManagement: React.FC = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance_${selectedSection}_${new Date().toLocaleDateString()}.csv`;
+    a.download = `attendance_summary_${selectedSection}_${new Date().toLocaleDateString()}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
-
-  // Get unique dates
-  const uniqueDates = useMemo(() => {
-    const dates = attendanceRecords.map((record) => record.date);
-    return [...new Set(dates)].sort().reverse();
-  }, [attendanceRecords]);
 
   if (loading && !selectedSection) {
     return (
@@ -340,7 +365,7 @@ const AttendanceManagement: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">Attendance Management</h1>
-                <p className="text-gray-600">Track and manage student attendance</p>
+                <p className="text-gray-600">Track and manage student attendance summaries</p>
               </div>
               <select
                 value={selectedSection}
@@ -363,7 +388,7 @@ const AttendanceManagement: React.FC = () => {
           {/* Stats */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             {[
-              { label: 'Total', value: stats.totalRecords, icon: ChartBarIcon, color: 'text-indigo-600' },
+              { label: 'Total Students', value: stats.totalStudents, icon: ChartBarIcon, color: 'text-indigo-600' },
               { label: 'Present', value: stats.present, icon: CheckCircleIcon, color: 'text-green-600' },
               { label: 'Late', value: stats.late, icon: ClockIcon, color: 'text-yellow-600' },
               { label: 'Absent', value: stats.absent, icon: XCircleIcon, color: 'text-red-600' },
@@ -398,18 +423,6 @@ const AttendanceManagement: React.FC = () => {
                 className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
               />
             </div>
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="border rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">All Dates</option>
-              {uniqueDates.map((date) => (
-                <option key={date} value={date}>
-                  {new Date(date).toLocaleDateString()}
-                </option>
-              ))}
-            </select>
             <button
               onClick={exportAttendance}
               className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -419,23 +432,27 @@ const AttendanceManagement: React.FC = () => {
             </button>
           </div>
 
-          {/* Attendance Records */}
+          {/* Student Attendance Summaries */}
           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
             <div className="p-6">
-              <h2 className="text-lg font-semibold text-gray-800 mb-4">Attendance Records</h2>
-              {filteredRecords.length === 0 ? (
+              <h2 className="text-lg font-semibold text-gray-800 mb-4">Student Attendance Summaries</h2>
+              {filteredStudents.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  No attendance records found for this section
+                  No students enrolled in this section
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredRecords.map((record) => {
-                    const student = students.find((s) => s.id === record.studentId);
-                    const section = sections.find((s) => s.id === record.sectionId);
-                    const subject = subjects.find((s) => s.id === (section?.subjectId || record.subject));
+                  {filteredStudents.map((student) => {
+                    const summary = getAttendanceSummary(student.fullName);
+                    const latestRecord = attendanceRecords
+                      .filter((r) => r.studentName === student.fullName)
+                      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+                    const section = sections.find((s) => s.id === selectedSection);
+                    const subject = subjects.find((s) => s.id === section?.subjectId);
+
                     return (
                       <motion.div
-                        key={record.id}
+                        key={student.id}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="border rounded-lg p-4 hover:shadow-md transition-all"
@@ -443,56 +460,51 @@ const AttendanceManagement: React.FC = () => {
                         <div className="space-y-2">
                           <div className="flex justify-between items-start">
                             <div>
-                              <h3 className="font-medium text-gray-900">{record.studentName}</h3>
-                              <p className="text-sm text-gray-500">{student?.idNumber}</p>
+                              <h3 className="font-medium text-gray-900">{student.fullName}</h3>
+                              <p className="text-sm text-gray-500">{student.idNumber}</p>
                             </div>
-                            <span
-                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                record.status === 'present'
-                                  ? 'bg-green-100 text-green-800'
-                                  : record.status === 'late'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}
-                            >
-                              {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
-                            </span>
-                          </div>
-                          <div className="text-sm text-gray-600">
-                            <p>Date: {new Date(record.date).toLocaleDateString()}</p>
-                            <p>Time: {record.timestamp.toDate().toLocaleTimeString()}</p>
-                            <p>Subject: {subject?.name || record.subject}</p>
-                            <p>Room: {record.room}</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {record.confirmed ? (
-                              <span className="text-green-600 flex items-center gap-1">
-                                <CheckCircleIcon className="w-4 h-4" />
-                                Verified
-                              </span>
-                            ) : (
-                              <span className="text-gray-500 flex items-center gap-1">
-                                <XCircleIcon className="w-4 h-4" />
-                                Unverified
+                            {latestRecord && (
+                              <span
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                  latestRecord.status === 'present'
+                                    ? 'bg-green-100 text-green-800'
+                                    : latestRecord.status === 'late'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-red-100 text-red-800'
+                                }`}
+                              >
+                                {latestRecord.status.charAt(0).toUpperCase() + latestRecord.status.slice(1)}
                               </span>
                             )}
                           </div>
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => handleEditAttendance(record.id, record.status)}
-                              className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                            >
-                              <PencilIcon className="w-4 h-4" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteAttendance(record.id)}
-                              className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700"
-                            >
-                              <TrashIcon className="w-4 h-4" />
-                              Delete
-                            </button>
+                          <div className="text-sm text-gray-600">
+                            <p>Subject: {subject?.name || 'N/A'}</p>
+                            <p>Room: {section?.room || 'N/A'}</p>
+                            <p>
+                              Weekly: P:{summary.weekly.present} | L:{summary.weekly.late} | A:{summary.weekly.absent}
+                            </p>
+                            <p>
+                              Monthly: P:{summary.monthly.present} | L:{summary.monthly.late} | A:{summary.monthly.absent}
+                            </p>
                           </div>
+                          {latestRecord && (
+                            <div className="flex gap-2 mt-2">
+                              <button
+                                onClick={() => handleEditAttendance(latestRecord.id, latestRecord.status)}
+                                className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                              >
+                                <PencilIcon className="w-4 h-4" />
+                                Edit Latest
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAttendance(latestRecord.id)}
+                                className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                              >
+                                <TrashIcon className="w-4 h-4" />
+                                Delete Latest
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </motion.div>
                     );

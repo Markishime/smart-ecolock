@@ -1,16 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, addDoc, where } from 'firebase/firestore';
+import { collection, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion } from 'framer-motion';
 import {
   UserIcon,
   TrashIcon,
-  PencilIcon,
   AcademicCapIcon,
-  PlusIcon,
-  ClockIcon,
   ViewColumnsIcon,
-  CheckIcon
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import AdminSidebar from '../components/AdminSidebar';
@@ -25,28 +21,32 @@ interface User {
   uid?: string;
 }
 
-interface Subject {
-  id: string;
-  name: string;
-  department: string;
-  status: 'active' | 'inactive';
-  instructors?: string[]; // Assuming instructors array exists in subjects collection
-  schedules?: Schedule[];
-}
-
 interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  section: string;
-  room?: string;
-  subject?: string;
-  instructorUid?: string;
+  roomName: string; // Changed from roomId to roomName
+}
+
+interface Section {
+  id: string;
+  name: string;
+  code: string;
+  capacity: number;
+  currentEnrollment: number;
+  schedules: Schedule[];
+}
+
+interface AssignedSubject {
+  id: string;
+  name: string;
+  department: string;
+  status: 'active' | 'inactive';
+  sections: Section[];
 }
 
 interface InstructorDetails {
-  subjects?: string[];
-  schedules?: Schedule[];
+  assignedSubjects: AssignedSubject[];
 }
 
 interface Room {
@@ -55,7 +55,7 @@ interface Room {
   status?: 'available' | 'occupied';
 }
 
-interface Section {
+interface SectionDoc {
   id: string;
   name: string;
   code: string;
@@ -64,8 +64,8 @@ interface Section {
 
 const Users = () => {
   const [users, setUsers] = useState<User[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [sections, setSections] = useState<Section[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]); // Still needed for other potential uses, but not for schedules
+  const [sections, setSections] = useState<SectionDoc[]>([]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedRole, setSelectedRole] = useState<'all' | 'admin' | 'instructor' | 'student'>('all');
@@ -75,13 +75,11 @@ const Users = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedInstructor, setSelectedInstructor] = useState<User | null>(null);
   const [instructorDetails, setInstructorDetails] = useState<InstructorDetails>({
-    subjects: [],
-    schedules: []
+    assignedSubjects: []
   });
-  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false); // Renamed from isAssignmentModalOpen
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
 
   // Fetch Users
   useEffect(() => {
@@ -138,7 +136,7 @@ const Users = () => {
     fetchUsers();
   }, []);
 
-  // Fetch Rooms
+  // Fetch Rooms (optional now for schedules, but kept for potential other uses)
   useEffect(() => {
     const fetchRooms = async () => {
       try {
@@ -159,26 +157,6 @@ const Users = () => {
     fetchRooms();
   }, []);
 
-  // Fetch Subjects
-  useEffect(() => {
-    const fetchSubjects = async () => {
-      try {
-        const subjectsCollection = collection(db, 'subjects');
-        const subjectsSnapshot = await getDocs(subjectsCollection);
-        const subjectsData = subjectsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as Subject));
-        setSubjects(subjectsData.filter(subject => subject.status === 'active'));
-      } catch (error) {
-        console.error('Error fetching subjects:', error);
-        Swal.fire({ icon: 'error', title: 'Fetch Error', text: 'Failed to fetch subjects' });
-      }
-    };
-
-    fetchSubjects();
-  }, []);
-
   // Fetch Sections
   useEffect(() => {
     const fetchSections = async () => {
@@ -189,8 +167,8 @@ const Users = () => {
           id: doc.id,
           name: doc.data().name,
           code: doc.data().code,
-          teacherId: doc.data().teacherId
-        } as Section));
+          teacherId: doc.data().instructorId
+        } as SectionDoc));
         setSections(sectionsData);
       } catch (error) {
         console.error('Error fetching sections:', error);
@@ -264,15 +242,27 @@ const Users = () => {
       console.log('Opening details modal for user:', user);
       setSelectedInstructor(user);
 
-      // Fetch subjects assigned to this instructor from the subjects collection
-      const subjectsAssigned = subjects.filter(subject => 
-        subject.instructors?.includes(user.uid || user.id)
-      );
+      const teacherRef = doc(db, 'teachers', user.id);
+      const teacherDoc = await getDoc(teacherRef);
 
-      setInstructorDetails({
-        subjects: subjectsAssigned.map(subject => subject.id),
-        schedules: subjectsAssigned.flatMap(subject => subject.schedules || [])
-      });
+      if (teacherDoc.exists()) {
+        const teacherData = teacherDoc.data();
+        const assignedSubjects = teacherData.assignedSubjects || [];
+        
+        setInstructorDetails({
+          assignedSubjects: assignedSubjects.map((subject: any) => ({
+            id: subject.id,
+            name: subject.name,
+            department: subject.department || 'Unknown',
+            status: subject.status || 'active',
+            sections: subject.sections || []
+          }))
+        });
+      } else {
+        console.warn(`No teacher document found for ID: ${user.id}`);
+        setInstructorDetails({ assignedSubjects: [] });
+      }
+
       setIsDetailsModalOpen(true);
     } catch (error) {
       console.error('Error fetching instructor details:', error);
@@ -365,12 +355,21 @@ const Users = () => {
     </motion.div>
   );
 
+  // Helper function to format time
+  const formatTime = (time: string) => {
+    const [hours, minutes] = time.split(':').map(Number);
+    const period = hours >= 12 ? 'PM' : 'AM';
+    const adjustedHours = hours % 12 || 12;
+    return `${adjustedHours}:${minutes.toString().padStart(2, '0')} ${period}`;
+  };
+
+  // Helper function to format schedule
+  const formatSchedule = (schedule: Schedule) => {
+    return `${schedule.day}: ${formatTime(schedule.startTime)} - ${formatTime(schedule.endTime)} (${schedule.roomName})`;
+  };
+
   const renderDetailsModal = () => {
     if (!isDetailsModalOpen || !selectedInstructor) return null;
-
-    const assignedSubjects = subjects.filter(subject => 
-      instructorDetails.subjects?.includes(subject.id)
-    );
 
     return (
       <motion.div
@@ -407,12 +406,12 @@ const Users = () => {
                 <div>
                   <p className="text-sm opacity-75 mb-1">Assigned Subjects</p>
                   <div className="flex flex-wrap gap-2">
-                    {assignedSubjects.length === 0 ? (
+                    {instructorDetails.assignedSubjects.length === 0 ? (
                       <span className="text-xs bg-white bg-opacity-10 px-2 py-1 rounded">
                         No subjects assigned
                       </span>
                     ) : (
-                      assignedSubjects.map(subject => (
+                      instructorDetails.assignedSubjects.map(subject => (
                         <span
                           key={subject.id}
                           className="text-xs bg-white bg-opacity-10 px-2 py-1 rounded"
@@ -440,30 +439,48 @@ const Users = () => {
               <div>
                 <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
                   <AcademicCapIcon className="w-6 h-6 mr-3 text-indigo-600" />
-                  Assigned Subjects
+                  Assigned Subjects & Schedules
                 </h3>
-                {assignedSubjects.length === 0 ? (
+                {instructorDetails.assignedSubjects.length === 0 ? (
                   <p className="text-gray-600">No subjects assigned to this instructor.</p>
                 ) : (
                   <div className="grid grid-cols-1 gap-4">
-                    {assignedSubjects.map(subject => (
+                    {instructorDetails.assignedSubjects.map(subject => (
                       <div
                         key={subject.id}
                         className="bg-gray-50 p-4 rounded-lg shadow-sm"
                       >
                         <h4 className="text-lg font-semibold text-gray-900">{subject.name}</h4>
                         <p className="text-sm text-gray-600">Department: {subject.department}</p>
-                        {subject.schedules && subject.schedules.length > 0 && (
+                        <p className="text-sm text-gray-600">Status: {subject.status}</p>
+                        {subject.sections && subject.sections.length > 0 ? (
                           <div className="mt-2">
-                            <p className="text-sm font-medium text-gray-700">Schedules:</p>
-                            <ul className="list-disc list-inside text-sm text-gray-600">
-                              {subject.schedules.map((schedule, index) => (
-                                <li key={index}>
-                                  {schedule.day}: {schedule.startTime} - {schedule.endTime} ({schedule.room})
-                                </li>
-                              ))}
-                            </ul>
+                            <p className="text-sm font-medium text-gray-700">Sections:</p>
+                            {subject.sections.map(section => (
+                              <div key={section.id} className="mt-2 pl-4 border-l-2 border-indigo-200">
+                                <p className="text-sm font-medium text-gray-800">{section.name} ({section.code})</p>
+                                <p className="text-xs text-gray-600">
+                                  Enrollment: {section.currentEnrollment}/{section.capacity}
+                                </p>
+                                {section.schedules && section.schedules.length > 0 ? (
+                                  <div className="mt-1">
+                                    <p className="text-sm font-medium text-gray-700">Schedules:</p>
+                                    <ul className="list-disc list-inside text-sm text-gray-600">
+                                      {section.schedules.map((schedule, index) => (
+                                        <li key={index}>
+                                          {formatSchedule(schedule)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-gray-500 mt-1">No schedules assigned</p>
+                                )}
+                              </div>
+                            ))}
                           </div>
+                        ) : (
+                          <p className="text-sm text-gray-500 mt-2">No sections assigned</p>
                         )}
                       </div>
                     ))}
