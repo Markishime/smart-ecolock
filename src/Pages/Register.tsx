@@ -224,10 +224,6 @@ const Register: React.FC = () => {
   const [isRegistered, setIsRegistered] = useState(false);
   const [rfidTags, setRfidTags] = useState<RFIDTag[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
-  const [sections, setSections] = useState<Section[]>([]);
-  const [selectedSection, setSelectedSection] = useState<Section | null>(null);
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [selectedTeacherSchedule, setSelectedTeacherSchedule] = useState<Teacher['schedules']>([]);
 
   const navigate = useNavigate();
 
@@ -303,24 +299,6 @@ const Register: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const fetchTeachers = async () => {
-      try {
-        const teachersCollection = collection(db, 'teachers');
-        const teachersSnapshot = await getDocs(teachersCollection);
-        const teachersData = teachersSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Teacher[];
-        setTeachers(teachersData);
-      } catch (error) {
-        console.error('Error fetching teachers:', error);
-      }
-    };
-
-    fetchTeachers();
-  }, []);
-
-  useEffect(() => {
     const validatePassword = () => {
       const validations = {
         hasUpper: /[A-Z]/.test(formData.password),
@@ -370,26 +348,6 @@ const Register: React.FC = () => {
       rfidUid: selectedUid
     }));
   }, [selectedUid]);
-
-  useEffect(() => {
-    const fetchSections = async () => {
-      try {
-        const sectionsRef = collection(db, 'sections');
-        const sectionsSnapshot = await getDocs(sectionsRef);
-        const sectionsData = sectionsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Section[];
-        setSections(sectionsData);
-      } catch (error) {
-        console.error('Error fetching sections:', error);
-      }
-    };
-
-    if (formData.role === 'student') {
-      fetchSections();
-    }
-  }, [formData.role]);
 
   const nextStep = () => {
     if (currentStep < steps.length) {
@@ -441,11 +399,6 @@ const Register: React.FC = () => {
         mobileNumber: formData.mobileNumber,
         rfidUid: formData.rfidUid,
         createdAt: new Date().toISOString(),
-        ...(formData.role === 'student' && selectedSection && {
-          section: selectedSection.name,
-          sectionId: selectedSection.id,
-          schedules: selectedTeacherSchedule || []
-        })
       };
 
       // Store in Firestore
@@ -680,129 +633,12 @@ const Register: React.FC = () => {
               })), <UserIcon className="w-5 h-5 text-cyan-500" />)}
               
               {formData.role === 'student' && (
-                <>
-                  {renderSelect('yearLevel', 'Year Level', [
-                    { value: '1st Year', label: '1st Year' },
-                    { value: '2nd Year', label: '2nd Year' },
-                    { value: '3rd Year', label: '3rd Year' },
-                    { value: '4th Year', label: '4th Year' }
-                  ], <AcademicCapIcon className="w-5 h-5 text-cyan-500" />)}
-                  
-                  <motion.div
-                    initial={{ opacity: 0, x: -50 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.4, type: 'tween' }}
-                  >
-                    <label className="block text-sm font-medium text-cyan-200 mb-2">
-                      Section
-                    </label>
-                    <div className="space-y-2">
-                      {sections.length > 0 ? (
-                        sections.map((section) => (
-                          <motion.div
-                            key={section.id}
-                            onClick={() => {
-                              setSelectedSection(section);
-                              setFormData(prev => ({
-                                ...prev,
-                                section: section.name
-                              }));
-                              const teacher = teachers.find(t => t.id === section.instructorId);
-                              setSelectedTeacherSchedule(teacher?.schedules || []);
-                            }}
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className={`
-                              p-3 rounded-xl cursor-pointer transition-all duration-200
-                              ${selectedSection?.id === section.id
-                                ? 'bg-cyan-600 text-white'
-                                : 'bg-gray-700 text-cyan-200 hover:bg-gray-600'
-                              }
-                            `}
-                          >
-                            <div className="flex flex-col space-y-1">
-                              <div className="flex justify-between items-center">
-                                <span className="font-medium">{section.name}</span>
-                                <span className="text-xs opacity-80">
-                                  {section.schedule?.room || 'TBD'}
-                                </span>
-                              </div>
-                              {section.schedule && (
-                                <div className="flex items-center space-x-3 text-xs opacity-80">
-                                  <div className="flex items-center space-x-1">
-                                    <CalendarIcon className="w-3 h-3" />
-                                    <span>{section.schedule.day}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-1">
-                                    <ClockIcon className="w-3 h-3" />
-                                    <span>{section.schedule.startTime} - {section.schedule.endTime}</span>
-                                  </div>
-                                </div>
-                              )}
-                              <div className="text-xs opacity-80">
-                                {section.schedule?.subject || 'N/A'}
-                              </div>
-                            </div>
-                          </motion.div>
-                        ))
-                      ) : (
-                        <p className="text-gray-400">No sections available.</p>
-                      )}
-                    </div>
-                  </motion.div>
-
-                  {selectedSection && selectedTeacherSchedule && selectedTeacherSchedule.length > 0 && (
-                    <motion.div
-                      initial={{ opacity: 0, x: -50 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.4, type: 'tween' }}
-                    >
-                      <label className="block text-sm font-medium text-cyan-200 mb-2">
-                        Teacher's Schedule
-                      </label>
-                      <div className="space-y-2">
-                        {selectedTeacherSchedule?.map((schedule, index) => (
-                          <motion.div
-                            key={index}
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className={`
-                              p-3 rounded-xl cursor-pointer transition-all duration-200
-                              ${formData.selectedSchedule === schedule
-                                ? 'bg-cyan-600 text-white'
-                                : 'bg-gray-700 text-cyan-200 hover:bg-gray-600'
-                              }
-                            `}
-                            onClick={() => setFormData(prev => ({
-                              ...prev,
-                              selectedSchedule: schedule
-                            }))}
-                          >
-                            <div className="flex flex-col space-y-1">
-                              <div className="flex justify-between items-center">
-                                <span className="font-medium">{schedule.subject || 'N/A'}</span>
-                                <span className="text-xs opacity-80">{schedule.room || 'TBD'}</span>
-                              </div>
-                              <div className="flex items-center space-x-3 text-xs opacity-80">
-                                <div className="flex items-center space-x-1">
-                                  <CalendarIcon className="w-3 h-3" />
-                                  <span>{schedule.day}</span>
-                                </div>
-                                <div className="flex items-center space-x-1">
-                                  <ClockIcon className="w-3 h-3" />
-                                  <span>{schedule.startTime} - {schedule.endTime}</span>
-                                </div>
-                              </div>
-                              <div className="text-xs opacity-80">
-                                Section: {schedule.section}
-                              </div>
-                            </div>
-                          </motion.div>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </>
+                renderSelect('yearLevel', 'Year Level', [
+                  { value: '1st Year', label: '1st Year' },
+                  { value: '2nd Year', label: '2nd Year' },
+                  { value: '3rd Year', label: '3rd Year' },
+                  { value: '4th Year', label: '4th Year' }
+                ], <AcademicCapIcon className="w-5 h-5 text-cyan-500" />)
               )}
               {formData.role === 'instructor' && (
                 renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience', <UserIcon className="w-5 h-5 text-cyan-500" />)

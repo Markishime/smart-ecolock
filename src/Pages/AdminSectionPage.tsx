@@ -82,7 +82,6 @@ interface Subject {
   status?: 'active' | 'inactive';
 }
 
-// Type for adding a section (id is optional)
 interface AddSectionData {
   name: string;
   code: string;
@@ -92,7 +91,6 @@ interface AddSectionData {
   schedules: Schedule[];
 }
 
-// Type for editing a section (id is required)
 interface EditSectionData {
   id: string;
   name: string;
@@ -203,6 +201,7 @@ const AdminSectionPage = () => {
 
   const handleAddSection = async (sectionData: AddSectionData) => {
     try {
+      // Add new section to 'sections' collection
       const newSectionRef = await addDoc(collection(db, 'sections'), {
         name: sectionData.name,
         code: sectionData.code,
@@ -227,6 +226,7 @@ const AdminSectionPage = () => {
         currentEnrollment: 0,
       };
 
+      // Update subject's sections array without overwriting existing sections
       const subjectRef = doc(db, 'subjects', sectionData.subjectId);
       const subjectSnapshot = await getDocs(
         query(collection(db, 'subjects'), where('__name__', '==', sectionData.subjectId))
@@ -238,6 +238,7 @@ const AdminSectionPage = () => {
           sections: [...existingSections, newSectionDetails],
         });
       } else {
+        // If subject doesn't exist, create it with the new section (unlikely in this context)
         const subject = subjects.find((s) => s.id === sectionData.subjectId);
         if (!subject) throw new Error('Subject not found');
         await updateDoc(subjectRef, {
@@ -253,32 +254,49 @@ const AdminSectionPage = () => {
         });
       }
 
+      // Update instructor's assignedSubjects without overwriting existing data
       const teacherRef = doc(db, 'teachers', sectionData.instructorId);
-      const teacherDocSnapshot = await getDocs(
+      const teacherSnapshot = await getDocs(
         query(collection(db, 'teachers'), where('__name__', '==', sectionData.instructorId))
       );
-      if (!teacherDocSnapshot.empty) {
-        const teacherDoc = teacherDocSnapshot.docs[0];
+      if (!teacherSnapshot.empty) {
+        const teacherDoc = teacherSnapshot.docs[0];
         const existingData = teacherDoc.data();
-        const existingAssignedSubjects = (existingData.assignedSubjects || []) as Subject[];
+        const existingAssignedSubjects = existingData.assignedSubjects || [];
 
-        const updatedAssignedSubjects = existingAssignedSubjects.filter(
-          (sub) => sub.id !== sectionData.subjectId
+        // Check if the subject is already assigned to the instructor
+        const subjectIndex = existingAssignedSubjects.findIndex(
+          (sub: any) => sub.id === sectionData.subjectId
         );
-        updatedAssignedSubjects.push({
-          id: sectionData.subjectId,
-          name: subjects.find((s) => s.id === sectionData.subjectId)?.name || 'Unknown',
-          code: subjects.find((s) => s.id === sectionData.subjectId)?.code || '',
-          sections: [
-            ...(existingAssignedSubjects.find((s) => s.id === sectionData.subjectId)?.sections || []),
-            newSectionDetails,
-          ],
-        });
+        let updatedAssignedSubjects;
+        if (subjectIndex >= 0) {
+          // Append new section to existing subject's sections
+          updatedAssignedSubjects = existingAssignedSubjects.map((sub: any, idx: number) =>
+            idx === subjectIndex
+              ? { ...sub, sections: [...(sub.sections || []), newSectionDetails] }
+              : sub
+          );
+        } else {
+          // Add new subject with the new section
+          updatedAssignedSubjects = [
+            ...existingAssignedSubjects,
+            {
+              id: sectionData.subjectId,
+              name: subjects.find((s) => s.id === sectionData.subjectId)?.name || 'Unknown',
+              code: subjects.find((s) => s.id === sectionData.subjectId)?.code || '',
+              sections: [newSectionDetails],
+            },
+          ];
+        }
+
+        // Update assignedRooms without duplicating
+        const currentRooms = existingData.assignedRooms || [];
+        const newRooms = sectionData.schedules
+          .map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName)
+          .filter((room) => !currentRooms.includes(room));
 
         await updateDoc(teacherRef, {
-          assignedRooms: arrayUnion(
-            ...sectionData.schedules.map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName)
-          ),
+          assignedRooms: [...currentRooms, ...newRooms],
           assignedSubjects: updatedAssignedSubjects,
         });
       }
@@ -302,6 +320,7 @@ const AdminSectionPage = () => {
 
   const handleEditSection = async (sectionData: EditSectionData) => {
     try {
+      // Update the specific section in 'sections' collection
       const sectionRef = doc(db, 'sections', sectionData.id);
       await updateDoc(sectionRef, {
         name: sectionData.name,
@@ -325,6 +344,7 @@ const AdminSectionPage = () => {
         currentEnrollment: sections.find((s) => s.id === sectionData.id)?.students.length || 0,
       };
 
+      // Update only the edited section in subject's sections array
       const subjectRef = doc(db, 'subjects', sectionData.subjectId);
       const subjectSnapshot = await getDocs(
         query(collection(db, 'subjects'), where('__name__', '==', sectionData.subjectId))
@@ -338,36 +358,111 @@ const AdminSectionPage = () => {
         await updateDoc(subjectRef, { sections: updatedSections });
       }
 
-      const teacherRef = doc(db, 'teachers', sectionData.instructorId);
-      const teacherDocSnapshot = await getDocs(
-        query(collection(db, 'teachers'), where('__name__', '==', sectionData.instructorId))
-      );
-      if (!teacherDocSnapshot.empty) {
-        const teacherDoc = teacherDocSnapshot.docs[0];
-        const existingData = teacherDoc.data();
-        const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: Subject) =>
-          sub.id === sectionData.subjectId
-            ? {
-                ...sub,
-                sections: (sub.sections || []).map((sec: any) =>
-                  sec.id === sectionData.id ? updatedSectionDetails : sec
-                ),
-              }
-            : sub
-        );
+      // Handle instructor update without affecting other sections
+      const oldSection = sections.find((s) => s.id === sectionData.id);
+      const oldInstructorId = oldSection?.instructorId;
+      const newInstructorId = sectionData.instructorId;
 
-        const oldSection = sections.find((s) => s.id === sectionData.id);
-        const oldRooms =
-          oldSection?.schedules.map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName) || [];
-        const newRooms = sectionData.schedules.map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName);
-        const allRooms = [...new Set([...(existingData.assignedRooms || []), ...newRooms])].filter(
-          (room) => !oldRooms.includes(room) || newRooms.includes(room)
-        );
+      if (oldInstructorId !== newInstructorId) {
+        // Remove section from old instructor's assignedSubjects
+        if (oldInstructorId) {
+          const oldTeacherRef = doc(db, 'teachers', oldInstructorId);
+          const oldTeacherSnapshot = await getDocs(
+            query(collection(db, 'teachers'), where('__name__', '==', oldInstructorId))
+          );
+          if (!oldTeacherSnapshot.empty) {
+            const oldTeacherDoc = oldTeacherSnapshot.docs[0];
+            const oldData = oldTeacherDoc.data();
+            const oldAssignedSubjects = oldData.assignedSubjects || [];
+            const updatedOldAssignedSubjects = oldAssignedSubjects.map((sub: any) =>
+              sub.id === sectionData.subjectId
+                ? { ...sub, sections: sub.sections.filter((sec: any) => sec.id !== sectionData.id) }
+                : sub
+            ).filter((sub: any) => !sub.sections || sub.sections.length > 0);
+            const oldRooms = oldData.assignedRooms || [];
+            const sectionRooms = sectionData.schedules.map(
+              (s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName
+            );
+            const updatedOldRooms = oldRooms.filter((room: string) => !sectionRooms.includes(room));
+            await updateDoc(oldTeacherRef, {
+              assignedRooms: updatedOldRooms,
+              assignedSubjects: updatedOldAssignedSubjects,
+            });
+          }
+        }
 
-        await updateDoc(teacherRef, {
-          assignedRooms: allRooms,
-          assignedSubjects: updatedAssignedSubjects,
-        });
+        // Add section to new instructor's assignedSubjects
+        const newTeacherRef = doc(db, 'teachers', newInstructorId);
+        const newTeacherSnapshot = await getDocs(
+          query(collection(db, 'teachers'), where('__name__', '==', newInstructorId))
+        );
+        if (!newTeacherSnapshot.empty) {
+          const newTeacherDoc = newTeacherSnapshot.docs[0];
+          const newData = newTeacherDoc.data();
+          const newAssignedSubjects = newData.assignedSubjects || [];
+          const subjectIndex = newAssignedSubjects.findIndex(
+            (sub: any) => sub.id === sectionData.subjectId
+          );
+          let updatedNewAssignedSubjects;
+          if (subjectIndex >= 0) {
+            updatedNewAssignedSubjects = newAssignedSubjects.map((sub: any, idx: number) =>
+              idx === subjectIndex
+                ? { ...sub, sections: [...(sub.sections || []), updatedSectionDetails] }
+                : sub
+            );
+          } else {
+            updatedNewAssignedSubjects = [
+              ...newAssignedSubjects,
+              {
+                id: sectionData.subjectId,
+                name: subjects.find((s) => s.id === sectionData.subjectId)?.name || 'Unknown',
+                code: subjects.find((s) => s.id === sectionData.subjectId)?.code || '',
+                sections: [updatedSectionDetails],
+              },
+            ];
+          }
+          const currentRooms = newData.assignedRooms || [];
+          const newRooms = sectionData.schedules
+            .map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName)
+            .filter((room) => !currentRooms.includes(room));
+          await updateDoc(newTeacherRef, {
+            assignedRooms: [...currentRooms, ...newRooms],
+            assignedSubjects: updatedNewAssignedSubjects,
+          });
+        }
+      } else {
+        // Update existing instructor's assignedSubjects for the edited section
+        const teacherRef = doc(db, 'teachers', sectionData.instructorId);
+        const teacherSnapshot = await getDocs(
+          query(collection(db, 'teachers'), where('__name__', '==', sectionData.instructorId))
+        );
+        if (!teacherSnapshot.empty) {
+          const teacherDoc = teacherSnapshot.docs[0];
+          const existingData = teacherDoc.data();
+          const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: any) =>
+            sub.id === sectionData.subjectId
+              ? {
+                  ...sub,
+                  sections: (sub.sections || []).map((sec: any) =>
+                    sec.id === sectionData.id ? updatedSectionDetails : sec
+                  ),
+                }
+              : sub
+          );
+
+          const oldRooms =
+            oldSection?.schedules.map((s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName) || [];
+          const newRooms = sectionData.schedules.map(
+            (s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName
+          );
+          const currentRooms = existingData.assignedRooms || [];
+          const updatedRooms = [...new Set([...currentRooms.filter((r: string) => !oldRooms.includes(r)), ...newRooms])];
+
+          await updateDoc(teacherRef, {
+            assignedRooms: updatedRooms,
+            assignedSubjects: updatedAssignedSubjects,
+          });
+        }
       }
 
       setIsEditModalOpen(false);
@@ -422,12 +517,12 @@ const AdminSectionPage = () => {
 
       const teacherRef = doc(db, 'teachers', section.instructorId);
       const teacherDocSnapshot = await getDocs(
-        query(collection(db, 'teachers'), where('__name__', '==', selectedSection?.instructorId || ''))
+        query(collection(db, 'teachers'), where('__name__', '==', section.instructorId))
       );
       if (!teacherDocSnapshot.empty) {
         const teacherDoc = teacherDocSnapshot.docs[0];
         const existingData = teacherDoc.data();
-        const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: Subject) =>
+        const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: any) =>
           sub.id === section.subjectId
             ? {
                 ...sub,
@@ -474,19 +569,28 @@ const AdminSectionPage = () => {
 
       const teacherRef = doc(db, 'teachers', section.instructorId);
       const teacherDocSnapshot = await getDocs(
-        query(collection(db, 'teachers'), where('__name__', '==', selectedSection?.instructorId))
+        query(collection(db, 'teachers'), where('__name__', '==', section.instructorId))
       );
       if (!teacherDocSnapshot.empty) {
         const teacherDoc = teacherDocSnapshot.docs[0];
         const existingData = teacherDoc.data();
         const updatedAssignedSubjects = (existingData.assignedSubjects || [])
-          .map((sub: Subject) =>
+          .map((sub: any) =>
             sub.id === section.subjectId
               ? { ...sub, sections: (sub.sections || []).filter((sec: any) => sec.id !== sectionId) }
               : sub
           )
-          .filter((sub: Subject) => !sub.sections || sub.sections.length > 0);
-        await updateDoc(teacherRef, { assignedSubjects: updatedAssignedSubjects });
+          .filter((sub: any) => !sub.sections || sub.sections.length > 0);
+        const sectionRooms = section.schedules.map(
+          (s) => rooms.find((r) => r.name === s.roomName)?.id || s.roomName
+        );
+        const updatedRooms = (existingData.assignedRooms || []).filter(
+          (room: string) => !sectionRooms.includes(room)
+        );
+        await updateDoc(teacherRef, {
+          assignedRooms: updatedRooms,
+          assignedSubjects: updatedAssignedSubjects,
+        });
       }
 
       await Promise.all(
@@ -564,12 +668,12 @@ const AdminSectionPage = () => {
 
       const teacherRef = doc(db, 'teachers', selectedSection.instructorId);
       const teacherDocSnapshot = await getDocs(
-        query(collection(db, 'teachers'), where('__name__', '==', selectedSection?.instructorId))
+        query(collection(db, 'teachers'), where('__name__', '==', selectedSection.instructorId))
       );
       if (!teacherDocSnapshot.empty) {
         const teacherDoc = teacherDocSnapshot.docs[0];
         const existingData = teacherDoc.data();
-        const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: Subject) =>
+        const updatedAssignedSubjects = (existingData.assignedSubjects || []).map((sub: any) =>
           sub.id === selectedSection.subjectId
             ? {
                 ...sub,
@@ -815,7 +919,7 @@ const AdminSectionPage = () => {
       <AddSectionModal
         isOpen={isEditModalOpen}
         onClose={() => setIsEditModalOpen(false)}
-        onSubmit={(data) => handleEditSection(data as EditSectionData)} // Cast to ensure id is present
+        onSubmit={(data) => handleEditSection(data as EditSectionData)}
         instructors={instructors}
         subjects={subjects}
         initialData={selectedSection ? { ...selectedSection, id: selectedSection.id } : undefined}

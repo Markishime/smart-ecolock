@@ -10,18 +10,15 @@ import {
   BookOpenIcon,
   ClockIcon,
   UserCircleIcon,
-  BellIcon,
   UserIcon,
 } from '@heroicons/react/24/solid';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { format, parseISO, isToday } from 'date-fns';
+import { format, parseISO, isWithinInterval, parse } from 'date-fns';
 import {
   collection,
   query,
   where,
   getDocs,
-  orderBy,
-  limit,
   doc,
   getDoc,
   onSnapshot,
@@ -36,18 +33,11 @@ interface AttendanceRecord {
   status: string;
 }
 
-interface Notification {
-  id: string;
-  title: string;
-  message: string;
-  date: string;
-}
-
 interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  roomName: string; // Changed from 'room' to 'roomName' to match Firestore
+  roomName: string;
 }
 
 interface EnrolledSubject {
@@ -59,13 +49,6 @@ interface EnrolledSubject {
   schedules: Schedule[];
   instructorId?: string;
   instructorName?: string;
-}
-
-interface Subject {
-  id: string;
-  name: string;
-  department: string;
-  status: 'active' | 'inactive';
 }
 
 interface Section {
@@ -81,8 +64,6 @@ interface Instructor {
   fullName: string;
   email: string;
   department: string;
-  subjects?: string[];
-  schedules?: Schedule[];
 }
 
 interface EnhancedStudent extends Student {
@@ -94,11 +75,9 @@ const StudentDashboard = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [section, setSection] = useState<Section | null>(null);
   const [instructor, setInstructor] = useState<Instructor | null>(null);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
 
   useEffect(() => {
     if (!currentUser || localStorage.getItem('userRole') !== 'student') {
@@ -123,27 +102,7 @@ const StudentDashboard = () => {
             if (!studentSnapshot.empty) {
               const studentDoc = studentSnapshot.docs[0];
               const studentData = { id: studentDoc.id, ...studentDoc.data() } as EnhancedStudent;
-
-              // Fetch schedules for enrolled subjects from sections collection
-              if (studentData.enrolledSubjects && studentData.enrolledSubjects.length > 0) {
-                const updatedEnrolledSubjects = await Promise.all(
-                  studentData.enrolledSubjects.map(async (subject) => {
-                    const sectionDocRef = doc(db, 'sections', subject.sectionId);
-                    const sectionDoc = await getDoc(sectionDocRef);
-                    if (sectionDoc.exists()) {
-                      const sectionData = sectionDoc.data() as Section;
-                      return {
-                        ...subject,
-                        schedules: sectionData.schedules || [], // Ensure schedules include roomName
-                      };
-                    }
-                    return subject; // Fallback to original subject if section not found
-                  })
-                );
-                setStudentData({ ...studentData, enrolledSubjects: updatedEnrolledSubjects });
-              } else {
-                setStudentData(studentData);
-              }
+              setStudentData(studentData);
               localStorage.setItem('userData', JSON.stringify(studentData));
             } else {
               setStudentData(null);
@@ -156,7 +115,7 @@ const StudentDashboard = () => {
           }
         );
 
-        // Fetch additional data (attendance, notifications, section, instructor, subjects)
+        // Fetch additional data (attendance, section, instructor)
         const studentDocSnapshot = await getDocs(studentQuery);
         if (!studentDocSnapshot.empty) {
           const studentId = studentDocSnapshot.docs[0].id;
@@ -169,17 +128,7 @@ const StudentDashboard = () => {
           const attendanceSnapshot = await getDocs(attendanceQuery);
           setAttendance(attendanceSnapshot.docs.map((d) => d.data() as AttendanceRecord));
 
-          // Fetch notifications
-          const notificationsQuery = query(
-            collection(db, 'notifications'),
-            where('studentId', '==', studentId),
-            orderBy('date', 'desc'),
-            limit(5)
-          );
-          const notificationsSnapshot = await getDocs(notificationsQuery);
-          setNotifications(notificationsSnapshot.docs.map((d) => d.data() as Notification));
-
-          // Fetch section data
+          // Fetch section and instructor data
           const studentData = studentDocSnapshot.docs[0].data() as EnhancedStudent;
           if (studentData.enrolledSubjects && studentData.enrolledSubjects.length > 0) {
             const sectionQuery = query(
@@ -204,18 +153,6 @@ const StudentDashboard = () => {
                     ...instructorDoc.data(),
                   } as Instructor;
                   setInstructor(instructorData);
-
-                  const subjectsRef = collection(db, 'subjects');
-                  const subjectsSnapshot = await getDocs(subjectsRef);
-                  const allSubjects = subjectsSnapshot.docs.map((doc) => ({
-                    id: doc.id,
-                    ...doc.data(),
-                  } as Subject));
-
-                  const instructorSubjects = allSubjects.filter((subject) =>
-                    instructorData.subjects?.includes(subject.name)
-                  );
-                  setSubjects(instructorSubjects);
                 }
               }
             }
@@ -224,7 +161,7 @@ const StudentDashboard = () => {
 
         return () => unsubscribeStudent();
       } catch (error) {
-        console.error('Error fetching initial student data:', error);
+        console.error('Error fetching student data:', error);
         setIsLoading(false);
       }
     };
@@ -252,22 +189,44 @@ const StudentDashboard = () => {
     ];
   };
 
-  const COLORS = ['#4F46E5', '#F59E0B', '#EF4444'];
+  const COLORS = ['#10B981', '#F59E0B', '#EF4444'];
+
+  // Function to determine class status
+  const getClassStatus = (schedule: Schedule, instructorName?: string) => {
+    const now = new Date();
+    const today = format(now, 'EEEE'); // Get current day (e.g., "Monday")
+    if (schedule.day !== today) return null; // Only check today's classes
+
+    const currentTime = now.getTime();
+    const startTime = parse(schedule.startTime, 'HH:mm', now).getTime();
+    const endTime = parse(schedule.endTime, 'HH:mm', now).getTime();
+
+    if (isWithinInterval(currentTime, { start: startTime, end: endTime })) {
+      return `Class in Session with ${instructorName || 'Instructor'}`;
+    } else if (currentTime > endTime) {
+      return 'Class Ended';
+    }
+    return null; // Class hasn't started yet
+  };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ repeat: Infinity, duration: 1 }}
-          className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full"
+          className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full"
         />
       </div>
     );
   }
 
   if (!studentData) {
-    return <div className="p-8 text-center text-gray-500">No student data found.</div>;
+    return (
+      <div className="p-8 text-center text-gray-400 bg-gray-900 min-h-screen">
+        No student data found.
+      </div>
+    );
   }
 
   const overallAttendance =
@@ -282,6 +241,7 @@ const StudentDashboard = () => {
         (subject.schedules || []).map((schedule) => ({
           ...schedule,
           subject: subject.name,
+          instructorName: subject.instructorName,
         }))
       )
       .filter((schedule) => {
@@ -291,7 +251,7 @@ const StudentDashboard = () => {
       }) || [];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+    <div className="min-h-screen bg-gray-900 text-gray-100">
       <StudentNavbar student={studentData} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-12">
@@ -299,55 +259,53 @@ const StudentDashboard = () => {
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-3xl shadow-2xl p-8 mb-10 text-white"
+          className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-3xl shadow-2xl p-8 mb-10 text-white overflow-hidden relative"
         >
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/dark-geometric.png')] opacity-10"></div>
+          <div className="relative flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-6">
-              <motion.div whileHover={{ scale: 1.1 }} className="bg-white/20 p-4 rounded-full">
+              <motion.div
+                whileHover={{ scale: 1.1, rotate: 5 }}
+                className="bg-white/10 backdrop-blur-md p-4 rounded-full border border-white/20"
+              >
                 <UserCircleIcon className="h-12 w-12 text-white" />
               </motion.div>
               <div>
-                <h1 className="text-3xl md:text-4xl font-bold mb-2">
+                <h1 className="text-3xl md:text-4xl font-extrabold mb-2 tracking-tight">
                   Welcome, {studentData.fullName}!
                 </h1>
-                <p className="text-sm md:text-base opacity-90">
+                <p className="text-base opacity-80 font-medium">
                   {studentData.department} • Year {studentData.yearLevel}
                 </p>
               </div>
             </div>
-            <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 text-center">
+            <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 text-center border border-white/20">
               <p className="text-sm opacity-80">Student ID</p>
-              <p className="text-xl font-semibold">{studentData.idNumber || 'N/A'}</p>
+              <p className="text-xl font-semibold tracking-wide">{studentData.idNumber || 'N/A'}</p>
             </div>
           </div>
         </motion.div>
 
         {/* Quick Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
           {[
             {
               title: 'Attendance Rate',
               value: `${overallAttendance}%`,
               icon: <ChartBarIcon className="h-6 w-6" />,
-              color: 'bg-emerald-500',
+              color: 'from-emerald-500 to-teal-500',
             },
             {
               title: 'Total Subjects',
               value: totalSubjects,
               icon: <BookOpenIcon className="h-6 w-6" />,
-              color: 'bg-indigo-500',
+              color: 'from-blue-500 to-indigo-500',
             },
             {
               title: 'Classes Today',
               value: todaySchedule.length,
               icon: <CalendarIcon className="h-6 w-6" />,
-              color: 'bg-purple-500',
-            },
-            {
-              title: 'Pending Notifications',
-              value: notifications.length,
-              icon: <BellIcon className="h-6 w-6" />,
-              color: 'bg-orange-500',
+              color: 'from-purple-500 to-pink-500',
             },
           ].map((stat, index) => (
             <motion.div
@@ -355,15 +313,15 @@ const StudentDashboard = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
-              whileHover={{ scale: 1.05 }}
-              className={`${stat.color} rounded-2xl p-6 text-white shadow-lg hover:shadow-xl transition-shadow duration-300`}
+              whileHover={{ scale: 1.05, y: -5 }}
+              className={`bg-gradient-to-br ${stat.color} rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl transition-all duration-300 border border-white/10`}
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm opacity-80">{stat.title}</p>
-                  <p className="text-2xl font-bold">{stat.value}</p>
+                  <p className="text-sm opacity-80 font-medium">{stat.title}</p>
+                  <p className="text-3xl font-bold tracking-tight">{stat.value}</p>
                 </div>
-                <div className="bg-white/20 p-3 rounded-lg">{stat.icon}</div>
+                <div className="bg-white/10 p-3 rounded-lg backdrop-blur-md">{stat.icon}</div>
               </div>
             </motion.div>
           ))}
@@ -377,35 +335,35 @@ const StudentDashboard = () => {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+              className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
             >
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <UserCircleIcon className="h-7 w-7 text-indigo-600" />
+              <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                <UserCircleIcon className="h-7 w-7 text-blue-400" />
                 Your Profile
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <div>
-                    <p className="text-sm text-gray-500">Full Name</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.fullName}</p>
+                    <p className="text-sm text-gray-400">Full Name</p>
+                    <p className="text-lg font-medium text-white">{studentData.fullName}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-500">Email</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.email}</p>
+                    <p className="text-sm text-gray-400">Email</p>
+                    <p className="text-lg font-medium text-white">{studentData.email}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-500">Student ID</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.idNumber || 'N/A'}</p>
+                    <p className="text-sm text-gray-400">Student ID</p>
+                    <p className="text-lg font-medium text-white">{studentData.idNumber || 'N/A'}</p>
                   </div>
                 </div>
                 <div className="space-y-4">
                   <div>
-                    <p className="text-sm text-gray-500">Department</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.department}</p>
+                    <p className="text-sm text-gray-400">Department</p>
+                    <p className="text-lg font-medium text-white">{studentData.department}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-500">Year Level</p>
-                    <p className="text-lg font-medium text-gray-900">{studentData.yearLevel}</p>
+                    <p className="text-sm text-gray-400">Year Level</p>
+                    <p className="text-lg font-medium text-white">{studentData.yearLevel}</p>
                   </div>
                 </div>
               </div>
@@ -415,10 +373,10 @@ const StudentDashboard = () => {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+              className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
             >
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <BookOpenIcon className="h-7 w-7 text-indigo-600" />
+              <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                <BookOpenIcon className="h-7 w-7 text-blue-400" />
                 Enrolled Subjects & Schedules
               </h2>
               {enrolledSubjects.length > 0 ? (
@@ -429,28 +387,28 @@ const StudentDashboard = () => {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.1 }}
-                      className="p-4 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors duration-200"
+                      className="p-4 bg-gray-700/50 rounded-xl hover:bg-blue-900/30 transition-all duration-200 backdrop-blur-sm border border-gray-600"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
-                          <div className="bg-indigo-100 p-3 rounded-xl">
-                            <BookOpenIcon className="h-6 w-6 text-indigo-600" />
+                          <div className="bg-blue-500/20 p-3 rounded-xl border border-blue-400/30">
+                            <BookOpenIcon className="h-6 w-6 text-blue-400" />
                           </div>
                           <div>
-                            <p className="font-medium text-gray-900">{subject.name}</p>
-                            <p className="text-sm text-gray-500">Department: {subject.department}</p>
-                            <p className="text-sm text-gray-500">Section: {subject.sectionName}</p>
+                            <p className="font-medium text-white text-lg">{subject.name}</p>
+                            <p className="text-sm text-gray-400">Department: {subject.department}</p>
+                            <p className="text-sm text-gray-400">Section: {subject.sectionName}</p>
                             {subject.instructorName && (
-                              <p className="text-sm text-gray-500">Instructor: {subject.instructorName}</p>
+                              <p className="text-sm text-gray-400">Instructor: {subject.instructorName}</p>
                             )}
                           </div>
                         </div>
                       </div>
                       <div className="mt-4">
-                        <p className="text-sm font-medium text-gray-700">Schedules:</p>
+                        <p className="text-sm font-medium text-gray-300">Schedules:</p>
                         {subject.schedules && subject.schedules.length > 0 ? (
                           subject.schedules.map((schedule, idx) => (
-                            <p key={idx} className="text-sm text-gray-600">
+                            <p key={idx} className="text-sm text-gray-400">
                               {schedule.day}: {schedule.startTime} - {schedule.endTime} (Room: {schedule.roomName})
                             </p>
                           ))
@@ -462,7 +420,7 @@ const StudentDashboard = () => {
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-500 text-center">No subjects enrolled yet.</p>
+                <p className="text-gray-400 text-center text-lg">No subjects enrolled yet.</p>
               )}
             </motion.div>
 
@@ -470,29 +428,29 @@ const StudentDashboard = () => {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+              className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
             >
-              <h2 className="text-2xl font-bold text-gray-800 mb-4">Manage Enrollment</h2>
-              <p className="text-gray-600 mb-4">Choose the subjects you want to enroll in.</p>
+              <h2 className="text-2xl font-bold text-white mb-4">Manage Enrollment</h2>
+              <p className="text-gray-300 mb-4">Choose the subjects you want to enroll in.</p>
               <Link
                 to="/student/subject-selection"
-                className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200"
+                className="inline-block px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg hover:from-blue-600 hover:to-purple-600 transition-all duration-200 font-medium shadow-md hover:shadow-lg"
               >
                 Select Subjects
               </Link>
             </motion.div>
           </div>
 
-          {/* Right Column: Attendance, Instructor, and Today's Schedule */}
+          {/* Right Column: Attendance, Today's Schedule, and Instructor */}
           <div className="space-y-8">
             {/* Attendance Overview */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+              className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
             >
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <ChartBarIcon className="h-7 w-7 text-indigo-600" />
+              <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                <ChartBarIcon className="h-7 w-7 text-blue-400" />
                 Attendance Overview
               </h2>
               <div className="h-64">
@@ -511,15 +469,22 @@ const StudentDashboard = () => {
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#1F2937',
+                        border: '1px solid #374151',
+                        borderRadius: '8px',
+                        color: '#fff',
+                      }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
               <div className="grid grid-cols-3 gap-4 mt-6">
                 {getAttendanceStats().map((stat, index) => (
                   <div key={stat.name} className="text-center">
-                    <p className="text-sm text-gray-500">{stat.name}</p>
-                    <p className="text-lg font-bold text-gray-900">{stat.value}</p>
+                    <p className="text-sm text-gray-400">{stat.name}</p>
+                    <p className="text-lg font-bold text-white">{stat.value}</p>
                   </div>
                 ))}
               </div>
@@ -529,43 +494,56 @@ const StudentDashboard = () => {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+              className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
             >
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <CalendarIcon className="h-7 w-7 text-indigo-600" />
+              <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                <CalendarIcon className="h-7 w-7 text-blue-400" />
                 Today's Schedule
               </h2>
               {todaySchedule.length > 0 ? (
                 <div className="space-y-4">
-                  {todaySchedule.map((schedule, index) => (
-                    <motion.div
-                      key={index}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                      className="p-4 rounded-xl bg-indigo-50 border-indigo-200 border hover:bg-indigo-100 transition-colors duration-200"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="bg-indigo-100 p-3 rounded-xl">
-                            <ClockIcon className="h-6 w-6 text-indigo-600" />
+                  {todaySchedule.map((schedule, index) => {
+                    const status = getClassStatus(schedule, schedule.instructorName);
+                    return (
+                      <motion.div
+                        key={index}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className="p-4 rounded-xl bg-gray-700/50 border border-gray-600 hover:bg-blue-900/30 transition-all duration-200 backdrop-blur-sm"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div className="bg-blue-500/20 p-3 rounded-xl border border-blue-400/30">
+                              <ClockIcon className="h-6 w-6 text-blue-400" />
+                            </div>
+                            <div>
+                              <p className="font-medium text-white text-lg">{schedule.subject || 'N/A'}</p>
+                              <p className="text-sm text-gray-400">
+                                {schedule.startTime} - {schedule.endTime} • Room: {schedule.roomName}
+                              </p>
+                              {status && (
+                                <p
+                                  className={`text-sm font-medium mt-1 ${
+                                    status.includes('In Session') ? 'text-green-400' : 'text-red-400'
+                                  }`}
+                                >
+                                  {status}
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-medium text-gray-900">{schedule.subject || 'N/A'}</p>
-                            <p className="text-sm text-gray-500">
-                              {schedule.startTime} - {schedule.endTime} • Room: {schedule.roomName}
-                            </p>
-                          </div>
+                          <span className="px```jsx
+px-3 py-1 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-full text-sm font-medium">
+                            Today
+                          </span>
                         </div>
-                        <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-sm font-medium">
-                          Today
-                        </span>
-                      </div>
-                    </motion.div>
-                  ))}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="text-gray-500 text-center">No classes scheduled for today.</p>
+                <p className="text-gray-400 text-center text-lg">No classes scheduled for today.</p>
               )}
             </motion.div>
 
@@ -574,36 +552,34 @@ const StudentDashboard = () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
+                className="bg-gray-800 rounded-3xl shadow-2xl p-6 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] transition-all duration-300 border border-gray-700"
               >
-                <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                  <UserIcon className="h-7 w-7 text-indigo-600" />
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                  <UserIcon className="h-7 w-7 text-blue-400" />
                   Your Instructor
                 </h2>
                 <div className="flex items-start gap-4 mb-4">
-                  <div className="bg-indigo-100 p-3 rounded-xl">
-                    <UserIcon className="h-6 w-6 text-indigo-600" />
+                  <div className="bg-blue-500/20 p-3 rounded-xl border border-blue-400/30">
+                    <UserIcon className="h-6 w-6 text-blue-400" />
                   </div>
                   <div>
-                    <p className="text-lg font-medium text-gray-900">{instructor.fullName}</p>
-                    <p className="text-sm text-gray-500">{instructor.email}</p>
-                    <p className="text-sm text-gray-500">{instructor.department}</p>
+                    <p className="text-lg font-medium text-white">{instructor.fullName}</p>
+                    <p className="text-sm text-gray-400">{instructor.email}</p>
+                    <p className="text-sm text-gray-400">{instructor.department}</p>
                   </div>
                 </div>
                 <div className="mt-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">Assigned Subjects</p>
-                  {instructor.subjects &&
-                  instructor.subjects.filter((subject) => enrolledSubjects.some((s) => s.name === subject))
-                    .length > 0 ? (
+                  <p className="text-sm font-medium text-gray-300 mb-2">Assigned Subjects</p>
+                  {enrolledSubjects.some((subject) => subject.instructorId === instructor.id) ? (
                     <div className="flex flex-wrap gap-2">
-                      {instructor.subjects
-                        .filter((subject) => enrolledSubjects.some((s) => s.name === subject))
+                      {enrolledSubjects
+                        .filter((subject) => subject.instructorId === instructor.id)
                         .map((subject, index) => (
                           <span
                             key={index}
-                            className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm"
+                            className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-full text-sm border border-blue-400/30"
                           >
-                            {subject}
+                            {subject.name}
                           </span>
                         ))}
                     </div>
@@ -615,38 +591,6 @@ const StudentDashboard = () => {
             )}
           </div>
         </div>
-
-        {/* Notifications */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-lg p-6 mt-8 hover:shadow-xl transition-shadow duration-300"
-        >
-          <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <BellIcon className="h-7 w-7 text-indigo-600" />
-            Recent Notifications
-          </h2>
-          {notifications.length > 0 ? (
-            <div className="space-y-4">
-              {notifications.map((notification) => (
-                <motion.div
-                  key={notification.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="p-4 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors duration-200"
-                >
-                  <p className="font-medium text-gray-900">{notification.title}</p>
-                  <p className="text-sm text-gray-500">{notification.message}</p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {format(parseISO(notification.date), 'MMM d, yyyy')}
-                  </p>
-                </motion.div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 text-center">No notifications available.</p>
-          )}
-        </motion.div>
       </div>
     </div>
   );

@@ -1,10 +1,10 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut, 
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
-  User as FirebaseUser
+  User as FirebaseUser,
 } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -60,10 +60,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   // Function to get user data from Firestore
   const getUserData = async (user: FirebaseUser): Promise<EnrichedUser> => {
     try {
-      // First check localStorage for cached data
+      // Check localStorage for cached data
       const cachedUserData = localStorage.getItem('userData');
       const cachedUserRole = localStorage.getItem('userRole');
-      
+
       if (cachedUserData && cachedUserRole) {
         const userData = JSON.parse(cachedUserData);
         return {
@@ -71,7 +71,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           role: cachedUserRole as 'admin' | 'instructor' | 'student',
           fullName: userData.fullName,
           department: userData.department,
-          idNumber: userData.idNumber
+          idNumber: userData.idNumber,
         };
       }
 
@@ -82,7 +82,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         where('role', '==', 'admin')
       );
       const adminSnapshot = await getDocs(adminQuery);
-      
+
       if (!adminSnapshot.empty) {
         const adminData = adminSnapshot.docs[0].data();
         const enrichedUser = {
@@ -90,17 +90,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           role: 'admin' as 'admin',
           fullName: adminData.fullName,
           department: adminData.department,
-          idNumber: adminData.idNumber
+          idNumber: adminData.idNumber,
         };
-        
+
         // Cache the user data
         localStorage.setItem('userRole', 'admin');
-        localStorage.setItem('userData', JSON.stringify({
-          fullName: adminData.fullName,
-          department: adminData.department,
-          idNumber: adminData.idNumber
-        }));
-        
+        localStorage.setItem(
+          'userData',
+          JSON.stringify({
+            fullName: adminData.fullName,
+            department: adminData.department,
+            idNumber: adminData.idNumber,
+          })
+        );
+
         return enrichedUser;
       }
 
@@ -112,16 +115,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ...user,
           role: 'instructor' as 'instructor',
           fullName: userData.fullName,
-          department: userData.department
+          department: userData.department,
         };
-        
+
         // Cache the user data
         localStorage.setItem('userRole', 'instructor');
-        localStorage.setItem('userData', JSON.stringify({
-          fullName: userData.fullName,
-          department: userData.department
-        }));
-        
+        localStorage.setItem(
+          'userData',
+          JSON.stringify({
+            fullName: userData.fullName,
+            department: userData.department,
+          })
+        );
+
         return enrichedUser;
       }
 
@@ -133,52 +139,67 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ...user,
           role: 'student' as 'student',
           fullName: userData.fullName,
-          department: userData.department
+          department: userData.department,
         };
-        
+
         // Cache the user data
         localStorage.setItem('userRole', 'student');
-        localStorage.setItem('userData', JSON.stringify({
-          fullName: userData.fullName,
-          department: userData.department
-        }));
-        
+        localStorage.setItem(
+          'userData',
+          JSON.stringify({
+            fullName: userData.fullName,
+            department: userData.department,
+          })
+        );
+
         return enrichedUser;
       }
 
       return user;
     } catch (error) {
-      console.error("Error fetching user data:", error);
+      console.error('Error fetching user data:', error);
       return user;
     }
   };
 
   // Handle navigation based on user role
   const handleNavigation = (user: EnrichedUser | null) => {
-    if (!user || !user.role) return;
-
-    const publicPaths = ['/', '/login', '/admin/login', '/register'];
     const currentPath = location.pathname;
-    
-    // Don't redirect if user is already on a role-specific page
-    if (currentPath.includes(`/${user.role}/`)) return;
-    
-    // Don't redirect if user just logged out and is on a public page
-    if (!user && publicPaths.includes(currentPath)) return;
 
-    // Role-specific redirects
-    const routes = {
+    // If no user, redirect to /login for protected routes
+    if (!user) {
+      if (
+        currentPath === '/' ||
+        currentPath.includes('/admin/') ||
+        currentPath.includes('/instructor/') ||
+        currentPath.includes('/student/')
+      ) {
+        navigate('/login', { replace: true });
+      }
+      return;
+    }
+
+    // If user is authenticated, redirect to role-specific dashboard
+    const routes: Record<string, string> = {
       admin: '/admin/dashboard',
       instructor: '/instructor/dashboard',
-      student: '/student/dashboard'
+      student: '/student/dashboard',
     };
 
-    // Only redirect if user is on a public page or wrong role page
-    if (publicPaths.includes(currentPath) || 
+    const targetRoute = user.role && routes[user.role];
+
+    // Redirect only if on public path or wrong role path
+    if (
+      targetRoute &&
+      (currentPath === '/' ||
+        currentPath === '/login' ||
+        currentPath === '/admin/login' ||
+        currentPath === '/register' ||
         (currentPath.includes('/admin/') && user.role !== 'admin') ||
         (currentPath.includes('/instructor/') && user.role !== 'instructor') ||
-        (currentPath.includes('/student/') && user.role !== 'student')) {
-      navigate(routes[user.role], { replace: true });
+        (currentPath.includes('/student/') && user.role !== 'student'))
+    ) {
+      navigate(targetRoute, { replace: true });
     }
   };
 
@@ -194,24 +215,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setCurrentUser(null);
           localStorage.removeItem('userRole');
           localStorage.removeItem('userData');
-          
-          // Redirect to login if on protected route
-          const currentPath = location.pathname;
-          if (currentPath.includes('/admin/') || 
-              currentPath.includes('/instructor/') || 
-              currentPath.includes('/student/')) {
-            navigate('/login', { replace: true });
-          }
+          handleNavigation(null);
         }
       } catch (error) {
-        console.error("Auth state change error:", error);
+        console.error('Auth state change error:', error);
       } finally {
         setLoading(false);
       }
     });
 
     return () => unsubscribe();
-  }, [navigate, location]);
+  }, [navigate, location.pathname]);
 
   // Login function
   const login = async (email: string, password: string) => {
@@ -219,19 +233,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setLoading(true);
       // Format email if needed
       const loginEmail = email.includes('@') ? email : `${email}@yourdomain.com`;
-      
+
       // Sign in with Firebase
       const { user } = await signInWithEmailAndPassword(auth, loginEmail, password);
-      
+
       // Get user data and update state
       const enrichedUser = await getUserData(user);
       setCurrentUser(enrichedUser);
-      
-      // Navigation will be handled by the auth state listener
-      return Promise.resolve();
+
+      // Navigation handled by auth state listener
     } catch (error) {
-      console.error("Login error:", error);
-      return Promise.reject(error);
+      console.error('Login error:', error);
+      throw error;
     } finally {
       setLoading(false);
     }
@@ -239,11 +252,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   // Register function
   const register = async (email: string, password: string, userData: any): Promise<void> => {
-    const { user } = await createUserWithEmailAndPassword(auth, email, password);
-    await setDoc(doc(db, 'users', user.uid), {
-      ...userData,
-      createdAt: new Date().toISOString()
-    });
+    try {
+      const { user } = await createUserWithEmailAndPassword(auth, email, password);
+      await setDoc(doc(db, 'users', user.uid), {
+        ...userData,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('Register error:', error);
+      throw error;
+    }
   };
 
   // Logout function
@@ -254,7 +272,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.removeItem('userData');
       navigate('/login', { replace: true });
     } catch (error) {
-      console.error("Logout error:", error);
+      console.error('Logout error:', error);
       throw error;
     }
   };
@@ -265,26 +283,27 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const enrichedUser = {
         ...auth.currentUser,
         ...user,
-        role: 'admin'
+        role: 'admin',
       } as EnrichedUser;
-      
+
       setCurrentUser(enrichedUser);
-      
+
       // Cache admin data
       localStorage.setItem('userRole', 'admin');
-      localStorage.setItem('userData', JSON.stringify({
-        fullName: user.fullName,
-        idNumber: user.idNumber,
-        email: user.email
-      }));
-      
+      localStorage.setItem(
+        'userData',
+        JSON.stringify({
+          fullName: user.fullName,
+          idNumber: user.idNumber,
+          email: user.email,
+        })
+      );
+
       // Navigate to admin dashboard
       navigate('/admin/dashboard', { replace: true });
-      
-      return Promise.resolve();
     } catch (error) {
-      console.error("Set user error:", error);
-      return Promise.reject(error);
+      console.error('Set user error:', error);
+      throw error;
     }
   };
 
@@ -294,12 +313,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     register,
     logout,
     loading,
-    setUser
+    setUser,
   };
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading ? children : <div>Loading...</div>}
+      {loading ? <div>Loading...</div> : children}
     </AuthContext.Provider>
   );
 };

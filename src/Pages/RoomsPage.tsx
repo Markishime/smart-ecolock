@@ -12,7 +12,7 @@ import {
   WrenchIcon,
   CheckCircleIcon,
   BoltIcon,
-  ArrowPathIcon, // Replaced FanIcon
+  ArrowPathIcon,
   ShieldExclamationIcon,
 } from '@heroicons/react/24/outline';
 import { motion } from 'framer-motion';
@@ -71,8 +71,8 @@ interface Instructor {
 }
 
 interface RoomAssignment {
-  instructor?: Instructor | null;
-  schedules: Schedule[];
+  instructors: Instructor[]; // Changed to array to support multiple instructors
+  schedules: Record<string, Schedule[]>; // Schedules per instructor UID
   isOccupied: boolean;
 }
 
@@ -214,27 +214,27 @@ const RoomsPage = () => {
 
   const calculateTotalConsumption = (
     roomName: string,
-    instructorUid: string | undefined,
+    instructorUids: string[], // Updated to handle multiple instructors
     pzemData: Record<string, Record<string, AdminPZEM>>
   ): number => {
-    if (!instructorUid) return 0;
-
     const powerReadings: number[] = [];
-    Object.entries(pzemData).forEach(([uid, logs]) => {
-      if (uid === instructorUid) {
-        Object.values(logs).forEach(log => {
-          if (log.roomDetails?.name === roomName) {
-            powerReadings.push(parseFloat(log.Power) || 0);
-          }
-        });
-      }
+    instructorUids.forEach(instructorUid => {
+      Object.entries(pzemData).forEach(([uid, logs]) => {
+        if (uid === instructorUid) {
+          Object.values(logs).forEach(log => {
+            if (log.roomDetails?.name === roomName) {
+              powerReadings.push(parseFloat(log.Power) || 0);
+            }
+          });
+        }
+      });
     });
 
     const averagePowerWatts =
       powerReadings.length > 0 ? powerReadings.reduce((sum, power) => sum + power, 0) / powerReadings.length : 0;
 
     const roomSchedules = subjects
-      .filter(subject => subject.instructors.includes(instructorUid))
+      .filter(subject => instructorUids.some(uid => subject.instructors.includes(uid)))
       .flatMap(subject => subject.schedules)
       .filter(schedule => schedule.room === roomName);
 
@@ -245,21 +245,22 @@ const RoomsPage = () => {
       const startMinutes = startHour * 60 + startMinute;
       const endMinutes = endHour * 60 + endMinute;
       const durationMinutes = endMinutes - startMinutes;
-      totalOccupiedHours += durationMinutes > 0 ? durationMinutes / 60 : 0; // Avoid negative durations
+      totalOccupiedHours += durationMinutes > 0 ? durationMinutes / 60 : 0;
     });
 
     const totalConsumptionKWh = (averagePowerWatts * totalOccupiedHours) / 1000;
-    return totalConsumptionKWh >= 0 ? totalConsumptionKWh : 0; // Ensure non-negative
+    return totalConsumptionKWh >= 0 ? totalConsumptionKWh : 0;
   };
 
   const updateRoomsWithPowerData = (pzemData: Record<string, Record<string, AdminPZEM>>) => {
     setRooms(prevRooms => {
       return prevRooms.map(room => {
-        const { instructor } = getAssignedInstructorAndStatus(room.name);
+        const { instructors } = getAssignedInstructorAndStatus(room.name);
         let latestPowerData: AdminPZEM | null = null;
+        const instructorUids = instructors.map(i => i.uid);
         Object.entries(pzemData).forEach(([uid, logs]) => {
           Object.entries(logs).forEach(([timestamp, log]) => {
-            if (log.roomDetails?.name === room.name && (!instructor || uid === instructor.uid)) {
+            if (log.roomDetails?.name === room.name && instructorUids.includes(uid)) {
               if (!latestPowerData || log.timestamp > latestPowerData.timestamp) {
                 latestPowerData = log;
               }
@@ -267,7 +268,7 @@ const RoomsPage = () => {
           });
         });
 
-        const totalConsumptionKWh = calculateTotalConsumption(room.name, instructor?.uid, pzemData);
+        const totalConsumptionKWh = calculateTotalConsumption(room.name, instructorUids, pzemData);
         return {
           ...room,
           powerData: latestPowerData,
@@ -282,19 +283,30 @@ const RoomsPage = () => {
     const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
     const currentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
 
-    let instructor: Instructor | null = null;
-    const roomSchedules: Schedule[] = [];
+    // Find instructors assigned to this room in the Instructors node
+    const assignedInstructors: Instructor[] = instructors.filter(instructor => {
+      return instructor.rooms && roomName in instructor.rooms;
+    });
+
+    // Get schedules for each instructor in this room from subjects
+    const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
 
     for (const subject of subjects) {
+      // Find schedules for this room
       const matchingSchedules = subject.schedules.filter(schedule => schedule.room === roomName);
       if (matchingSchedules.length > 0) {
-        roomSchedules.push(...matchingSchedules);
-        if (!instructor) {
-          const instructorId = subject.instructors[0];
-          instructor = instructors.find(i => i.uid === instructorId) || null;
-        }
+        // Map schedules to each instructor
+        subject.instructors.forEach(instructorId => {
+          if (assignedInstructors.some(i => i.uid === instructorId)) {
+            if (!schedulesByInstructor[instructorId]) {
+              schedulesByInstructor[instructorId] = [];
+            }
+            schedulesByInstructor[instructorId].push(...matchingSchedules);
+          }
+        });
 
+        // Check if the room is currently occupied
         for (const schedule of matchingSchedules) {
           if (schedule.day === currentDay && currentTime >= schedule.startTime && currentTime <= schedule.endTime) {
             isOccupied = true;
@@ -304,7 +316,11 @@ const RoomsPage = () => {
       }
     }
 
-    return { instructor, schedules: roomSchedules, isOccupied };
+    return {
+      instructors: assignedInstructors,
+      schedules: schedulesByInstructor,
+      isOccupied,
+    };
   };
 
   const handleToggleFacility = async (roomId: string, facility: keyof Room['energyStatus'], instructorUid?: string) => {
@@ -350,7 +366,7 @@ const RoomsPage = () => {
   const handleAddRoom = async (roomData: Partial<Room>) => {
     try {
       const completeRoomData: Room = {
-        id: '', // Will be set by Firestore
+        id: '',
         name: roomData.name || '',
         building: roomData.building || '',
         floor: roomData.floor || '',
@@ -378,7 +394,7 @@ const RoomsPage = () => {
       });
 
       setIsAddModalOpen(false);
-      await fetchRooms(); // Ensure fresh data
+      await fetchRooms();
 
       Swal.fire({
         icon: 'success',
@@ -446,13 +462,12 @@ const RoomsPage = () => {
 
   const filteredRooms = rooms
     .map(room => {
-      const { instructor, schedules, isOccupied } = getAssignedInstructorAndStatus(room.name);
+      const { instructors, schedules, isOccupied } = getAssignedInstructorAndStatus(room.name);
       return {
         ...room,
         status: room.status === 'maintenance' ? 'maintenance' : isOccupied ? 'occupied' : 'available',
-        currentInstructor: instructor?.fullName || null,
-        instructorUid: instructor?.uid,
-        assignedSchedules: schedules.map(schedule => `${schedule.day} ${schedule.startTime}-${schedule.endTime}`),
+        assignedInstructors: instructors,
+        schedulesByInstructor: schedules,
       };
     })
     .filter(room => {
@@ -571,30 +586,38 @@ const RoomsPage = () => {
                     <span className="text-sm text-gray-600">Capacity</span>
                     <span className="text-sm font-medium">{room.capacity} seats</span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600 flex items-center">
+                  <div className="flex flex-col">
+                    <span className="text-sm text-gray-600 flex items-center mb-1">
                       <UserIcon className="w-4 h-4 mr-1" />
-                      Assigned Instructor
+                      Assigned Instructors
                     </span>
-                    {room.currentInstructor ? (
-                      <span className="text-sm font-medium">{room.currentInstructor}</span>
+                    {room.assignedInstructors.length > 0 ? (
+                      room.assignedInstructors.map(instructor => (
+                        <div key={instructor.uid} className="mb-2">
+                          <span className="text-sm font-medium">{instructor.fullName}</span>
+                          {room.schedulesByInstructor[instructor.uid]?.length > 0 ? (
+                            <div className="mt-1">
+                              <span className="text-sm text-gray-600 flex items-center mb-1">
+                                <ClockIcon className="w-4 h-4 mr-1" />
+                                Schedules in {room.name}
+                              </span>
+                              <div className="text-sm font-medium">
+                                {room.schedulesByInstructor[instructor.uid].map((schedule, index) => (
+                                  <div key={index}>
+                                    {schedule.day} {schedule.startTime}-{schedule.endTime}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-gray-500 mt-1">No schedules in this room</div>
+                          )}
+                        </div>
+                      ))
                     ) : (
                       <span className="text-sm text-gray-500">None</span>
                     )}
                   </div>
-                  {room.assignedSchedules.length > 0 && (
-                    <div className="flex flex-col">
-                      <span className="text-sm text-gray-600 flex items-center mb-1">
-                        <ClockIcon className="w-4 h-4 mr-1" />
-                        Schedules
-                      </span>
-                      <div className="text-sm font-medium">
-                        {room.assignedSchedules.map((schedule, index) => (
-                          <div key={index}>{schedule}</div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="mt-6 pt-6 border-t border-gray-200">
@@ -646,7 +669,7 @@ const RoomsPage = () => {
                   <h4 className="text-sm font-medium text-gray-900 mb-3">Facilities Control</h4>
                   <div className="grid grid-cols-3 gap-4">
                     <button
-                      onClick={() => handleToggleFacility(room.id, 'lights', room.instructorUid)}
+                      onClick={() => handleToggleFacility(room.id, 'lights', room.assignedInstructors[0]?.uid)}
                       className={`flex flex-col items-center p-3 rounded-lg ${
                         room.energyStatus.lights
                           ? 'bg-yellow-100 text-yellow-700'
@@ -657,7 +680,7 @@ const RoomsPage = () => {
                       <span className="text-xs">Lights</span>
                     </button>
                     <button
-                      onClick={() => handleToggleFacility(room.id, 'fans', room.instructorUid)}
+                      onClick={() => handleToggleFacility(room.id, 'fans', room.assignedInstructors[0]?.uid)}
                       className={`flex flex-col items-center p-3 rounded-lg ${
                         room.energyStatus.fans
                           ? 'bg-blue-100 text-blue-700'
@@ -668,7 +691,7 @@ const RoomsPage = () => {
                       <span className="text-xs">Fans</span>
                     </button>
                     <button
-                      onClick={() => handleToggleFacility(room.id, 'tampering', room.instructorUid)}
+                      onClick={() => handleToggleFacility(room.id, 'tampering', room.assignedInstructors[0]?.uid)}
                       className={`flex flex-col items-center p-3 rounded-lg ${
                         room.energyStatus.tampering
                           ? 'bg-red-100 text-red-700'

@@ -89,13 +89,11 @@ interface Schedule {
 const TakeAttendance: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const [sections, setSections] = useState<Section[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedSection, setSelectedSection] = useState<Section | null>(null);
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sectionsLoading, setSectionsLoading] = useState(true);
   const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [classStartTime, setClassStartTime] = useState<Date | null>(null);
@@ -123,7 +121,7 @@ const TakeAttendance: React.FC = () => {
     }
   }, [currentUser, navigate]);
 
-  // Fetch subjects from Firestore 'subjects' collection
+  // Fetch subjects from Firestore 'subjects' collection, filtered by instructorId
   useEffect(() => {
     const fetchSubjects = async () => {
       if (!currentUser) return;
@@ -132,73 +130,43 @@ const TakeAttendance: React.FC = () => {
         setSubjectsLoading(true);
         const subjectsRef = collection(db, 'subjects');
         const subjectsSnapshot = await getDocs(subjectsRef);
-        const fetchedSubjects = subjectsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          code: doc.data().code || '',
-          name: doc.data().name || '',
-          credits: doc.data().credits || 0,
-          department: doc.data().department || '',
-          details: doc.data().details || '',
-          learningObjectives: doc.data().learningObjectives || [],
-          prerequisites: doc.data().prerequisites || [],
-          sections: doc.data().sections || [],
-        })) as Subject[];
+        const fetchedSubjects = subjectsSnapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            code: doc.data().code || '',
+            name: doc.data().name || '',
+            credits: doc.data().credits || 0,
+            department: doc.data().department || '',
+            details: doc.data().details || '',
+            learningObjectives: doc.data().learningObjectives || [],
+            prerequisites: doc.data().prerequisites || [],
+            sections: doc.data().sections || [],
+          }))
+          .filter((subject) =>
+            subject.sections.some((section: Section) => section.instructorId === currentUser.uid)
+          ) as Subject[];
 
         setSubjects(fetchedSubjects);
         if (fetchedSubjects.length > 0) {
           setSelectedSubject(fetchedSubjects[0]); // Default to first subject
+          const instructorSections = fetchedSubjects[0].sections.filter(
+            (section: Section) => section.instructorId === currentUser.uid
+          );
+          setSelectedSection(instructorSections[0] || null); // Default to first section of the selected subject
+        } else {
+          setSelectedSubject(null);
+          setSelectedSection(null);
         }
       } catch (error) {
         console.error('Error fetching subjects from Firestore:', error);
         toast.error('Failed to load subjects');
       } finally {
         setSubjectsLoading(false);
+        setLoading(false);
       }
     };
 
     fetchSubjects();
-  }, [currentUser]);
-
-  // Fetch instructor's sections from Firestore using instructorId
-  useEffect(() => {
-    const fetchSections = async () => {
-      if (!currentUser) {
-        toast.error('User not authenticated. Please log in.');
-        setSections([]);
-        setSectionsLoading(false);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        setSectionsLoading(true);
-        const sectionsRef = collection(db, 'sections');
-        const q = query(sectionsRef, where('instructorId', '==', currentUser.uid));
-        const sectionsSnapshot = await getDocs(q);
-        const fetchedSections = sectionsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          code: doc.data().code || '',
-          createdAt: doc.data().createdAt || '',
-          instructorRfidUid: doc.data().instructorRfidUid || '',
-          name: doc.data().name || '',
-          students: doc.data().students || [],
-          subjectId: doc.data().subjectId || '',
-          instructorId: doc.data().instructorId || '',
-        })) as Section[];
-        setSections(fetchedSections);
-        if (fetchedSections.length > 0) {
-          setSelectedSection(fetchedSections[0]); // Default to first section
-        }
-      } catch (error) {
-        console.error('Error fetching sections from Firestore:', error);
-        toast.error('Failed to load sections');
-      } finally {
-        setSectionsLoading(false);
-        setLoading(false);
-      }
-    };
-
-    fetchSections();
   }, [currentUser]);
 
   // Fetch students for the selected section from RTDB
@@ -659,8 +627,13 @@ const TakeAttendance: React.FC = () => {
                   onChange={(e) => {
                     const subject = subjects.find((s) => s.id === e.target.value) || null;
                     setSelectedSubject(subject);
-                    if (subject && subject.sections.length > 0) {
-                      setSelectedSection(subject.sections[0]); // Default to first section of selected subject
+                    if (subject) {
+                      const instructorSections = subject.sections.filter(
+                        (section: Section) => section.instructorId === currentUser?.uid
+                      );
+                      setSelectedSection(instructorSections[0] || null);
+                    } else {
+                      setSelectedSection(null);
                     }
                   }}
                   className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
@@ -680,7 +653,7 @@ const TakeAttendance: React.FC = () => {
                 </select>
               )}
               {/* Section Dropdown */}
-              {sectionsLoading || !selectedSubject ? (
+              {subjectsLoading || !selectedSubject ? (
                 <div className="flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-indigo-600"></div>
                   <span className="text-gray-600">Loading sections...</span>
@@ -689,7 +662,7 @@ const TakeAttendance: React.FC = () => {
                 <select
                   value={selectedSection?.id || ''}
                   onChange={(e) => {
-                    const section = selectedSubject?.sections.find((s) => s.id === e.target.value) || sections.find((s) => s.id === e.target.value) || null;
+                    const section = selectedSubject?.sections.find((s) => s.id === e.target.value) || null;
                     setSelectedSection(section);
                   }}
                   className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
@@ -698,17 +671,13 @@ const TakeAttendance: React.FC = () => {
                     Select Section
                   </option>
                   {selectedSubject?.sections.length > 0 ? (
-                    selectedSubject.sections.map((section) => (
-                      <option key={section.id} value={section.id}>
-                        {section.name} ({section.code})
-                      </option>
-                    ))
-                  ) : sections.length > 0 ? (
-                    sections.map((section) => (
-                      <option key={section.id} value={section.id}>
-                        {section.name} ({section.code})
-                      </option>
-                    ))
+                    selectedSubject.sections
+                      .filter((section: Section) => section.instructorId === currentUser?.uid)
+                      .map((section) => (
+                        <option key={section.id} value={section.id}>
+                          {section.name} ({section.code})
+                        </option>
+                      ))
                   ) : (
                     <option disabled>No sections available</option>
                   )}

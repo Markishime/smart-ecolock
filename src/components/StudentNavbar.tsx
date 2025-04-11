@@ -90,18 +90,11 @@ const StudentNavbar: React.FC<StudentNavbarProps> = ({ student }) => {
               Dashboard
             </Link>
             <Link
-              to="/student/attendance"
+              to="/student/student-schedules"
               className="text-cyan-200 hover:text-white hover:bg-gray-800/50 px-3 py-2 rounded-md text-sm font-medium transition-colors"
             >
-              Attendance
+              Student Schedules
             </Link>
-            <Link
-              to="/student/schedule"
-              className="text-cyan-200 hover:text-white hover:bg-gray-800/50 px-3 py-2 rounded-md text-sm font-medium transition-colors"
-            >
-              Schedule
-            </Link>
-
             <motion.button
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.95 }}
@@ -134,7 +127,7 @@ const StudentNavbar: React.FC<StudentNavbarProps> = ({ student }) => {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -10, scale: 0.95 }}
                   className="absolute right-0 mt-2 w-48 rounded-xl shadow-xl py-1 bg-gray-800/80 backdrop-blur-lg border border-cyan-800 z-50"
-                  style={{ top: '100%' }} // Ensure dropdown appears below the button
+                  style={{ top: '100%' }}
                 >
                   <Link
                     to="/student/profile"

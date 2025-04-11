@@ -51,7 +51,7 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
 }) => {
   const [name, setName] = useState(initialData?.name || '');
   const [code, setCode] = useState(initialData?.code || '');
-  const [instructorRfidUid, setInstructorRfidUid] = useState(initialData?.instructorRfidUid || '');
+  const [selectedInstructorId, setSelectedInstructorId] = useState(initialData?.instructorId || '');
   const [subjectId, setSubjectId] = useState(initialData?.subjectId || '');
   const [schedules, setSchedules] = useState<Schedule[]>(
     initialData?.schedules?.length
@@ -60,6 +60,7 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
   );
   const [rooms, setRooms] = useState<Room[]>([]);
 
+  // Fetch rooms from Firestore
   useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, 'rooms'),
@@ -78,29 +79,47 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
     return () => unsubscribe();
   }, []);
 
+  // Sync form state with initialData or reset when modal opens
   useEffect(() => {
-    if (initialData) {
-      setName(initialData.name);
-      setCode(initialData.code);
-      setInstructorRfidUid(initialData.instructorRfidUid);
-      setSubjectId(initialData.subjectId);
-      setSchedules(
-        initialData.schedules?.length
-          ? initialData.schedules
-          : [{ day: '', startTime: '', endTime: '', roomName: '' }]
-      );
+    if (isOpen) {
+      if (initialData) {
+        // Editing mode: Populate with initial data
+        setName(initialData.name);
+        setCode(initialData.code);
+        setSelectedInstructorId(initialData.instructorId || '');
+        setSubjectId(initialData.subjectId);
+        setSchedules(
+          initialData.schedules?.length
+            ? initialData.schedules
+            : [{ day: '', startTime: '', endTime: '', roomName: '' }]
+        );
+      } else {
+        // Adding mode: Reset to defaults
+        setName('');
+        setCode('');
+        setSelectedInstructorId('');
+        setSubjectId('');
+        setSchedules([{ day: '', startTime: '', endTime: '', roomName: '' }]);
+      }
+      // Log instructors for debugging
+      console.log('Instructors available in modal:', instructors);
     }
-  }, [initialData]);
+  }, [isOpen, initialData, instructors]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const selectedInstructor = instructors.find((i) => i.rfidUid === instructorRfidUid);
+    const selectedInstructor = instructors.find((i) => i.id === selectedInstructorId);
+    if (!selectedInstructor) {
+      alert('Please select a valid instructor.');
+      return;
+    }
+
     const sectionData = {
-      id: initialData?.id, // Include id if present (for editing)
+      ...(initialData?.id && { id: initialData.id }), // Include id only if editing
       name,
       code,
-      instructorRfidUid,
-      instructorId: selectedInstructor?.id || '',
+      instructorRfidUid: selectedInstructor.rfidUid,
+      instructorId: selectedInstructor.id,
       subjectId,
       schedules: schedules
         .map((s) => ({
@@ -110,20 +129,8 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
         .filter((s) => s.day && s.startTime && s.endTime && s.roomName),
     };
 
-    if (initialData && !sectionData.id) {
-      console.error('ID is required for editing');
-      return;
-    }
-
+    console.log('Submitting section data:', sectionData);
     onSubmit(sectionData);
-
-    if (!initialData) {
-      setName('');
-      setCode('');
-      setInstructorRfidUid('');
-      setSubjectId('');
-      setSchedules([{ day: '', startTime: '', endTime: '', roomName: '' }]);
-    }
     onClose();
   };
 
@@ -184,8 +191,11 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
           <div>
             <label className="block text-sm font-medium text-gray-700">Instructor</label>
             <select
-              value={instructorRfidUid}
-              onChange={(e) => setInstructorRfidUid(e.target.value)}
+              value={selectedInstructorId}
+              onChange={(e) => {
+                console.log('Selected instructor ID:', e.target.value);
+                setSelectedInstructorId(e.target.value);
+              }}
               className="mt-1 block w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-500"
               required
             >
@@ -193,7 +203,7 @@ const AddSectionModal: React.FC<AddSectionModalProps> = ({
                 Select an Instructor
               </option>
               {instructors.map((instructor) => (
-                <option key={instructor.id} value={instructor.rfidUid}>
+                <option key={instructor.id} value={instructor.id}>
                   {instructor.fullName} (RFID: {instructor.rfidUid})
                 </option>
               ))}
