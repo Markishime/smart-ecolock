@@ -25,9 +25,8 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
-import { collection, getDocs } from 'firebase/firestore';
 import { ref, onValue, off } from 'firebase/database';
-import { db, rtdb } from '../firebase';
+import { rtdb } from '../firebase';
 import Swal from 'sweetalert2';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
@@ -37,20 +36,6 @@ interface Room {
   name: string;
   building: string;
   floor: string;
-}
-
-interface Schedule {
-  [x: string]: any;
-  day: string;
-  startTime: string;
-  endTime: string;
-  roomName: {
-    name: string;
-    pzem: PZEMData;
-  };
-  section: string;
-  subject: string;
-  subjectCode: string;
 }
 
 interface EnergyUsage {
@@ -76,22 +61,44 @@ interface EnergyUsage {
   };
 }
 
-interface PZEMData {
+interface AccessLog {
   action: string;
-  current: string;
-  energy: string;
-  frequency: string;
-  power: string;
-  powerFactor: string;
+  fullName: string;
+  role: string;
   timestamp: string;
-  voltage: string;
+  AdminPZEM?: {
+    current: string;
+    energy: string;
+    frequency: string;
+    power: string;
+    powerFactor: string;
+    voltage: string;
+    timestamp: string;
+    roomDetails: {
+      building: string;
+      floor: string;
+      name: string;
+      status: string;
+      type: string;
+    };
+  };
+}
+
+interface Schedule {
+  day: string;
+  startTime: string;
+  endTime: string;
+  roomName: string | { name: string };
+  section: string;
+  subject: string;
+  subjectCode: string;
 }
 
 interface InstructorData {
   ClassStatus?: {
     Status: string;
     dateTime: string;
-    schedules?: Schedule[]; // Changed to array to handle multiple schedules
+    schedules?: Schedule[];
   };
   Profile?: {
     fullName: string;
@@ -126,150 +133,182 @@ const EnergyUsagePage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   useEffect(() => {
-    const fetchRooms = async () => {
-      try {
-        const roomsCollection = collection(db, 'rooms');
-        const roomsSnapshot = await getDocs(roomsCollection);
-        const roomsData = roomsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name || '',
-          building: doc.data().building || '',
-          floor: doc.data().floor || '',
-        }) as Room);
+    setLoading(true);
 
-        const sortedRooms = roomsData.sort((a, b) => a.name.localeCompare(b.name));
-        setRooms(sortedRooms);
-        if (sortedRooms.length > 0) {
-          setSelectedClassroom(sortedRooms[0].name);
-        }
-      } catch (error) {
-        console.error('Error fetching rooms:', error);
-        Swal.fire({
-          icon: 'error',
-          title: 'Error',
-          text: 'Failed to fetch rooms',
-          customClass: {
-            popup: 'rounded-lg sm:rounded-xl',
-            title: 'text-blue-900',
-            htmlContainer: 'text-blue-700',
-            confirmButton: 'bg-blue-600 hover:bg-blue-700',
-          },
-        });
-      }
-    };
-
-    fetchRooms();
-  }, []);
-
-  useEffect(() => {
+    const accessLogsRef = ref(rtdb, 'AccessLogs');
     const instructorsRef = ref(rtdb, 'Instructors');
-    const unsubscribe = onValue(
-      instructorsRef,
-      (snapshot) => {
-        const data = snapshot.val() || {};
-        // Normalize data to handle single schedule as array
-        Object.values(data).forEach((instructor: any) => {
-          if (instructor.ClassStatus?.schedule && !instructor.ClassStatus.schedules) {
-            instructor.ClassStatus.schedules = [instructor.ClassStatus.schedule];
-            delete instructor.ClassStatus.schedule;
-          }
-        });
-        setInstructorsData(data);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching Instructors data:', error);
-        Swal.fire({
-          icon: 'error',
-          title: 'Error',
-          text: 'Failed to fetch instructors data',
-          customClass: {
-            popup: 'rounded-lg sm:rounded-xl',
-            title: 'text-blue-900',
-            htmlContainer: 'text-blue-700',
-            confirmButton: 'bg-blue-600 hover:bg-blue-700',
-          },
-        });
-      }
-    );
 
-    return () => off(instructorsRef);
+    const listeners = [
+      {
+        ref: accessLogsRef,
+        handler: (snapshot: any) => {
+          const data = snapshot.val() || {};
+          const allLogs: AccessLog[] = Object.values(data)
+            .flatMap((userLogs: any) => Object.values(userLogs))
+            .filter((log: any): log is AccessLog => log.action === 'exit' && log.AdminPZEM);
+
+          // Derive rooms
+          const uniqueRooms = Array.from(
+            new Set(allLogs.map((log) => log.AdminPZEM!.roomDetails.name))
+          ).map((name, index) => ({
+            id: `room_${index}`,
+            name,
+            building: allLogs.find((log) => log.AdminPZEM!.roomDetails.name === name)?.AdminPZEM!
+              .roomDetails.building || 'Unknown',
+            floor: allLogs.find((log) => log.AdminPZEM!.roomDetails.name === name)?.AdminPZEM!
+              .roomDetails.floor || 'Unknown',
+          }));
+
+          const sortedRooms = uniqueRooms.sort((a, b) => a.name.localeCompare(b.name));
+          setRooms(sortedRooms);
+          if (sortedRooms.length > 0 && !selectedClassroom) {
+            setSelectedClassroom(sortedRooms[0].name);
+          }
+
+          // Process energy data
+          processEnergyData(allLogs);
+        },
+      },
+      {
+        ref: instructorsRef,
+        handler: (snapshot: any) => {
+          const data = snapshot.val() || {};
+          // Normalize schedules to array
+          Object.values(data).forEach((instructor: any) => {
+            if (instructor.ClassStatus?.schedule && !instructor.ClassStatus.schedules) {
+              instructor.ClassStatus.schedules = [instructor.ClassStatus.schedule];
+              delete instructor.ClassStatus.schedule;
+            }
+          });
+          setInstructorsData(data);
+        },
+      },
+    ];
+
+    listeners.forEach(({ ref, handler }) => {
+      onValue(
+        ref,
+        handler,
+        (error) => {
+          console.error(`Error fetching data from ${ref.key || 'unknown reference'}:`, error);
+          Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: `Failed to fetch data`,
+            customClass: {
+              popup: 'rounded-lg sm:rounded-xl',
+              title: 'text-blue-900',
+              htmlContainer: 'text-blue-700',
+              confirmButton: 'bg-blue-600 hover:bg-blue-700',
+            },
+          });
+        }
+      );
+    });
+
+    setLoading(false);
+
+    return () => {
+      listeners.forEach(({ ref }) => off(ref));
+    };
   }, []);
 
-  useEffect(() => {
+  const processEnergyData = (logs: AccessLog[]) => {
     if (!selectedClassroom || Object.keys(instructorsData).length === 0) return;
 
-    const processData = () => {
-      try {
-        const energyEntries: EnergyUsage[] = [];
-        const timeRangeHours = timeRange === 'hour' ? 1 : timeRange === 'day' ? 24 : 7 * 24;
+    try {
+      const energyEntries: EnergyUsage[] = [];
+      const timeRangeHours = timeRange === 'hour' ? 1 : timeRange === 'day' ? 24 : 7 * 24;
 
-        Object.entries(instructorsData).forEach(([uid, instructor]) => {
+      logs.forEach((log, index) => {
+        const pzem = log.AdminPZEM!;
+        if (pzem.roomDetails.name !== selectedClassroom) return;
+
+        const powerWatts = parseFloat(pzem.power) || 0;
+        const consumptionKWh = parseFloat(pzem.energy) || (powerWatts * timeRangeHours) / 1000;
+        const timestampStr = pzem.timestamp.replace(/_/g, ':');
+        const timestamp = new Date(timestampStr);
+
+        if (isNaN(timestamp.getTime())) {
+          console.warn(`Invalid timestamp for log ${index}: ${timestampStr}`);
+          return;
+        }
+
+        // Find matching instructor and schedule
+        let instructorName = log.fullName || 'Unknown Instructor';
+        let subject = 'Unknown Subject';
+        let subjectCode = 'N/A';
+        let schedule = {
+          day: 'N/A',
+          startTime: 'N/A',
+          endTime: 'N/A',
+          section: 'N/A',
+        };
+
+        Object.entries(instructorsData).some(([uid, instructor]) => {
           const schedules = instructor.ClassStatus?.schedules || [];
-          schedules.forEach((schedule, index) => {
-            if (schedule.roomName?.name === selectedClassroom && schedule.pzem) {
-              const pzem = schedule.pzem;
-              const powerWatts = parseFloat(pzem.power) || 0;
-              const consumptionKWh = (powerWatts * timeRangeHours) / 1000;
-              const instructorName = instructor.Profile?.fullName || 'Unknown Instructor';
-              const timestampStr = pzem.timestamp.replace(/_/g, ':');
-              const timestamp = new Date(timestampStr);
-
-              if (isNaN(timestamp.getTime())) {
-                console.warn(`Invalid timestamp for UID ${uid}, schedule ${index}: ${timestampStr}`);
-                return;
-              }
-
-              energyEntries.push({
-                id: `${uid}_${pzem.timestamp}_${index}`,
-                classroomId: selectedClassroom,
-                timestamp,
-                powerWatts,
-                consumptionKWh,
-                devices: {
-                  lighting: consumptionKWh * 0.25,
-                  projection: consumptionKWh * 0.25,
-                  computers: consumptionKWh * 0.25,
-                  hvac: consumptionKWh * 0.25,
-                },
-                instructorName,
-                subject: schedule.subject || 'Unknown Subject',
-                subjectCode: schedule.subjectCode || 'N/A',
-                schedule: {
-                  day: schedule.day || 'N/A',
-                  startTime: schedule.startTime || 'N/A',
-                  endTime: schedule.endTime || 'N/A',
-                  section: schedule.section || 'N/A',
-                },
-              });
+          return schedules.some((sched) => {
+            const roomName =
+              typeof sched.roomName === 'string' ? sched.roomName : sched.roomName.name;
+            if (
+              roomName === selectedClassroom &&
+              instructor.Profile?.fullName === log.fullName
+            ) {
+              instructorName = instructor.Profile?.fullName || instructorName;
+              subject = sched.subject || subject;
+              subjectCode = sched.subjectCode || subjectCode;
+              schedule = {
+                day: sched.day || schedule.day,
+                startTime: sched.startTime || schedule.startTime,
+                endTime: sched.endTime || schedule.endTime,
+                section: sched.section || schedule.section,
+              };
+              return true;
             }
+            return false;
           });
         });
 
-        const startTime = getStartTime();
-        const filteredEnergyData = energyEntries
-          .filter(entry => entry.timestamp > startTime)
-          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-        setEnergyData(filteredEnergyData);
-      } catch (error) {
-        console.error('Error processing Instructors data:', error);
-        Swal.fire({
-          icon: 'error',
-          title: 'Error',
-          text: 'Failed to process energy data',
-          customClass: {
-            popup: 'rounded-lg sm:rounded-xl',
-            title: 'text-blue-900',
-            htmlContainer: 'text-blue-700',
-            confirmButton: 'bg-blue-600 hover:bg-blue-700',
+        energyEntries.push({
+          id: `${log.fullName}_${pzem.timestamp}_${index}`,
+          classroomId: selectedClassroom,
+          timestamp,
+          powerWatts,
+          consumptionKWh,
+          devices: {
+            lighting: consumptionKWh * 0.25,
+            projection: consumptionKWh * 0.25,
+            computers: consumptionKWh * 0.25,
+            hvac: consumptionKWh * 0.25,
           },
+          instructorName,
+          subject,
+          subjectCode,
+          schedule,
         });
-      }
-    };
+      });
 
-    processData();
-  }, [selectedClassroom, timeRange, instructorsData]);
+      const startTime = getStartTime();
+      const filteredEnergyData = energyEntries
+        .filter((entry) => entry.timestamp > startTime)
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      setEnergyData(filteredEnergyData);
+    } catch (error) {
+      console.error('Error processing energy data:', error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: 'Failed to process energy data',
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+          confirmButton: 'bg-blue-600 hover:bg-blue-700',
+        },
+      });
+    }
+  };
 
   const getStartTime = () => {
     const now = new Date();
@@ -285,42 +324,50 @@ const EnergyUsagePage: React.FC = () => {
     }
   };
 
-  const getLatestPzemData = (): { pzem: PZEMData; schedule: Schedule } | null => {
-    let latestData: { pzem: PZEMData; schedule: Schedule } | null = null;
-    Object.entries(instructorsData).forEach(([uid, instructor]) => {
-      const schedules = instructor.ClassStatus?.schedules || [];
-      schedules.forEach(schedule => {
-        if (schedule.roomName?.name === selectedClassroom && schedule.pzem) {
-          const pzem = schedule.pzem;
-          if (!latestData || pzem.timestamp > latestData.pzem.timestamp) {
-            latestData = { pzem, schedule };
-          }
-        }
-      });
+  const getLatestPzemData = (): { pzem: AccessLog['AdminPZEM']; log: AccessLog } | null => {
+    let latestData: { pzem: AccessLog['AdminPZEM']; log: AccessLog } | null = null;
+    Object.values(energyData).forEach((entry) => {
+      const log = {
+        action: 'exit',
+        fullName: entry.instructorName,
+        role: 'instructor',
+        timestamp: entry.timestamp.toISOString(),
+        AdminPZEM: {
+          current: '0', // Placeholder, update if needed
+          energy: entry.consumptionKWh.toString(),
+          frequency: '0',
+          power: entry.powerWatts.toString(),
+          powerFactor: '0',
+          voltage: '0',
+          timestamp: entry.timestamp.toISOString().replace(/:/g, '_'),
+          roomDetails: {
+            building: rooms.find((r) => r.name === entry.classroomId)?.building || 'Unknown',
+            floor: rooms.find((r) => r.name === entry.classroomId)?.floor || 'Unknown',
+            name: entry.classroomId,
+            status: 'occupied',
+            type: 'classroom',
+          },
+        },
+      };
+      if (
+        entry.classroomId === selectedClassroom &&
+        (!latestData || entry.timestamp > new Date(latestData.pzem!.timestamp.replace(/_/g, ':')))
+      ) {
+        latestData = { pzem: log.AdminPZEM, log };
+      }
     });
     return latestData;
   };
 
   const getLatestInstructorName = (): string => {
-    let latestInstructorName = 'Unknown Instructor';
-    let latestTimestamp = '';
-    Object.entries(instructorsData).forEach(([uid, instructor]) => {
-      const schedules = instructor.ClassStatus?.schedules || [];
-      schedules.forEach(schedule => {
-        if (schedule.roomName?.name === selectedClassroom && schedule.pzem) {
-          const pzem = schedule.pzem;
-          if (!latestTimestamp || pzem.timestamp > latestTimestamp) {
-            latestTimestamp = pzem.timestamp;
-            latestInstructorName = instructor.Profile?.fullName || 'Unknown Instructor';
-          }
-        }
-      });
-    });
-    return latestInstructorName;
+    const latestEntry = energyData
+      .filter((entry) => entry.classroomId === selectedClassroom)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+    return latestEntry?.instructorName || 'Unknown Instructor';
   };
 
   const chartData = {
-    labels: energyData.map(entry =>
+    labels: energyData.map((entry) =>
       entry.timestamp.toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
@@ -330,14 +377,14 @@ const EnergyUsagePage: React.FC = () => {
     datasets: [
       {
         label: 'Energy Consumption (kWh)',
-        data: energyData.map(entry => entry.consumptionKWh),
+        data: energyData.map((entry) => entry.consumptionKWh),
         borderColor: 'rgb(99, 102, 241)',
         backgroundColor: 'rgba(99, 102, 241, 0.5)',
         tension: 0.4,
       },
       {
         label: 'Power (W)',
-        data: energyData.map(entry => entry.powerWatts),
+        data: energyData.map((entry) => entry.powerWatts),
         borderColor: 'rgb(239, 68, 68)',
         backgroundColor: 'rgba(239, 68, 68, 0.5)',
         tension: 0.4,
@@ -393,14 +440,12 @@ const EnergyUsagePage: React.FC = () => {
   // Computed consumption stats
   const totalConsumption = energyData.reduce((sum, entry) => sum + entry.consumptionKWh, 0);
   const averageConsumption = totalConsumption / (energyData.length || 1);
-  const peakUsage = energyData.length > 0 ? Math.max(...energyData.map(d => d.consumptionKWh)) : 0;
+  const peakUsage = energyData.length > 0 ? Math.max(...energyData.map((d) => d.consumptionKWh)) : 0;
   const totalPower = energyData.reduce((sum, entry) => sum + entry.powerWatts, 0);
 
   const calculatePowerCosts = () => {
-    const timeRangeHours = timeRange === 'hour' ? 1 : timeRange === 'day' ? 24 : 7 * 24;
     const consumptionKWh = totalConsumption;
     const cost = consumptionKWh * VECO_RATE_PER_KWH;
-
     return {
       consumptionKWh: consumptionKWh.toFixed(2),
       cost: cost.toFixed(2),
@@ -422,18 +467,25 @@ const EnergyUsagePage: React.FC = () => {
 
   const latestData = getLatestPzemData();
   const latestPzemData = latestData?.pzem;
-  const latestSchedule = latestData?.schedule;
+  const latestLog = latestData?.log;
   const latestInstructorName = getLatestInstructorName();
 
   // Filter energy data based on search query
-  const filteredEnergyData = energyData.filter(entry =>
-    [entry.instructorName, entry.subject, entry.subjectCode, entry.schedule.section]
-      .some(field => field.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredEnergyData = energyData.filter((entry) =>
+    [entry.instructorName, entry.subject, entry.subjectCode, entry.schedule.section].some(
+      (field) => field.toLowerCase().includes(searchQuery.toLowerCase())
+    )
   );
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <AdminSidebar/>
+      <div
+        className={`fixed top-0 left-0 h-full bg-white shadow-2xl transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:translate-x-0 w-[80px] lg:w-64 z-50`}
+      >
+        <AdminSidebar />
+      </div>
 
       <button
         onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -445,8 +497,8 @@ const EnergyUsagePage: React.FC = () => {
       </button>
 
       <div
-        className={`flex-1 transition-all duration-300 ease-in-out ${
-          isSidebarOpen ? 'ml-64' : 'ml-0 md:ml-64'
+        className={`flex-1 transition-all duration-300 ${
+          isSidebarOpen ? 'ml-[80px] lg:ml-64' : 'ml-0 md:ml-[80px] lg:ml-64'
         } overflow-y-auto p-4 sm:p-8`}
       >
         <div className="mb-6 sm:mb-8">
@@ -465,10 +517,10 @@ const EnergyUsagePage: React.FC = () => {
             {rooms.length > 0 ? (
               <select
                 value={selectedClassroom}
-                onChange={e => setSelectedClassroom(e.target.value)}
+                onChange={(e) => setSelectedClassroom(e.target.value)}
                 className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2.5 text-sm sm:text-base"
               >
-                {rooms.map(room => (
+                {rooms.map((room) => (
                   <option key={room.id} value={room.name}>
                     {room.name} - {room.building}, {room.floor}
                   </option>
@@ -488,7 +540,7 @@ const EnergyUsagePage: React.FC = () => {
               Time Range
             </label>
             <div className="flex gap-2 sm:gap-3">
-              {['hour', 'day', 'week'].map(range => (
+              {['hour', 'day', 'week'].map((range) => (
                 <button
                   key={range}
                   onClick={() => setTimeRange(range as any)}
@@ -517,7 +569,7 @@ const EnergyUsagePage: React.FC = () => {
                 <BoltIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
                 Real-time Power Consumption ({selectedClassroom})
               </h3>
-              {latestPzemData && latestSchedule ? (
+              {latestPzemData && latestLog ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 text-xs sm:text-sm">
                   <div>
                     <span className="text-gray-600">Power:</span>{' '}
@@ -557,15 +609,18 @@ const EnergyUsagePage: React.FC = () => {
                       <AcademicCapIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
                       <span>Subject:</span>{' '}
                       <span className="font-medium ml-1">
-                        {latestSchedule.subject} ({latestSchedule.subjectCode})
+                        {energyData[energyData.length - 1]?.subject} (
+                        {energyData[energyData.length - 1]?.subjectCode})
                       </span>
                     </div>
                     <div className="flex items-center text-gray-600 mt-2">
                       <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
                       <span>Schedule:</span>{' '}
                       <span className="font-medium ml-1">
-                        {latestSchedule.day} {latestSchedule.startTime}-{latestSchedule.endTime}, Section{' '}
-                        {latestSchedule.section}
+                        {energyData[energyData.length - 1]?.schedule.day}{' '}
+                        {energyData[energyData.length - 1]?.schedule.startTime}-
+                        {energyData[energyData.length - 1]?.schedule.endTime}, Section{' '}
+                        {energyData[energyData.length - 1]?.schedule.section}
                       </span>
                     </div>
                   </div>
@@ -638,7 +693,7 @@ const EnergyUsagePage: React.FC = () => {
                   <input
                     type="number"
                     value={calcPowerWatts}
-                    onChange={e => setCalcPowerWatts(e.target.value)}
+                    onChange={(e) => setCalcPowerWatts(e.target.value)}
                     className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     min="0"
                     step="0.01"
@@ -651,7 +706,7 @@ const EnergyUsagePage: React.FC = () => {
                   <input
                     type="number"
                     value={calcHours}
-                    onChange={e => setCalcHours(e.target.value)}
+                    onChange={(e) => setCalcHours(e.target.value)}
                     className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     min="0"
                     step="0.01"
@@ -729,7 +784,7 @@ const EnergyUsagePage: React.FC = () => {
                       type="text"
                       placeholder="Search by instructor, subject, or section..."
                       value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
+                      onChange={(e) => setSearchQuery(e.target.value)}
                       className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     />
                   </div>
@@ -763,7 +818,7 @@ const EnergyUsagePage: React.FC = () => {
                     </thead>
                     <tbody>
                       {filteredEnergyData.length > 0 ? (
-                        filteredEnergyData.map(entry => (
+                        filteredEnergyData.map((entry) => (
                           <tr key={entry.id} className="border-b hover:bg-gray-50">
                             <td className="px-4 sm:px-6 py-3 sm:py-4">
                               {entry.timestamp.toLocaleString()}
@@ -779,9 +834,7 @@ const EnergyUsagePage: React.FC = () => {
                             <td className="px-4 sm:px-6 py-3 sm:py-4">
                               {entry.schedule.day} {entry.schedule.startTime}-{entry.schedule.endTime}
                             </td>
-                            <td className="px-4 sm:px-6 py-3 sm:py-4">
-                              {entry.schedule.section}
-                            </td>
+                            <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.schedule.section}</td>
                             <td className="px-4 sm:px-6 py-3 sm:py-4">
                               {entry.powerWatts.toFixed(2)}
                             </td>
@@ -838,7 +891,11 @@ const DeviceEnergy = ({ label, value, color, icon: Icon }: any) => (
     <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
       <div
         className="h-1.5 sm:h-2 rounded-full transition-all duration-500"
-        style={{ width: `${Math.min((value / 10) * 100, 100)}%`, backgroundColor: color, boxShadow: `0 0 8px ${color}40` }}
+        style={{
+          width: `${Math.min((value / 10) * 100, 100)}%`,
+          backgroundColor: color,
+          boxShadow: `0 0 8px ${color}40`,
+        }}
       />
     </div>
   </div>
