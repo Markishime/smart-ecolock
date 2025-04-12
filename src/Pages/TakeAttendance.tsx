@@ -152,7 +152,7 @@ const TakeAttendance: React.FC = () => {
           const instructorSections = fetchedSubjects[0].sections.filter(
             (section: Section) => section.instructorId === currentUser.uid
           );
-          setSelectedSection(instructorSections[0] || null); // Default to first section of the selected subject
+          setSelectedSection(instructorSections[0] || null); // Default to first section
         } else {
           setSelectedSubject(null);
           setSelectedSection(null);
@@ -355,6 +355,11 @@ const TakeAttendance: React.FC = () => {
           showCancelButton: true,
           confirmButtonText: 'Yes, overwrite',
           cancelButtonText: 'No, cancel',
+          customClass: {
+            popup: 'rounded-lg sm:rounded-xl',
+            confirmButton: 'bg-indigo-600 hover:bg-indigo-700',
+            cancelButton: 'bg-gray-200 hover:bg-gray-300',
+          },
         });
 
         if (!confirm.isConfirmed) {
@@ -539,16 +544,20 @@ const TakeAttendance: React.FC = () => {
 
   const getStatusDisplay = (student: Student) => {
     const weightInfo = student.weight ? (
-      <span className="ml-2 text-blue-600">({student.weight.toFixed(1)} kg)</span>
+      <span className="ml-1 sm:ml-2 text-blue-600 text-xs sm:text-sm">
+        ({student.weight.toFixed(1)} kg)
+      </span>
     ) : null;
     const timeInfo = student.timestamp ? (
-      <span className="ml-2 text-gray-500 text-xs">({new Date(student.timestamp).toLocaleTimeString()})</span>
+      <span className="ml-1 sm:ml-2 text-gray-500 text-xs">
+        ({new Date(student.timestamp).toLocaleTimeString()})
+      </span>
     ) : null;
 
     if (student.rfidAuthenticated && !student.weightAuthenticated) {
       return (
-        <span className="text-yellow-600 flex items-center gap-1">
-          <ClockIcon className="w-4 h-4" />
+        <span className="text-yellow-600 flex items-center gap-1 text-xs sm:text-sm">
+          <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4" />
           Waiting for weight authentication... {weightInfo} {timeInfo}
         </span>
       );
@@ -557,25 +566,25 @@ const TakeAttendance: React.FC = () => {
     switch (student.attendanceStatus) {
       case 'present':
         return (
-          <span className="text-green-600">
+          <span className="text-green-600 text-xs sm:text-sm">
             Present {weightInfo} {timeInfo}
           </span>
         );
       case 'late':
         return (
-          <span className="text-yellow-600">
+          <span className="text-yellow-600 text-xs sm:text-sm">
             Late {weightInfo} {timeInfo}
           </span>
         );
       case 'absent':
         return (
-          <span className="text-red-600">
+          <span className="text-red-600 text-xs sm:text-sm">
             Absent {weightInfo} {timeInfo}
           </span>
         );
       default:
         return (
-          <span className="text-gray-600">
+          <span className="text-gray-600 text-xs sm:text-sm">
             Not marked {weightInfo} {timeInfo}
           </span>
         );
@@ -584,8 +593,8 @@ const TakeAttendance: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
@@ -606,20 +615,20 @@ const TakeAttendance: React.FC = () => {
         }}
       />
 
-      <main className="container mx-auto px-6 py-8 mt-16">
+      <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 mt-14 sm:mt-16">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-lg p-6"
+          className="bg-white rounded-lg sm:rounded-2xl shadow-md sm:shadow-lg p-4 sm:p-6"
         >
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 space-y-4 md:space-y-0">
-            <div className="flex items-center space-x-4">
-              <h1 className="text-2xl font-bold text-gray-800">Take Attendance</h1>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Take Attendance</h1>
               {/* Subject Dropdown */}
               {subjectsLoading ? (
                 <div className="flex items-center space-x-2">
-                  <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-indigo-600"></div>
-                  <span className="text-gray-600">Loading subjects...</span>
+                  <div className="animate-spin rounded-full h-5 w-5 sm:h-6 sm:w-6 border-t-2 border-indigo-600"></div>
+                  <span className="text-gray-600 text-sm">Loading subjects...</span>
                 </div>
               ) : (
                 <select
@@ -636,7 +645,7 @@ const TakeAttendance: React.FC = () => {
                       setSelectedSection(null);
                     }
                   }}
-                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
+                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-full sm:w-44 text-sm sm:text-base"
                 >
                   <option value="" disabled>
                     Select Subject
@@ -644,7 +653,7 @@ const TakeAttendance: React.FC = () => {
                   {subjects.length > 0 ? (
                     subjects.map((subject) => (
                       <option key={subject.id} value={subject.id}>
-                        {subject.name} ({subject.code})
+                        {subject.name.length > 20 ? `${subject.name.substring(0, 17)}...` : subject.name} ({subject.code})
                       </option>
                     ))
                   ) : (
@@ -655,8 +664,8 @@ const TakeAttendance: React.FC = () => {
               {/* Section Dropdown */}
               {subjectsLoading || !selectedSubject ? (
                 <div className="flex items-center space-x-2">
-                  <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-indigo-600"></div>
-                  <span className="text-gray-600">Loading sections...</span>
+                  <div className="animate-spin rounded-full h-5 w-5 sm:h-6 sm:w-6 border-t-2 border-indigo-600"></div>
+                  <span className="text-gray-600 text-sm">Loading sections...</span>
                 </div>
               ) : (
                 <select
@@ -665,7 +674,7 @@ const TakeAttendance: React.FC = () => {
                     const section = selectedSubject?.sections.find((s) => s.id === e.target.value) || null;
                     setSelectedSection(section);
                   }}
-                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-48"
+                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-full sm:w-44 text-sm sm:text-base"
                 >
                   <option value="" disabled>
                     Select Section
@@ -684,11 +693,11 @@ const TakeAttendance: React.FC = () => {
                 </select>
               )}
             </div>
-            <div className="flex items-center space-x-2">
-              <div className="text-sm text-gray-600">{formattedTime}</div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="text-xs sm:text-sm text-gray-600">{formattedTime}</div>
               <button
                 onClick={exportAttendance}
-                className="flex items-center space-x-1 px-3 py-1 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100"
+                className="flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 text-xs sm:text-sm"
                 disabled={!selectedSection}
               >
                 <ArrowDownTrayIcon className="w-4 h-4" />
@@ -698,18 +707,20 @@ const TakeAttendance: React.FC = () => {
           </div>
 
           {currentSchedule && selectedSection && selectedSubject && (
-            <div className="mb-6 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 text-white shadow-lg">
-              <div className="flex justify-between items-start">
+            <div className="mb-4 sm:mb-6 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg sm:rounded-xl p-3 sm:p-4 text-white shadow-md sm:shadow-lg">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
                 <div>
-                  <h3 className="text-lg font-semibold">{selectedSubject.name}</h3>
-                  <div className="mt-1 text-blue-100">
+                  <h3 className="text-base sm:text-lg font-semibold">
+                    {selectedSubject.name.length > 25 ? `${selectedSubject.name.substring(0, 22)}...` : selectedSubject.name}
+                  </h3>
+                  <div className="mt-1 text-blue-100 text-xs sm:text-sm">
                     <p>Room {currentSchedule.room} • Section {selectedSection.name}</p>
                     <p>
                       {currentSchedule.startTime} - {currentSchedule.endTime} • {currentSchedule.day}
                     </p>
                   </div>
                 </div>
-                <div className="bg-white/20 px-3 py-1 rounded-full text-sm backdrop-blur-sm">
+                <div className="bg-white/20 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm backdrop-blur-sm">
                   Current Class
                 </div>
               </div>
@@ -717,30 +728,30 @@ const TakeAttendance: React.FC = () => {
           )}
 
           {roomId && selectedSection && (
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-gray-800 mb-4">Room Seat Plan</h2>
+            <div className="mb-4 sm:mb-6">
+              <h2 className="text-base sm:text-lg font-semibold text-gray-800 mb-3 sm:mb-4">Room Seat Plan</h2>
               <SeatPlanLayout roomId={roomId} sectionId={selectedSection.id} />
             </div>
           )}
 
           {selectedSection && (
-            <div className="flex flex-wrap items-center gap-3 mb-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4 mb-4 sm:mb-6">
               <div className="relative flex-1 sm:flex-none">
-                <MagnifyingGlassIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                <MagnifyingGlassIcon className="w-4 h-4 sm:w-5 sm:h-5 text-gray-400 absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2" />
                 <input
                   type="text"
                   placeholder="Search students..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full sm:w-64 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+                  className="w-full sm:w-56 pl-8 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition text-sm"
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Filter by status:</label>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <label className="text-xs sm:text-sm text-gray-600 whitespace-nowrap">Filter:</label>
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as 'all' | 'present' | 'absent' | 'late')}
-                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500"
+                  className="border rounded-lg p-1.5 sm:p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 text-xs sm:text-sm w-28 sm:w-32"
                 >
                   <option value="all">All</option>
                   <option value="present">Present</option>
@@ -748,12 +759,12 @@ const TakeAttendance: React.FC = () => {
                   <option value="absent">Absent</option>
                 </select>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Sort by:</label>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <label className="text-xs sm:text-sm text-gray-600 whitespace-nowrap">Sort:</label>
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value as 'name' | 'status' | 'time')}
-                  className="border rounded-lg p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500"
+                  className="border rounded-lg p-1.5 sm:p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 text-xs sm:text-sm w-28 sm:w-32"
                 >
                   <option value="name">Name</option>
                   <option value="status">Status</option>
@@ -762,40 +773,42 @@ const TakeAttendance: React.FC = () => {
               </div>
               <button
                 onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                className="flex items-center gap-1 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                className="flex items-center gap-1 px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-xs sm:text-sm"
               >
                 {sortOrder === 'asc' ? (
-                  <ArrowUpIcon className="w-5 h-5" />
+                  <ArrowUpIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 ) : (
-                  <ArrowDownIcon className="w-5 h-5" />
+                  <ArrowDownIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 )}
-                <span>{sortOrder === 'asc' ? 'Ascending' : 'Descending'}</span>
+                <span>{sortOrder === 'asc' ? 'Asc' : 'Desc'}</span>
               </button>
             </div>
           )}
 
           {selectedSection ? (
             filteredAndSortedStudents.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 {filteredAndSortedStudents.map((student) => (
                   <motion.div
                     key={student.rfidUid}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     whileHover={{ scale: 1.02 }}
-                    className="bg-gray-50 rounded-xl p-4 flex flex-col space-y-2 border border-gray-200"
+                    className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-4 flex flex-col space-y-2 border border-gray-200"
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="flex-1">
-                        <p className="font-medium text-gray-800">{student.studentName}</p>
-                        <p className="text-sm text-gray-600">UID: {student.rfidUid}</p>
-                        <p className="text-sm text-gray-600">ID: {student.idNumber}</p>
+                        <p className="font-medium text-gray-800 text-sm sm:text-base">
+                          {student.studentName.length > 20 ? `${student.studentName.substring(0, 17)}...` : student.studentName}
+                        </p>
+                        <p className="text-xs text-gray-600">UID: {student.rfidUid.substring(0, 8)}...</p>
+                        <p className="text-xs text-gray-600">ID: {student.idNumber}</p>
                       </div>
-                      <div className="flex space-x-2">
+                      <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-end sm:items-center">
                         <select
                           value={student.assignedSensorId || ''}
                           onChange={(e) => assignToSensor(student.rfidUid, e.target.value)}
-                          className="border rounded-lg p-1 text-sm"
+                          className="border rounded-lg p-1 text-xs sm:text-sm w-28 sm:w-32"
                         >
                           <option value="">Assign Sensor</option>
                           {availableSensors.map((sensor) => (
@@ -804,60 +817,65 @@ const TakeAttendance: React.FC = () => {
                             </option>
                           ))}
                         </select>
-                        <button
-                          onClick={() => handleAttendanceChange(student.rfidUid, 'present')}
-                          className={`
-                            p-2 rounded-full
-                            ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white' : 'bg-green-100 text-green-600 hover:bg-green-200'}
-                          `}
-                        >
-                          <CheckCircleIcon className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={() => handleAttendanceChange(student.rfidUid, 'late')}
-                          className={`
-                            p-2 rounded-full
-                            ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
-                          `}
-                        >
-                          <ClockIcon className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={() => handleAttendanceChange(student.rfidUid, 'absent')}
-                          className={`
-                            p-2 rounded-full
-                            ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 hover:bg-red-200'}
-                          `}
-                        >
-                          <XCircleIcon className="w-5 h-5" />
-                        </button>
+                        <div className="flex gap-1 sm:gap-2">
+                          <button
+                            onClick={() => handleAttendanceChange(student.rfidUid, 'present')}
+                            className={`
+                              p-1.5 sm:p-2 rounded-full
+                              ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white' : 'bg-green-100 text-green-600 hover:bg-green-200'}
+                            `}
+                          >
+                            <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                          <button
+                            onClick={() => handleAttendanceChange(student.rfidUid, 'late')}
+                            className={`
+                              p-1.5 sm:p-2 rounded-full
+                              ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
+                            `}
+                          >
+                            <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                          <button
+                            onClick={() => handleAttendanceChange(student.rfidUid, 'absent')}
+                            className={`
+                              p-1.5 sm:p-2 rounded-full
+                              ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 hover:bg-red-200'}
+                            `}
+                          >
+                            <XCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <p className="text-sm">
+                    <div className="space-y-1 text-xs sm:text-sm">
+                      <p>
                         <span className="font-medium text-gray-700">Status:</span> {getStatusDisplay(student)}
                       </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Email:</span> {student.email || 'N/A'}
+                      <p>
+                        <span className="font-medium text-gray-700">Email:</span>{' '}
+                        {student.email.length > 20 ? `${student.email.substring(0, 17)}...` : student.email || 'N/A'}
                       </p>
-                      <p className="text-sm">
+                      <p>
                         <span className="font-medium text-gray-700">Mobile:</span> {student.mobileNumber || 'N/A'}
                       </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Department:</span> {student.department || 'N/A'}
+                      <p>
+                        <span className="font-medium text-gray-700">Dept:</span>{' '}
+                        {student.department.length > 15 ? `${student.department.substring(0, 12)}...` : student.department || 'N/A'}
                       </p>
-                      <p className="text-sm">
+                      <p>
                         <span className="font-medium text-gray-700">Section:</span> {student.section || 'Unknown'}
                       </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Subject:</span> {selectedSubject?.name || 'N/A'}
+                      <p>
+                        <span className="font-medium text-gray-700">Subject:</span>{' '}
+                        {selectedSubject && selectedSubject.name.length > 20 ? `${selectedSubject.name.substring(0, 17)}...` : selectedSubject?.name || 'N/A'}
                       </p>
-                      <p className="text-sm">
+                      <p>
                         <span className="font-medium text-gray-700">Weight:</span>{' '}
                         {student.weight ? `${student.weight.toFixed(1)} kg` : 'N/A'}
                       </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-gray-700">Weight Verified:</span>{' '}
+                      <p>
+                        <span className="font-medium text-gray-700">Verified:</span>{' '}
                         {student.weightAuthenticated ? (
                           <span className="text-green-600">Yes</span>
                         ) : (
@@ -865,7 +883,7 @@ const TakeAttendance: React.FC = () => {
                         )}
                       </p>
                       {student.assignedSensorId && (
-                        <p className="text-sm">
+                        <p>
                           <span className="font-medium text-gray-700">Sensor:</span> {student.assignedSensorId}
                         </p>
                       )}
@@ -874,33 +892,32 @@ const TakeAttendance: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <p className="text-gray-600 text-center py-4">No students found for this section.</p>
+              <p className="text-gray-600 text-center py-4 text-sm sm:text-base">No students found for this section.</p>
             )
           ) : (
-            <p className="text-gray-600 text-center py-4">Please select a subject and section to view students.</p>
+            <p className="text-gray-600 text-center py-4 text-sm sm:text-base">Please select a subject and section to view students.</p>
           )}
 
-          <div className="mt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-4">
             {selectedSection && (
-              <div className="text-sm text-gray-600">
-                Attendance Rate: {stats.attendanceRate.toFixed(1)}% | Punctuality Rate:{' '}
-                {stats.punctualityRate.toFixed(1)}%
+              <div className="text-xs sm:text-sm text-gray-600">
+                Attendance: {stats.attendanceRate.toFixed(1)}% | Punctuality: {stats.punctualityRate.toFixed(1)}%
               </div>
             )}
-            <div className="flex space-x-4">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full sm:w-auto">
               <Link
                 to="/instructor/attendance-management"
-                className="bg-indigo-100 text-indigo-700 px-6 py-3 rounded-lg hover:bg-indigo-200 transition flex items-center gap-2"
+                className="bg-indigo-100 text-indigo-700 px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-200 transition flex items-center justify-center gap-2 text-xs sm:text-sm"
               >
-                <CalendarIcon className="w-5 h-5" />
-                View All Records
+                <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                View Records
               </Link>
               <button
                 onClick={submitAttendance}
-                className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition flex items-center gap-2"
+                className="bg-indigo-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 text-xs sm:text-sm disabled:opacity-50"
                 disabled={!selectedSection || !selectedSubject || students.length === 0}
               >
-                <CheckCircleIcon className="w-5 h-5" />
+                <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 Submit Attendance
               </button>
             </div>
@@ -917,28 +934,31 @@ const TakeAttendance: React.FC = () => {
           <motion.div
             initial={{ scale: 0.9 }}
             animate={{ scale: 1 }}
-            className="bg-white p-6 rounded-xl shadow-xl max-w-md w-full mx-4"
+            className="bg-white p-4 sm:p-6 rounded-lg sm:rounded-xl shadow-xl w-full max-w-[90vw] sm:max-w-md mx-4"
           >
-            <h2 className="text-xl font-bold mb-4">Confirm Attendance</h2>
-            <div className="space-y-2">
+            <h2 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Confirm Attendance</h2>
+            <div className="space-y-2 text-sm sm:text-base">
               <p>
-                <strong>Student:</strong> {confirmationStudent.studentName}
+                <strong>Student:</strong>{' '}
+                {confirmationStudent.studentName.length > 20
+                  ? `${confirmationStudent.studentName.substring(0, 17)}...`
+                  : confirmationStudent.studentName}
               </p>
               <p>
                 <strong>Tap Time:</strong> {confirmationTapTime.toLocaleString()}
               </p>
-              <p className="text-sm text-gray-600">Weight sensor confirmation pending...</p>
+              <p className="text-gray-600">Weight sensor confirmation pending...</p>
             </div>
-            <div className="mt-6 flex justify-end space-x-3">
+            <div className="mt-4 sm:mt-6 flex justify-end gap-2 sm:gap-3">
               <button
                 onClick={rejectAttendance}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                className="px-3 sm:px-4 py-1.5 sm:py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-xs sm:text-sm"
               >
                 Reject
               </button>
               <button
                 onClick={confirmAttendance}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                className="px-3 sm:px-4 py-1.5 sm:py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-xs sm:text-sm"
               >
                 Confirm
               </button>

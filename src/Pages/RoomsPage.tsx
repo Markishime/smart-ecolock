@@ -1,19 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
-import { db, rtdb } from '../firebase';
-import { ref, onValue, off, update } from 'firebase/database';
+import { db } from '../firebase';
 import AdminSidebar from '../components/AdminSidebar';
 import {
   BuildingOfficeIcon,
   PlusIcon,
-  LightBulbIcon,
   UserIcon,
   ClockIcon,
   WrenchIcon,
   CheckCircleIcon,
-  BoltIcon,
-  ArrowPathIcon,
-  ShieldExclamationIcon,
 } from '@heroicons/react/24/outline';
 import { motion } from 'framer-motion';
 import Swal from 'sweetalert2';
@@ -34,20 +29,13 @@ interface Room {
     hasComputers: boolean;
     hasWifi: boolean;
   };
-  energyStatus: {
-    lights: boolean;
-    fans: boolean;
-    tampering: boolean;
-  };
-  powerData?: AdminPZEM | null;
-  totalConsumptionKWh?: number;
 }
 
 interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  room: string;
+  roomName: string;
 }
 
 interface Subject {
@@ -57,47 +45,36 @@ interface Subject {
   credits: number;
   department: string;
   details: string;
-  instructorId?: string;
-  instructors: string[];
-  schedules: Schedule[];
+  sections: Section[];
   status: 'active' | 'inactive';
+}
+
+interface Section {
+  id: string;
+  code: string;
+  name: string;
+  instructorId: string;
+  instructorName: string;
+  schedules: Schedule[];
 }
 
 interface Instructor {
   uid: string;
   fullName: string;
   email?: string;
-  rooms?: Record<string, { facilities: { lights: boolean; fans: boolean; tampering: boolean; lastUpdated: string } }>;
+  assignedSubjects: Subject[];
 }
 
 interface RoomAssignment {
-  instructors: Instructor[]; // Changed to array to support multiple instructors
-  schedules: Record<string, Schedule[]>; // Schedules per instructor UID
+  instructors: Instructor[];
+  schedules: Record<string, Schedule[]>;
   isOccupied: boolean;
-}
-
-interface AdminPZEM {
-  Current: string;
-  Energy: string;
-  Frequency: string;
-  Power: string;
-  PowerFactor: string;
-  Voltage: string;
-  roomDetails: {
-    building: string;
-    floor: string;
-    name: string;
-    status: string;
-    type: string;
-  };
-  timestamp: string;
 }
 
 const RoomsPage = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [instructors, setInstructors] = useState<Instructor[]>([]);
-  const [adminPZEM, setAdminPZEM] = useState<Record<string, Record<string, AdminPZEM>>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<Room['status'] | 'all'>('all');
@@ -107,16 +84,11 @@ const RoomsPage = () => {
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
-      await Promise.all([fetchRooms(), fetchSubjects(), fetchInstructors(), fetchPowerData()]);
+      await Promise.all([fetchRooms(), fetchSubjects(), fetchInstructors()]);
       setLastUpdated(new Date());
       setIsLoading(false);
     };
     fetchData();
-
-    return () => {
-      off(ref(rtdb, 'AdminPZEM'));
-      off(ref(rtdb, 'Instructors'));
-    };
   }, []);
 
   const fetchRooms = async () => {
@@ -139,14 +111,6 @@ const RoomsPage = () => {
             hasWifi: false,
             ...(data.facilities || {}),
           },
-          energyStatus: {
-            lights: false,
-            fans: false,
-            tampering: false,
-            ...(data.energyStatus || {}),
-          },
-          powerData: null,
-          totalConsumptionKWh: 0,
         } as Room;
       });
       setRooms(roomsData);
@@ -168,9 +132,7 @@ const RoomsPage = () => {
           credits: data.credits || 0,
           department: data.department || 'Unassigned',
           details: data.details || '',
-          instructorId: data.instructorId || undefined,
-          instructors: data.instructors || [],
-          schedules: data.schedules || [],
+          sections: data.sections || [],
           status: data.status || 'active',
         } as Subject;
       });
@@ -181,101 +143,23 @@ const RoomsPage = () => {
     }
   };
 
-  const fetchInstructors = () => {
+  const fetchInstructors = async () => {
     try {
-      const instructorsRef = ref(rtdb, 'Instructors');
-      onValue(instructorsRef, (snapshot) => {
-        const data = snapshot.val() || {};
-        const instructorsData = Object.entries(data).map(([uid, value]) => ({
-          uid,
-          ...(value as object),
-        })) as Instructor[];
-        setInstructors(instructorsData);
+      const teachersSnapshot = await getDocs(collection(db, 'teachers'));
+      const instructorsData = teachersSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          uid: doc.id,
+          fullName: data.fullName || 'Unknown Instructor',
+          email: data.email || '',
+          assignedSubjects: data.assignedSubjects || [],
+        } as Instructor;
       });
+      setInstructors(instructorsData);
     } catch (error) {
       console.error('Error fetching instructors:', error);
       Swal.fire('Error', 'Failed to fetch instructors', 'error');
     }
-  };
-
-  const fetchPowerData = () => {
-    try {
-      const adminPZEMRef = ref(rtdb, 'AdminPZEM');
-      onValue(adminPZEMRef, (snapshot) => {
-        const data = snapshot.val() || {};
-        setAdminPZEM(data);
-        updateRoomsWithPowerData(data);
-      });
-    } catch (error) {
-      console.error('Error fetching AdminPZEM data:', error);
-      Swal.fire('Error', 'Failed to fetch power data', 'error');
-    }
-  };
-
-  const calculateTotalConsumption = (
-    roomName: string,
-    instructorUids: string[], // Updated to handle multiple instructors
-    pzemData: Record<string, Record<string, AdminPZEM>>
-  ): number => {
-    const powerReadings: number[] = [];
-    instructorUids.forEach(instructorUid => {
-      Object.entries(pzemData).forEach(([uid, logs]) => {
-        if (uid === instructorUid) {
-          Object.values(logs).forEach(log => {
-            if (log.roomDetails?.name === roomName) {
-              powerReadings.push(parseFloat(log.Power) || 0);
-            }
-          });
-        }
-      });
-    });
-
-    const averagePowerWatts =
-      powerReadings.length > 0 ? powerReadings.reduce((sum, power) => sum + power, 0) / powerReadings.length : 0;
-
-    const roomSchedules = subjects
-      .filter(subject => instructorUids.some(uid => subject.instructors.includes(uid)))
-      .flatMap(subject => subject.schedules)
-      .filter(schedule => schedule.room === roomName);
-
-    let totalOccupiedHours = 0;
-    roomSchedules.forEach(schedule => {
-      const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
-      const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
-      const startMinutes = startHour * 60 + startMinute;
-      const endMinutes = endHour * 60 + endMinute;
-      const durationMinutes = endMinutes - startMinutes;
-      totalOccupiedHours += durationMinutes > 0 ? durationMinutes / 60 : 0;
-    });
-
-    const totalConsumptionKWh = (averagePowerWatts * totalOccupiedHours) / 1000;
-    return totalConsumptionKWh >= 0 ? totalConsumptionKWh : 0;
-  };
-
-  const updateRoomsWithPowerData = (pzemData: Record<string, Record<string, AdminPZEM>>) => {
-    setRooms(prevRooms => {
-      return prevRooms.map(room => {
-        const { instructors } = getAssignedInstructorAndStatus(room.name);
-        let latestPowerData: AdminPZEM | null = null;
-        const instructorUids = instructors.map(i => i.uid);
-        Object.entries(pzemData).forEach(([uid, logs]) => {
-          Object.entries(logs).forEach(([timestamp, log]) => {
-            if (log.roomDetails?.name === room.name && instructorUids.includes(uid)) {
-              if (!latestPowerData || log.timestamp > latestPowerData.timestamp) {
-                latestPowerData = log;
-              }
-            }
-          });
-        });
-
-        const totalConsumptionKWh = calculateTotalConsumption(room.name, instructorUids, pzemData);
-        return {
-          ...room,
-          powerData: latestPowerData,
-          totalConsumptionKWh,
-        };
-      });
-    });
   };
 
   const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
@@ -283,84 +167,39 @@ const RoomsPage = () => {
     const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
     const currentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
 
-    // Find instructors assigned to this room in the Instructors node
-    const assignedInstructors: Instructor[] = instructors.filter(instructor => {
-      return instructor.rooms && roomName in instructor.rooms;
-    });
-
-    // Get schedules for each instructor in this room from subjects
+    const assignedInstructors: Instructor[] = [];
     const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
 
-    for (const subject of subjects) {
-      // Find schedules for this room
-      const matchingSchedules = subject.schedules.filter(schedule => schedule.room === roomName);
-      if (matchingSchedules.length > 0) {
-        // Map schedules to each instructor
-        subject.instructors.forEach(instructorId => {
-          if (assignedInstructors.some(i => i.uid === instructorId)) {
-            if (!schedulesByInstructor[instructorId]) {
-              schedulesByInstructor[instructorId] = [];
+    instructors.forEach(instructor => {
+      const matchingSchedules: Schedule[] = [];
+      instructor.assignedSubjects.forEach(subject => {
+        subject.sections.forEach(section => {
+          section.schedules.forEach(schedule => {
+            if (schedule.roomName === roomName) {
+              matchingSchedules.push(schedule);
+              if (
+                schedule.day === currentDay &&
+                currentTime >= schedule.startTime &&
+                currentTime <= schedule.endTime
+              ) {
+                isOccupied = true;
+              }
             }
-            schedulesByInstructor[instructorId].push(...matchingSchedules);
-          }
+          });
         });
-
-        // Check if the room is currently occupied
-        for (const schedule of matchingSchedules) {
-          if (schedule.day === currentDay && currentTime >= schedule.startTime && currentTime <= schedule.endTime) {
-            isOccupied = true;
-            break;
-          }
-        }
+      });
+      if (matchingSchedules.length > 0) {
+        assignedInstructors.push(instructor);
+        schedulesByInstructor[instructor.uid] = matchingSchedules;
       }
-    }
+    });
 
     return {
       instructors: assignedInstructors,
       schedules: schedulesByInstructor,
       isOccupied,
     };
-  };
-
-  const handleToggleFacility = async (roomId: string, facility: keyof Room['energyStatus'], instructorUid?: string) => {
-    try {
-      const room = rooms.find(r => r.id === roomId);
-      if (!room) throw new Error('Room not found');
-
-      const updatedStatus = {
-        ...room.energyStatus,
-        [facility]: !room.energyStatus[facility],
-      };
-
-      await updateDoc(doc(db, 'rooms', roomId), {
-        energyStatus: updatedStatus,
-      });
-
-      setRooms(prevRooms =>
-        prevRooms.map(r =>
-          r.id === roomId ? { ...r, energyStatus: updatedStatus } : r
-        )
-      );
-
-      if (instructorUid) {
-        const instructorRef = ref(rtdb, `Instructors/${instructorUid}/rooms/${room.name}/facilities`);
-        await update(instructorRef, {
-          [facility]: updatedStatus[facility],
-          lastUpdated: new Date().toISOString(),
-        });
-      }
-
-      Swal.fire({
-        icon: 'success',
-        title: `${facility} ${updatedStatus[facility] ? 'turned on' : 'turned off'}`,
-        showConfirmButton: false,
-        timer: 1500,
-      });
-    } catch (error) {
-      console.error('Error updating facility status:', error);
-      Swal.fire('Error', 'Failed to update facility status', 'error');
-    }
   };
 
   const handleAddRoom = async (roomData: Partial<Room>) => {
@@ -379,13 +218,6 @@ const RoomsPage = () => {
           hasComputers: roomData.facilities?.hasComputers || false,
           hasWifi: roomData.facilities?.hasWifi || false,
         },
-        energyStatus: {
-          lights: roomData.energyStatus?.lights || false,
-          fans: roomData.energyStatus?.fans || false,
-          tampering: roomData.energyStatus?.tampering || false,
-        },
-        powerData: null,
-        totalConsumptionKWh: 0,
       };
 
       await addDoc(collection(db, 'rooms'), {
@@ -401,6 +233,11 @@ const RoomsPage = () => {
         title: 'Room Added Successfully',
         showConfirmButton: false,
         timer: 1500,
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+        },
       });
     } catch (error) {
       console.error('Error adding room:', error);
@@ -408,6 +245,12 @@ const RoomsPage = () => {
         icon: 'error',
         title: 'Error',
         text: 'Failed to add room',
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+          confirmButton: 'bg-blue-600 hover:bg-blue-700',
+        },
       });
     }
   };
@@ -429,10 +272,25 @@ const RoomsPage = () => {
         title: 'Room set to Maintenance',
         showConfirmButton: false,
         timer: 1500,
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+        },
       });
     } catch (error) {
       console.error('Error setting room to maintenance:', error);
-      Swal.fire('Error', 'Failed to set room to maintenance', 'error');
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: 'Failed to set room to maintenance',
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+          confirmButton: 'bg-blue-600 hover:bg-blue-700',
+        },
+      });
     }
   };
 
@@ -453,10 +311,25 @@ const RoomsPage = () => {
         title: 'Room set to Available',
         showConfirmButton: false,
         timer: 1500,
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+        },
       });
     } catch (error) {
       console.error('Error setting room to available:', error);
-      Swal.fire('Error', 'Failed to set room to available', 'error');
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: 'Failed to set room to available',
+        customClass: {
+          popup: 'rounded-lg sm:rounded-xl',
+          title: 'text-blue-900',
+          htmlContainer: 'text-blue-700',
+          confirmButton: 'bg-blue-600 hover:bg-blue-700',
+        },
+      });
     }
   };
 
@@ -474,8 +347,8 @@ const RoomsPage = () => {
       const matchesStatus = filterStatus === 'all' || room.status === filterStatus;
       const matchesSearch =
         searchQuery === '' ||
-        (room?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false) ||
-        (room?.building?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false);
+        room.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        room.building.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesStatus && matchesSearch;
     });
 
@@ -483,48 +356,46 @@ const RoomsPage = () => {
     <div className="flex h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
       <AdminSidebar />
 
-      <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-8 overflow-y-auto">
-        <div className="flex justify-between items-center mb-8">
+      <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-4 sm:p-8 overflow-y-auto">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 sm:mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-blue-900 flex items-center">
-              <div className="w-8 h-8 mr-3 text-blue-600">
-                <BuildingOfficeIcon />
-              </div>
+            <h1 className="text-xl sm:text-2xl font-bold text-blue-900 flex items-center">
+              <BuildingOfficeIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-blue-600" />
               Room Management
             </h1>
-            <p className="mt-1 text-blue-600/80">Monitor rooms and power consumption in real-time</p>
+            <p className="mt-1 text-blue-600/80 text-sm sm:text-base">Monitor rooms in real-time</p>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="mt-4 sm:mt-0">
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className={theme.components.button.primary}
+              className={`${theme.components.button.primary} text-sm sm:text-base px-3 sm:px-4 py-1.5 sm:py-2`}
             >
-              <PlusIcon className="w-5 h-5 mr-2" />
+              <PlusIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
               Add Room
             </button>
           </div>
         </div>
 
-        <div className={theme.components.card}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className={`${theme.components.card} p-4 sm:p-6`}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
-              <label className="block text-sm font-medium text-teal-700 mb-2">Search Rooms</label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Search Rooms</label>
               <input
                 type="text"
                 placeholder="Search by room number, name..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className={theme.components.input}
+                className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-teal-700 mb-2">Filter by Status</label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Filter by Status</label>
               <select
                 value={filterStatus}
                 onChange={e => setFilterStatus(e.target.value as Room['status'] | 'all')}
-                className={theme.components.input}
+                className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               >
                 <option value="all">All Status</option>
                 <option value="available">Available</option>
@@ -536,7 +407,7 @@ const RoomsPage = () => {
         </div>
 
         {lastUpdated && (
-          <div className="mt-4 text-sm text-gray-500 flex items-center">
+          <div className="mt-4 text-xs sm:text-sm text-gray-500 flex items-center">
             <ClockIcon className="w-4 h-4 mr-1" />
             Last updated: {lastUpdated.toLocaleString()}
           </div>
@@ -544,24 +415,24 @@ const RoomsPage = () => {
 
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+            <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-indigo-600"></div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             {filteredRooms.map(room => (
               <motion.div
                 key={room.id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={theme.components.card}
+                className={`${theme.components.card} p-4 sm:p-6`}
               >
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">Room {room.name}</h3>
-                    <p className="text-sm text-gray-500">{room.building}</p>
+                    <h3 className="text-base sm:text-lg font-semibold text-gray-900">Room {room.name}</h3>
+                    <p className="text-xs sm:text-sm text-gray-500">{room.building}</p>
                   </div>
                   <span
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    className={`px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-medium ${
                       room.status === 'available'
                         ? 'bg-green-100 text-green-800'
                         : room.status === 'occupied'
@@ -573,35 +444,37 @@ const RoomsPage = () => {
                   </span>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Building</span>
-                    <span className="text-sm font-medium">{room.building}</span>
+                    <span className="text-xs sm:text-sm text-gray-600">Building</span>
+                    <span className="text-xs sm:text-sm font-medium">{room.building}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Floor</span>
-                    <span className="text-sm font-medium">{room.floor}</span>
+                    <span className="text-xs sm:text-sm text-gray-600">Floor</span>
+                    <span className="text-xs sm:text-sm font-medium">{room.floor}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Capacity</span>
-                    <span className="text-sm font-medium">{room.capacity} seats</span>
+                    <span className="text-xs sm:text-sm text-gray-600">Capacity</span>
+                    <span className="text-xs sm:text-sm font-medium">{room.capacity} seats</span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm text-gray-600 flex items-center mb-1">
+                    <span className="text-xs sm:text-sm text-gray-600 flex items-center mb-1">
                       <UserIcon className="w-4 h-4 mr-1" />
                       Assigned Instructors
                     </span>
                     {room.assignedInstructors.length > 0 ? (
                       room.assignedInstructors.map(instructor => (
                         <div key={instructor.uid} className="mb-2">
-                          <span className="text-sm font-medium">{instructor.fullName}</span>
+                          <span className="text-xs sm:text-sm font-medium">
+                            {instructor.fullName.length > 20 ? `${instructor.fullName.substring(0, 17)}...` : instructor.fullName}
+                          </span>
                           {room.schedulesByInstructor[instructor.uid]?.length > 0 ? (
                             <div className="mt-1">
-                              <span className="text-sm text-gray-600 flex items-center mb-1">
+                              <span className="text-xs sm:text-sm text-gray-600 flex items-center mb-1">
                                 <ClockIcon className="w-4 h-4 mr-1" />
                                 Schedules in {room.name}
                               </span>
-                              <div className="text-sm font-medium">
+                              <div className="text-xs sm:text-sm font-medium">
                                 {room.schedulesByInstructor[instructor.uid].map((schedule, index) => (
                                   <div key={index}>
                                     {schedule.day} {schedule.startTime}-{schedule.endTime}
@@ -610,115 +483,31 @@ const RoomsPage = () => {
                               </div>
                             </div>
                           ) : (
-                            <div className="text-sm text-gray-500 mt-1">No schedules in this room</div>
+                            <div className="text-xs sm:text-sm text-gray-500 mt-1">No schedules in this room</div>
                           )}
                         </div>
                       ))
                     ) : (
-                      <span className="text-sm text-gray-500">None</span>
+                      <span className="text-xs sm:text-sm text-gray-500">None</span>
                     )}
                   </div>
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-gray-200">
-                  <h4 className="text-sm font-medium text-gray-900 mb-3 flex items-center">
-                    <BoltIcon className="w-5 h-5 mr-2" />
-                    Power Consumption (Real-time)
-                  </h4>
-                  {room.powerData ? (
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-gray-600">Power:</span>{' '}
-                        <span className="font-medium">{room.powerData.Power} W</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Current:</span>{' '}
-                        <span className="font-medium">{room.powerData.Current} A</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Voltage:</span>{' '}
-                        <span className="font-medium">{room.powerData.Voltage} V</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Energy:</span>{' '}
-                        <span className="font-medium">{room.powerData.Energy} kWh</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Frequency:</span>{' '}
-                        <span className="font-medium">{room.powerData.Frequency} Hz</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Power Factor:</span>{' '}
-                        <span className="font-medium">{room.powerData.PowerFactor}</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-gray-600">Total Consumption:</span>{' '}
-                        <span className="font-medium">{room.totalConsumptionKWh?.toFixed(2)} kWh</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-gray-600">Last Updated:</span>{' '}
-                        <span className="font-medium">{room.powerData.timestamp}</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">No power data available</p>
-                  )}
-                </div>
-
-                <div className="mt-6 pt-6 border-t border-gray-200">
-                  <h4 className="text-sm font-medium text-gray-900 mb-3">Facilities Control</h4>
-                  <div className="grid grid-cols-3 gap-4">
-                    <button
-                      onClick={() => handleToggleFacility(room.id, 'lights', room.assignedInstructors[0]?.uid)}
-                      className={`flex flex-col items-center p-3 rounded-lg ${
-                        room.energyStatus.lights
-                          ? 'bg-yellow-100 text-yellow-700'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      <LightBulbIcon className="w-6 h-6 mb-1" />
-                      <span className="text-xs">Lights</span>
-                    </button>
-                    <button
-                      onClick={() => handleToggleFacility(room.id, 'fans', room.assignedInstructors[0]?.uid)}
-                      className={`flex flex-col items-center p-3 rounded-lg ${
-                        room.energyStatus.fans
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      <ArrowPathIcon className="w-6 h-6 mb-1" />
-                      <span className="text-xs">Fans</span>
-                    </button>
-                    <button
-                      onClick={() => handleToggleFacility(room.id, 'tampering', room.assignedInstructors[0]?.uid)}
-                      className={`flex flex-col items-center p-3 rounded-lg ${
-                        room.energyStatus.tampering
-                          ? 'bg-red-100 text-red-700'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      <ShieldExclamationIcon className="w-6 h-6 mb-1" />
-                      <span className="text-xs">Tampering</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex space-x-2">
+                <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row gap-2 sm:gap-3">
                   <button
                     onClick={() => handleSetMaintenance(room.id)}
-                    className="flex items-center justify-center w-full p-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+                    className="flex items-center justify-center w-full p-1.5 sm:p-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors text-xs sm:text-sm"
                     disabled={room.status === 'maintenance'}
                   >
-                    <WrenchIcon className="w-5 h-5 mr-2" />
+                    <WrenchIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
                     Set to Maintenance
                   </button>
                   <button
                     onClick={() => handleSetAvailable(room.id)}
-                    className="flex items-center justify-center w-full p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    className="flex items-center justify-center w-full p-1.5 sm:p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm"
                     disabled={room.status !== 'maintenance'}
                   >
-                    <CheckCircleIcon className="w-5 h-5 mr-2" />
+                    <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
                     Set to Available
                   </button>
                 </div>
