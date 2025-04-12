@@ -6,7 +6,7 @@ import { signOut } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import Swal from 'sweetalert2';
-import { Link, useNavigate } from 'react-router-dom'; // Added for navigation
+import { Link, useNavigate } from 'react-router-dom';
 
 // Interfaces remain the same
 interface Subject {
@@ -101,7 +101,7 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
   const { currentUser } = useAuth();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [instructorFullName, setInstructorFullName] = useState<string>(user.fullName);
-  const navigate = useNavigate(); // For programmatic navigation
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchInstructorDetails = async () => {
@@ -156,7 +156,7 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
           htmlContainer: 'text-cyan-300',
         },
       });
-      navigate('/login'); // Redirect to login after logout
+      navigate('/login');
     } catch (error) {
       console.error('Error logging out:', error);
       Swal.fire({
@@ -182,7 +182,7 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
         <div className="flex items-center justify-between h-12 sm:h-16">
           {/* Logo and Brand */}
           <Link
-            to="/dashboard"
+            to="instructor/dashboard"
             className="flex items-center hover:opacity-80 transition-opacity"
             title="Go to Dashboard"
           >
@@ -263,19 +263,17 @@ const NavBar: React.FC<NavBarProps> = ({ currentTime = new Date(), user, classSt
             <div className="relative">
               <button
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="flex items-center space-x-1 sm:space-x-2 focus:outline-none hover:opacity-80 transition-opacity"
+                className="flex items-center space-x-1 sm:space-x-2 focus:outline-none hover:opacity-80 transition-opacity max-w-[120px] sm:max-w-[200px]"
               >
-                <div className="flex flex-col items-end">
-                  <span className="text-[10px] sm:text-sm font-medium text-cyan-100">
-                    {instructorFullName.length > 8
-                      ? instructorFullName.substring(0, 8) + '...'
-                      : instructorFullName}
+                <div className="flex flex-col items-end overflow-hidden">
+                  <span className="text-[10px] sm:text-sm font-medium text-cyan-100 text-ellipsis whitespace-nowrap">
+                    {instructorFullName}
                   </span>
                   <span className="text-[8px] sm:text-xs text-cyan-300">
                     {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
                   </span>
                 </div>
-                <div className="h-5 w-5 sm:h-8 sm:w-8 rounded-full bg-gray-700/50 flex items-center justify-center border border-cyan-800">
+                <div className="h-5 w-5 sm:h-8 sm:w-8 rounded-full bg-gray-700/50 flex items-center justify-center border border-cyan-800 flex-shrink-0">
                   <UserIcon className="h-3 w-3 sm:h-5 sm:w-5 text-cyan-400" />
                 </div>
               </button>
