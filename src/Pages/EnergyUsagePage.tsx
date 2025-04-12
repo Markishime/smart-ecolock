@@ -26,51 +26,11 @@ import {
   Legend,
 } from 'chart.js';
 import Swal from 'sweetalert2';
+import { ref, onValue, off } from 'firebase/database';
+import { rtdb } from '../firebase'; // Import initialized Realtime Database
 
 // Register Chart.js components
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
-
-// Hardcoded JSON data (for demonstration, replace with Firebase fetch if dynamic)
-const jsonData = {
-  Instructors: {
-    "149598BA": {
-      ClassStatus: {
-        Status: "End Session",
-        dateTime: "2025_04_13_043524",
-        schedule: {
-          day: "Sunday",
-          endTime: "17:16",
-          roomName: {
-            name: "704",
-            pzem: {
-              action: "end",
-              current: "0.16",
-              energy: "0.04",
-              frequency: "59.8",
-              power: "1.2",
-              powerFactor: "0.03",
-              timestamp: "2025_04_13_043524",
-              voltage: "237.7",
-            },
-          },
-          section: "H1",
-          startTime: "01:00",
-          subject: "Mixed Signals and Sensors",
-          subjectCode: "CPE321",
-        },
-      },
-      Profile: {
-        createdAt: "2025-04-11T10:17:29.082Z",
-        department: "Computer Engineering",
-        email: "johnmervin@gmail.com",
-        fullName: "John Mervin Tampus",
-        idNumber: "12345",
-        mobileNumber: "1231232421412",
-        role: "instructor",
-      },
-    },
-  },
-};
 
 interface Room {
   id: string;
@@ -90,7 +50,7 @@ interface Schedule {
   section: string;
   subject: string;
   subjectCode: string;
-  pzem?: PZEMData; // Added pzem property
+  pzem?: PZEMData; // Added the missing 'pzem' property
 }
 
 interface EnergyUsage {
@@ -131,7 +91,7 @@ interface InstructorData {
   ClassStatus?: {
     Status: string;
     dateTime: string;
-    schedule?: Schedule; // Single schedule for JSON compatibility
+    schedule?: Schedule;
   };
   Profile?: {
     fullName: string;
@@ -158,20 +118,48 @@ const EnergyUsagePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  // Calculator states
   const [calcPowerWatts, setCalcPowerWatts] = useState<string>('0');
   const [calcHours, setCalcHours] = useState<string>('1');
   const [calcResult, setCalcResult] = useState<{ kWh: string; cost: string } | null>(null);
-  // Filter state for table
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Fetch Instructors data from Firebase Realtime Database
   useEffect(() => {
-    // Simulate fetching rooms from JSON (replace with Firestore if needed)
+    const instructorsRef = ref(rtdb, 'Instructors');
+    const unsubscribe = onValue(
+      instructorsRef,
+      (snapshot) => {
+        const data = snapshot.val();
+        setInstructorsData(data || {});
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Error fetching instructors:', error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'Failed to fetch instructors data',
+          customClass: {
+            popup: 'rounded-lg sm:rounded-xl',
+            title: 'text-blue-900',
+            htmlContainer: 'text-blue-700',
+            confirmButton: 'bg-blue-600 hover:bg-blue-700',
+          },
+        });
+        setLoading(false);
+      }
+    );
+
+    // Cleanup subscription on unmount
+    return () => off(instructorsRef);
+  }, []);
+
+  // Derive rooms from Instructors data
+  useEffect(() => {
     const fetchRooms = async () => {
       try {
-        // Extract unique rooms from JSON
         const roomSet = new Set<string>();
-        Object.values(jsonData.Instructors).forEach((instructor: any) => {
+        Object.values(instructorsData).forEach((instructor: any) => {
           if (instructor.ClassStatus?.schedule?.roomName?.name) {
             roomSet.add(instructor.ClassStatus.schedule.roomName.name);
           }
@@ -180,17 +168,17 @@ const EnergyUsagePage: React.FC = () => {
         const roomsData: Room[] = Array.from(roomSet).map((name, index) => ({
           id: `room-${index}`,
           name,
-          building: 'Unknown Building', // Not in JSON, placeholder
-          floor: 'Unknown Floor', // Not in JSON, placeholder
+          building: 'Unknown Building',
+          floor: 'Unknown Floor',
         }));
 
         const sortedRooms = roomsData.sort((a, b) => a.name.localeCompare(b.name));
         setRooms(sortedRooms);
-        if (sortedRooms.length > 0) {
-          setSelectedClassroom(sortedRooms[0].name); // Default to first room (704)
+        if (sortedRooms.length > 0 && !selectedClassroom) {
+          setSelectedClassroom(sortedRooms[0].name);
         }
       } catch (error) {
-        console.error('Error processing rooms from JSON:', error);
+        console.error('Error processing rooms:', error);
         Swal.fire({
           icon: 'error',
           title: 'Error',
@@ -206,29 +194,9 @@ const EnergyUsagePage: React.FC = () => {
     };
 
     fetchRooms();
-  }, []);
+  }, [instructorsData]);
 
-  useEffect(() => {
-    // Simulate fetching instructors data from JSON (replace with Firebase RTDB if dynamic)
-    try {
-      setInstructorsData(jsonData.Instructors);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error setting instructors data:', error);
-      Swal.fire({
-        icon: 'error',
-        title: 'Error',
-        text: 'Failed to fetch instructors data',
-        customClass: {
-          popup: 'rounded-lg sm:rounded-xl',
-          title: 'text-blue-900',
-          htmlContainer: 'text-blue-700',
-          confirmButton: 'bg-blue-600 hover:bg-blue-700',
-        },
-      });
-    }
-  }, []);
-
+  // Process energy data based on selected classroom and time range
   useEffect(() => {
     if (!selectedClassroom || Object.keys(instructorsData).length === 0) return;
 
@@ -417,7 +385,6 @@ const EnergyUsagePage: React.FC = () => {
     },
   };
 
-  // Computed consumption stats
   const totalConsumption = energyData.reduce((sum, entry) => sum + entry.consumptionKWh, 0);
   const averageConsumption = totalConsumption / (energyData.length || 1);
   const peakUsage = energyData.length > 0 ? Math.max(...energyData.map(d => d.consumptionKWh)) : 0;
@@ -425,7 +392,6 @@ const EnergyUsagePage: React.FC = () => {
   const calculatePowerCosts = () => {
     const consumptionKWh = totalConsumption;
     const cost = consumptionKWh * VECO_RATE_PER_KWH;
-
     return {
       consumptionKWh: consumptionKWh.toFixed(2),
       cost: cost.toFixed(2),
@@ -450,7 +416,6 @@ const EnergyUsagePage: React.FC = () => {
   const latestSchedule = latestData?.schedule;
   const latestInstructorName = getLatestInstructorName();
 
-  // Filter energy data based on search query
   const filteredEnergyData = energyData.filter(entry =>
     [entry.instructorName, entry.subject, entry.subjectCode, entry.schedule.section]
       .some(field => field.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -459,7 +424,6 @@ const EnergyUsagePage: React.FC = () => {
   return (
     <div className="flex h-screen bg-gray-50">
       <AdminSidebar />
-
       <button
         onClick={() => setIsSidebarOpen(!isSidebarOpen)}
         className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
@@ -468,7 +432,6 @@ const EnergyUsagePage: React.FC = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
         </svg>
       </button>
-
       <div
         className={`flex-1 transition-all duration-300 ease-in-out ${
           isSidebarOpen ? 'ml-64' : 'ml-0 md:ml-64'
@@ -480,7 +443,6 @@ const EnergyUsagePage: React.FC = () => {
             Monitor and analyze classroom energy consumption with schedule details
           </p>
         </div>
-
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
@@ -506,7 +468,6 @@ const EnergyUsagePage: React.FC = () => {
               </div>
             )}
           </div>
-
           <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
               <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5 inline-block mr-1 sm:mr-2 text-indigo-600" />
@@ -529,14 +490,12 @@ const EnergyUsagePage: React.FC = () => {
             </div>
           </div>
         </div>
-
         {loading ? (
           <div className="flex justify-center items-center h-64">
             <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-indigo-600"></div>
           </div>
         ) : (
           <>
-            {/* Real-time Power Consumption Section */}
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <BoltIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
@@ -601,8 +560,6 @@ const EnergyUsagePage: React.FC = () => {
                 </p>
               )}
             </div>
-
-            {/* Stat Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
               <StatCard
                 icon={BoltIcon}
@@ -629,8 +586,6 @@ const EnergyUsagePage: React.FC = () => {
                 description="Total data points"
               />
             </div>
-
-            {/* Power Consumption Analysis */}
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
@@ -644,8 +599,6 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Interactive Power Calculator */}
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
@@ -694,15 +647,11 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Chart */}
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <div className="h-[300px] sm:h-[400px]">
                 <Line data={chartData} options={chartOptions} />
               </div>
             </div>
-
-            {/* Device Energy Breakdown */}
             {energyData.length > 0 && (
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
                 <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6">
@@ -736,8 +685,6 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               </div>
             )}
-
-            {/* Energy Data Table */}
             {energyData.length > 0 && (
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mt-6 sm:mt-8">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6">
