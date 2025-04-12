@@ -1,29 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { 
-  doc, 
-  setDoc, 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
+import {
+  doc,
+  setDoc,
+  collection,
+  query,
+  where,
+  getDocs,
   onSnapshot,
-  updateDoc
+  updateDoc,
 } from 'firebase/firestore';
 import { auth, db, rtdb } from '../firebase';
-import { getDatabase, ref, get, set, remove, onValue, off, DataSnapshot, update } from 'firebase/database';
+import { getDatabase, ref, get, set, remove, onValue, off, update } from 'firebase/database';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  LockClosedIcon, 
-  CheckIcon, 
+import {
+  LockClosedIcon,
+  CheckIcon,
   ArrowPathIcon,
   EyeIcon,
   EyeSlashIcon,
   AcademicCapIcon,
   UserIcon,
   CreditCardIcon,
-  CalendarIcon,
-  ClockIcon,
   EnvelopeIcon,
   PhoneIcon,
   IdentificationIcon,
@@ -67,7 +65,14 @@ interface UserData {
     subject?: string;
     section: string;
   }>;
-  [key: string]: string | string[] | boolean | undefined | Array<{ day: string; startTime: string; endTime: string; room?: string; subject?: string; section: string; }>;
+  [key: string]: string | string[] | boolean | undefined | Array<{
+    day: string;
+    startTime: string;
+    endTime: string;
+    room?: string;
+    subject?: string;
+    section: string;
+  }>;
 }
 
 interface RFIDTag {
@@ -107,7 +112,7 @@ interface Teacher {
 
 // Particle Background Component
 const ParticleBackground: React.FC = () => {
-  const particles = Array.from({ length: 30 }, () => ({
+  const particles = Array.from({ length: 20 }, () => ({
     x: Math.random() * 100,
     y: Math.random() * 100,
     speedX: (Math.random() - 0.5) * 0.3,
@@ -153,20 +158,20 @@ const Register: React.FC = () => {
     schedule: {
       days: [] as string[],
       startTime: '',
-      endTime: ''
+      endTime: '',
     },
     section: '',
     subject: '',
     selectedSchedule: null as any,
     rfidUid: '',
-    isAdmin: false
+    isAdmin: false,
   });
 
   const [availableData, setAvailableData] = useState({
     subjects: [] as string[],
     sections: [] as string[],
     departments: [] as string[],
-    courses: [] as string[]
+    courses: [] as string[],
   });
 
   const [inputFocus, setInputFocus] = useState({
@@ -185,7 +190,7 @@ const Register: React.FC = () => {
     scheduleTime: false,
     section: false,
     subject: false,
-    rfidUid: false
+    rfidUid: false,
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -196,7 +201,7 @@ const Register: React.FC = () => {
     hasLower: false,
     hasNumber: false,
     hasMinLength: false,
-    hasSpecial: false
+    hasSpecial: false,
   });
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -218,7 +223,7 @@ const Register: React.FC = () => {
     scheduleTime: false,
     section: false,
     subject: false,
-    rfidUid: false
+    rfidUid: false,
   });
 
   const [isRegistered, setIsRegistered] = useState(false);
@@ -231,7 +236,7 @@ const Register: React.FC = () => {
     { id: 1, title: 'Account Type', description: 'Choose your role' },
     { id: 2, title: 'Personal Info', description: 'Basic information' },
     { id: 3, title: 'Department', description: 'Academic details' },
-    { id: 4, title: 'Security', description: 'Set up password' }
+    { id: 4, title: 'Security', description: 'Set up password' },
   ];
 
   const calculateProgress = () => {
@@ -252,7 +257,7 @@ const Register: React.FC = () => {
           const section = doc.data().section;
           if (section) sections.add(section);
         });
-        setAvailableData(prev => ({ ...prev, sections: Array.from(sections).sort() }));
+        setAvailableData((prev) => ({ ...prev, sections: Array.from(sections).sort() }));
       });
 
       const departments = [
@@ -263,13 +268,13 @@ const Register: React.FC = () => {
         'Civil Engineering',
         'Industrial Engineering',
         'Mechanical Engineering',
-        'Chemical Engineering'
+        'Chemical Engineering',
       ];
 
-      setAvailableData(prev => ({
+      setAvailableData((prev) => ({
         ...prev,
         departments,
-        courses: departments
+        courses: departments,
       }));
 
       return () => {
@@ -285,11 +290,11 @@ const Register: React.FC = () => {
       try {
         const subjectsCollection = collection(db, 'subjects');
         const subjectsSnapshot = await getDocs(subjectsCollection);
-        const subjectsData = subjectsSnapshot.docs.map(doc => ({
+        const subjectsData = subjectsSnapshot.docs.map((doc) => ({
           id: doc.id,
-          ...doc.data()
+          ...doc.data(),
         })) as Subject[];
-        setSubjects(subjectsData.filter(subject => subject.status === 'active'));
+        setSubjects(subjectsData.filter((subject) => subject.status === 'active'));
       } catch (error) {
         console.error('Error fetching subjects:', error);
       }
@@ -305,7 +310,7 @@ const Register: React.FC = () => {
         hasLower: /[a-z]/.test(formData.password),
         hasNumber: /\d/.test(formData.password),
         hasMinLength: formData.password.length >= 8,
-        hasSpecial: /[^A-Za-z0-9]/.test(formData.password)
+        hasSpecial: /[^A-Za-z0-9]/.test(formData.password),
       };
       setPasswordValidations(validations);
     };
@@ -318,24 +323,28 @@ const Register: React.FC = () => {
     const registeredUidsRef = ref(rtdb, 'RegisteredUIDs');
     const unregisteredUidsRef = ref(rtdb, 'UnregisteredUIDs');
 
-    const unsubscribe = onValue(unregisteredUidsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const tags: RFIDTag[] = Object.entries(data).map(([key, value]: [string, any]) => ({
-          uid: value.uid || key,
-        }));
-        setRfidTags(tags);
-      } else {
-        setRfidTags([]);
+    const unsubscribe = onValue(
+      unregisteredUidsRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const tags: RFIDTag[] = Object.entries(data).map(([key, value]: [string, any]) => ({
+            uid: value.uid || key,
+          }));
+          setRfidTags(tags);
+        } else {
+          setRfidTags([]);
+        }
+      },
+      (error) => {
+        console.error('Error fetching UnregisteredUIDs:', error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'Failed to fetch RFID tags.',
+        });
       }
-    }, (error) => {
-      console.error('Error fetching UnregisteredUIDs:', error);
-      Swal.fire({
-        icon: 'error',
-        title: 'Error',
-        text: 'Failed to fetch RFID tags.'
-      });
-    });
+    );
 
     return () => {
       off(unregisteredUidsRef, 'value', unsubscribe);
@@ -343,30 +352,29 @@ const Register: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      rfidUid: selectedUid
+      rfidUid: selectedUid,
     }));
   }, [selectedUid]);
 
   const nextStep = () => {
     if (currentStep < steps.length) {
-      setCurrentStep(prev => prev + 1);
+      setCurrentStep((prev) => prev + 1);
     }
   };
 
   const prevStep = () => {
     if (currentStep > 1) {
-      setCurrentStep(prev => prev - 1);
+      setCurrentStep((prev) => prev - 1);
     }
   };
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [field]: field === 'idNumber' || field === 'mobileNumber' 
-        ? value.replace(/\D/g, '') 
-        : value
+      [field]:
+        field === 'idNumber' || field === 'mobileNumber' ? value.replace(/\D/g, '') : value,
     }));
   };
 
@@ -378,7 +386,7 @@ const Register: React.FC = () => {
       Swal.fire({
         icon: 'warning',
         title: 'RFID Required',
-        text: 'Please select an RFID tag to proceed.'
+        text: 'Please select an RFID tag to proceed.',
       });
       setIsLoading(false);
       return;
@@ -415,7 +423,7 @@ const Register: React.FC = () => {
         await set(rfidRef, {
           uid: user.uid,
           role: formData.role,
-          timestamp: serverTimestamp()
+          timestamp: serverTimestamp(),
         });
       }
 
@@ -430,7 +438,6 @@ const Register: React.FC = () => {
       });
 
       navigate('/login');
-
     } catch (error) {
       console.error('Registration error:', error);
       Swal.fire({
@@ -459,16 +466,14 @@ const Register: React.FC = () => {
     >
       <label className="block text-sm font-medium text-cyan-200 mb-2">{label}</label>
       <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
-          {icon}
-        </div>
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center">{icon}</div>
         <input
           type={type}
           value={formData[name as keyof typeof formData] as string}
           onChange={(e) => handleInputChange(name, e.target.value)}
           onFocus={() => setInputFocus({ ...inputFocus, [name]: true })}
           onBlur={() => setInputFocus({ ...inputFocus, [name]: false })}
-          className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400"
+          className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400 text-sm sm:text-base"
           placeholder={placeholder}
           required
         />
@@ -492,16 +497,16 @@ const Register: React.FC = () => {
     >
       <label className="block text-sm font-medium text-cyan-200 mb-2">{label}</label>
       <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
-          {icon}
-        </div>
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center">{icon}</div>
         <select
           value={formData[name as keyof typeof formData] as string}
           onChange={(e) => handleInputChange(name, e.target.value)}
-          className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white"
+          className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white text-sm sm:text-base"
           required
         >
-          <option value="" className="text-gray-500">Select {label.toLowerCase()}</option>
+          <option value="" className="text-gray-500">
+            Select {label.toLowerCase()}
+          </option>
           {options.map((option) => (
             <option key={option.value} value={option.value} className="text-white">
               {option.label}
@@ -522,8 +527,8 @@ const Register: React.FC = () => {
             transition={{ delay: 0.4 }}
             className="space-y-6"
           >
-            <h3 className="text-xl font-semibold text-cyan-100 mb-2">Choose Your Role</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <h3 className="text-lg sm:text-xl font-semibold text-cyan-100 mb-2">Choose Your Role</h3>
+            <div className="grid grid-cols-1 gap-4">
               {['student', 'instructor'].map((role) => (
                 <motion.button
                   key={role}
@@ -548,11 +553,11 @@ const Register: React.FC = () => {
                     ) : (
                       <UserIcon className="w-8 h-8" />
                     )}
-                    <span className="text-lg font-medium">
+                    <span className="text-base sm:text-lg font-medium">
                       {role.charAt(0).toUpperCase() + role.slice(1)}
                     </span>
-                    <p className="text-sm opacity-80">
-                      {role === 'student' 
+                    <p className="text-xs sm:text-sm opacity-80">
+                      {role === 'student'
                         ? 'Access your courses and track your progress'
                         : 'Manage your classes and student records'}
                     </p>
@@ -571,15 +576,13 @@ const Register: React.FC = () => {
             transition={{ delay: 0.4 }}
             className="space-y-4"
           >
-            <h3 className="text-xl font-semibold text-cyan-100 mb-2">Personal Information</h3>
+            <h3 className="text-lg sm:text-xl font-semibold text-cyan-100 mb-2">Personal Information</h3>
             <motion.div
               initial={{ opacity: 0, x: -50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.4, type: 'tween' }}
             >
-              <label className="block text-sm font-medium text-cyan-200 mb-2">
-                RFID Card
-              </label>
+              <label className="block text-sm font-medium text-cyan-200 mb-2">RFID Card</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
                   <CreditCardIcon className="w-5 h-5 text-cyan-500" />
@@ -587,10 +590,12 @@ const Register: React.FC = () => {
                 <select
                   value={selectedUid}
                   onChange={(e) => setSelectedUid(e.target.value)}
-                  className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white"
+                  className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white text-sm sm:text-base"
                   required
                 >
-                  <option value="" className="text-gray-500">Select RFID Tag</option>
+                  <option value="" className="text-gray-500">
+                    Select RFID Tag
+                  </option>
                   {rfidTags.map((tag) => (
                     <option key={tag.uid} value={tag.uid} className="text-white">
                       {tag.uid}
@@ -600,19 +605,43 @@ const Register: React.FC = () => {
                 {selectedUid && (
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
                     <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                    <span className="text-sm text-green-400">Card selected</span>
+                    <span className="text-xs sm:text-sm text-green-400">Card selected</span>
                   </div>
                 )}
               </div>
-              <p className="text-sm text-gray-400 mt-1">
+              <p className="text-xs sm:text-sm text-gray-400 mt-1">
                 {selectedUid ? 'RFID card selected' : 'Select an RFID card from the dropdown above'}
               </p>
             </motion.div>
             <div className="grid grid-cols-1 gap-4">
-              {renderInput('fullName', 'Full Name', 'text', 'Enter your full name', <UserIcon className="w-5 h-5 text-cyan-500" />)}
-              {renderInput('idNumber', 'ID Number', 'text', 'Enter your ID number', <IdentificationIcon className="w-5 h-5 text-cyan-500" />)}
-              {renderInput('email', 'Email', 'email', 'Enter your email', <EnvelopeIcon className="w-5 h-5 text-cyan-500" />)}
-              {renderInput('mobileNumber', 'Mobile Number', 'tel', 'Enter your mobile number', <PhoneIcon className="w-5 h-5 text-cyan-500" />)}
+              {renderInput(
+                'fullName',
+                'Full Name',
+                'text',
+                'Enter your full name',
+                <UserIcon className="w-5 h-5 text-cyan-500" />
+              )}
+              {renderInput(
+                'idNumber',
+                'ID Number',
+                'text',
+                'Enter your ID number',
+                <IdentificationIcon className="w-5 h-5 text-cyan-500" />
+              )}
+              {renderInput(
+                'email',
+                'Email',
+                'email',
+                'Enter your email',
+                <EnvelopeIcon className="w-5 h-5 text-cyan-500" />
+              )}
+              {renderInput(
+                'mobileNumber',
+                'Mobile Number',
+                'tel',
+                'Enter your mobile number',
+                <PhoneIcon className="w-5 h-5 text-cyan-500" />
+              )}
             </div>
           </motion.div>
         );
@@ -625,24 +654,38 @@ const Register: React.FC = () => {
             transition={{ delay: 0.4 }}
             className="space-y-4"
           >
-            <h3 className="text-xl font-semibold text-cyan-100 mb-2">Academic Details</h3>
+            <h3 className="text-lg sm:text-xl font-semibold text-cyan-100 mb-2">Academic Details</h3>
             <div className="grid grid-cols-1 gap-4">
-              {renderSelect('department', 'Department', availableData.departments.map(dept => ({
-                value: dept,
-                label: dept
-              })), <UserIcon className="w-5 h-5 text-cyan-500" />)}
-              
-              {formData.role === 'student' && (
-                renderSelect('yearLevel', 'Year Level', [
-                  { value: '1st Year', label: '1st Year' },
-                  { value: '2nd Year', label: '2nd Year' },
-                  { value: '3rd Year', label: '3rd Year' },
-                  { value: '4th Year', label: '4th Year' }
-                ], <AcademicCapIcon className="w-5 h-5 text-cyan-500" />)
+              {renderSelect(
+                'department',
+                'Department',
+                availableData.departments.map((dept) => ({
+                  value: dept,
+                  label: dept,
+                })),
+                <UserIcon className="w-5 h-5 text-cyan-500" />
               )}
-              {formData.role === 'instructor' && (
-                renderInput('yearsOfExperience', 'Years of Experience', 'number', 'Years of teaching experience', <UserIcon className="w-5 h-5 text-cyan-500" />)
-              )}
+
+              {formData.role === 'student' &&
+                renderSelect(
+                  'yearLevel',
+                  'Year Level',
+                  [
+                    { value: '1st Year', label: '1st Year' },
+                    { value: '2nd Year', label: '2nd Year' },
+                    { value: '3rd Year', label: '3rd Year' },
+                    { value: '4th Year', label: '4th Year' },
+                  ],
+                  <AcademicCapIcon className="w-5 h-5 text-cyan-500" />
+                )}
+              {formData.role === 'instructor' &&
+                renderInput(
+                  'yearsOfExperience',
+                  'Years of Experience',
+                  'number',
+                  'Years of teaching experience',
+                  <UserIcon className="w-5 h-5 text-cyan-500" />
+                )}
             </div>
           </motion.div>
         );
@@ -655,48 +698,148 @@ const Register: React.FC = () => {
             transition={{ delay: 0.4 }}
             className="space-y-4"
           >
-            <h3 className="text-xl font-semibold text-cyan-100 mb-2">Set Your Password</h3>
+            <h3 className="text-lg sm:text-xl font-semibold text-cyan-100 mb-2">Set Your Password</h3>
             <div className="space-y-4">
               <div>
                 <div className="relative">
-                  {renderInput('password', 'Password', showPassword ? 'text' : 'password', 'Enter your password', <UserIcon className="w-5 h-5 text-cyan-500" />)}
+                  <label className="block text-sm font-medium text-cyan-200 mb-2">Password</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
+                      <UserIcon className="w-5 h-5 text-cyan-500" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={formData.password}
+                      onChange={(e) => handleInputChange('password', e.target.value)}
+                      onFocus={() => setInputFocus({ ...inputFocus, password: true })}
+                      onBlur={() => setInputFocus({ ...inputFocus, password: false })}
+                      className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400 text-sm sm:text-base"
+                      placeholder="Enter your password"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-cyan-500 hover:text-cyan-300 transition-colors"
+                    >
+                      {showPassword ? (
+                        <EyeSlashIcon className="w-5 h-5" />
+                      ) : (
+                        <EyeIcon className="w-5 h-5" />
+                      )}
+                    </button>
+                    {formData.password && (
+                      <CheckIcon className="w-5 h-5 text-cyan-500 absolute right-10 top-1/2 transform -translate-y-1/2" />
+                    )}
+                  </div>
                 </div>
                 <div className="mt-2 space-y-1">
                   <div className="flex items-center space-x-2">
-                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-400'}`} />
-                    <span className={`text-xs ${passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-300'}`}>
+                    <CheckIcon
+                      className={`w-4 h-4 ${
+                        passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-400'
+                      }`}
+                    />
+                    <span
+                      className={`text-xs ${
+                        passwordValidations.hasMinLength ? 'text-green-400' : 'text-gray-300'
+                      }`}
+                    >
                       At least 8 characters
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-400'}`} />
-                    <span className={`text-xs ${passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-300'}`}>
+                    <CheckIcon
+                      className={`w-4 h-4 ${
+                        passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-400'
+                      }`}
+                    />
+                    <span
+                      className={`text-xs ${
+                        passwordValidations.hasUpper ? 'text-green-400' : 'text-gray-300'
+                      }`}
+                    >
                       One uppercase letter
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasLower ? 'text-green-400' : 'text-gray-400'}`} />
-                    <span className={`text-xs ${passwordValidations.hasLower ? 'text-green-400' : 'text-gray-300'}`}>
+                    <CheckIcon
+                      className={`w-4 h-4 ${
+                        passwordValidations.hasLower ? 'text-green-400' : 'text-gray-400'
+                      }`}
+                    />
+                    <span
+                      className={`text-xs ${
+                        passwordValidations.hasLower ? 'text-green-400' : 'text-gray-300'
+                      }`}
+                    >
                       One lowercase letter
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-400'}`} />
-                    <span className={`text-xs ${passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-300'}`}>
+                    <CheckIcon
+                      className={`w-4 h-4 ${
+                        passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-400'
+                      }`}
+                    />
+                    <span
+                      className={`text-xs ${
+                        passwordValidations.hasNumber ? 'text-green-400' : 'text-gray-300'
+                      }`}
+                    >
                       One number
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CheckIcon className={`w-4 h-4 ${passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-400'}`} />
-                    <span className={`text-xs ${passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-300'}`}>
+                    <CheckIcon
+                      className={`w-4 h-4 ${
+                        passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-400'
+                      }`}
+                    />
+                    <span
+                      className={`text-xs ${
+                        passwordValidations.hasSpecial ? 'text-green-400' : 'text-gray-300'
+                      }`}
+                    >
                       One special character
                     </span>
                   </div>
                 </div>
               </div>
-              
+
               <div className="relative">
-                {renderInput('confirmPassword', 'Confirm Password', showConfirmPassword ? 'text' : 'password', 'Confirm your password', <UserIcon className="w-5 h-5 text-cyan-500" />)}
+                <label className="block text-sm font-medium text-cyan-200 mb-2">
+                  Confirm Password
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
+                    <UserIcon className="w-5 h-5 text-cyan-500" />
+                  </div>
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={formData.confirmPassword}
+                    onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                    onFocus={() => setInputFocus({ ...inputFocus, confirmPassword: true })}
+                    onBlur={() => setInputFocus({ ...inputFocus, confirmPassword: false })}
+                    className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400 text-sm sm:text-base"
+                    placeholder="Confirm your password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-cyan-500 hover:text-cyan-300 transition-colors"
+                  >
+                    {showConfirmPassword ? (
+                      <EyeSlashIcon className="w-5 h-5" />
+                    ) : (
+                      <EyeIcon className="w-5 h-5" />
+                    )}
+                  </button>
+                  {formData.confirmPassword && (
+                    <CheckIcon className="w-5 h-5 text-cyan-500 absolute right-10 top-1/2 transform -translate-y-1/2" />
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>
@@ -705,11 +848,11 @@ const Register: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white font-mono relative overflow-hidden flex items-center justify-center">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white font-mono relative overflow-hidden flex items-center justify-center px-4 sm:px-6 lg:px-8">
       <ParticleBackground />
       {/* Main Form Section */}
       <motion.div
-        className="max-w-lg w-full mx-auto bg-gray-800 rounded-xl shadow-2xl p-6 relative overflow-hidden border border-cyan-800"
+        className="w-full max-w-md sm:max-w-lg bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 relative overflow-hidden border border-cyan-800"
         initial={{ opacity: 0, scale: 0.9, rotate: -5 }}
         animate={{ opacity: 1, scale: 1, rotate: 0 }}
         transition={{ duration: 0.8, type: 'spring', stiffness: 80 }}
@@ -728,17 +871,19 @@ const Register: React.FC = () => {
             animate={{ scale: 1, rotate: 0 }}
             transition={{ type: 'spring', stiffness: 100, delay: 0.2 }}
           >
-            <LockClosedIcon className="w-16 h-16 text-cyan-400 mb-2 animate-pulse" />
+            <LockClosedIcon className="w-12 h-12 sm:w-16 sm:h-16 text-cyan-400 mb-2 animate-pulse" />
           </motion.div>
           <motion.h1
-            className="text-3xl font-bold text-cyan-100 mb-1"
+            className="text-2xl sm:text-3xl font-bold text-cyan-100 mb-1"
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3, duration: 0.5 }}
           >
             Register
           </motion.h1>
-          <p className="text-cyan-300 text-center text-sm">Join the SmartEcoLock community</p>
+          <p className="text-cyan-300 text-center text-sm sm:text-base">
+            Join the SmartEcoLock community
+          </p>
         </div>
 
         <motion.div
@@ -747,11 +892,13 @@ const Register: React.FC = () => {
           transition={{ delay: 0.4 }}
           className="mb-4"
         >
-          <div className="flex justify-between mb-1">
+          <div className="flex flex-wrap justify-between mb-1 gap-2">
             {steps.map((step) => (
               <div
                 key={step.id}
-                className={`text-xs ${currentStep >= step.id ? 'text-cyan-200' : 'text-gray-400'}`}
+                className={`text-xs sm:text-sm flex-1 text-center ${
+                  currentStep >= step.id ? 'text-cyan-200' : 'text-gray-400'
+                }`}
               >
                 {step.title}
               </div>
@@ -774,7 +921,7 @@ const Register: React.FC = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5, type: 'spring', stiffness: 100 }}
-            className="flex justify-between mt-6 pt-4 border-t border-gray-700"
+            className="flex flex-col sm:flex-row sm:justify-between mt-6 pt-4 border-t border-gray-700 gap-2"
           >
             {currentStep > 1 && (
               <motion.button
@@ -782,7 +929,7 @@ const Register: React.FC = () => {
                 onClick={prevStep}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                className="px-4 py-2 rounded-lg bg-gray-700 text-cyan-200 hover:bg-gray-600 transition-all duration-300"
+                className="px-4 py-2 rounded-lg bg-gray-700 text-cyan-200 hover:bg-gray-600 transition-all duration-300 w-full sm:w-auto"
               >
                 Back
               </motion.button>
@@ -793,7 +940,7 @@ const Register: React.FC = () => {
                 onClick={nextStep}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                className="px-4 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-all duration-300 ml-auto"
+                className="px-4 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-all duration-300 w-full sm:w-auto sm:ml-auto"
               >
                 Continue
               </motion.button>
@@ -803,7 +950,7 @@ const Register: React.FC = () => {
                 disabled={isLoading}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold p-3 rounded-lg transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg hover:shadow-cyan-500/50"
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold p-3 rounded-lg transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg hover:shadow-cyan-500/50 text-sm sm:text-base"
               >
                 {isLoading ? (
                   <span className="animate-spin">
@@ -825,7 +972,7 @@ const Register: React.FC = () => {
             transition={{ delay: 0.6, duration: 0.5 }}
             className="text-center mt-4"
           >
-            <p className="text-gray-400 text-sm">
+            <p className="text-gray-400 text-sm sm:text-base">
               Already have an account?{' '}
               <Link
                 to="/login"

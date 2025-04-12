@@ -11,7 +11,6 @@ import {
   CheckIcon,
   UserIcon,
   KeyIcon,
-  BellIcon,
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 import { useAuth } from '../Pages/AuthContext';
@@ -28,7 +27,7 @@ interface UserData {
 
 // Particle Background Component
 const ParticleBackground: React.FC = () => {
-  const particles = Array.from({ length: 30 }, () => ({
+  const particles = Array.from({ length: 20 }, () => ({
     x: Math.random() * 100,
     y: Math.random() * 100,
     speedX: (Math.random() - 0.5) * 0.3,
@@ -172,14 +171,13 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white font-mono relative overflow-hidden flex items-center justify-center">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-800 text-white font-mono relative overflow-hidden flex items-center justify-center px-4 sm:px-6 lg:px-8">
       <ParticleBackground />
       {/* Main Content */}
-      <div className="relative z-10">
-    
+      <div className="relative z-10 w-full max-w-md sm:max-w-lg">
         {/* Main Form Section */}
         <motion.div
-          className="max-w-lg mx-auto bg-gray-800 rounded-xl shadow-2xl p-8 relative overflow-hidden border border-cyan-800"
+          className="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 relative overflow-hidden border border-cyan-800"
           initial={{ opacity: 0, scale: 0.9, rotate: -5 }}
           animate={{ opacity: 1, scale: 1, rotate: 0 }}
           transition={{ duration: 0.8, type: 'spring', stiffness: 80 }}
@@ -198,17 +196,17 @@ const Login: React.FC = () => {
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: 'spring', stiffness: 100, delay: 0.2 }}
             >
-              <LockClosedIcon className="w-16 h-16 text-cyan-400 mb-4 animate-pulse" />
+              <LockClosedIcon className="w-12 h-12 sm:w-16 sm:h-16 text-cyan-400 mb-4 animate-pulse" />
             </motion.div>
             <motion.h1
-              className="text-3xl font-bold text-cyan-100 mb-2"
+              className="text-2xl sm:text-3xl font-bold text-cyan-100 mb-2"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3, duration: 0.5 }}
             >
               Login
             </motion.h1>
-            <p className="text-cyan-300 text-center">Access your SmartEcoLock account</p>
+            <p className="text-cyan-300 text-center text-sm sm:text-base">Access your SmartEcoLock account</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6 relative z-10">
@@ -229,7 +227,7 @@ const Login: React.FC = () => {
                   onChange={(e) => setIdNumber(e.target.value)}
                   onFocus={() => setInputFocus({ ...inputFocus, id: true })}
                   onBlur={() => setInputFocus({ ...inputFocus, id: false })}
-                  className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400"
+                  className="w-full pl-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400 text-sm sm:text-base"
                   placeholder="Enter your ID number"
                   required
                 />
@@ -256,7 +254,7 @@ const Login: React.FC = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   onFocus={() => setInputFocus({ ...inputFocus, password: true })}
                   onBlur={() => setInputFocus({ ...inputFocus, password: false })}
-                  className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400"
+                  className="w-full pl-10 pr-10 p-3 rounded-lg border border-gray-700 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300 bg-gray-700 text-white placeholder-gray-400 text-sm sm:text-base"
                   placeholder="Enter your password"
                   required
                 />
@@ -279,7 +277,7 @@ const Login: React.FC = () => {
               initial={{ opacity: 0, x: -50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.6, type: 'tween' }}
-              className="flex items-center justify-between text-sm text-gray-400"
+              className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-sm text-gray-400 space-y-2 sm:space-y-0"
             >
               <label className="flex items-center">
                 <input
@@ -302,7 +300,7 @@ const Login: React.FC = () => {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold p-3 rounded-lg transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg hover:shadow-cyan-500/50"
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold p-3 rounded-lg transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg hover:shadow-cyan-500/50 text-sm sm:text-base"
               >
                 {isLoading ? (
                   <span className="animate-spin">
@@ -324,7 +322,7 @@ const Login: React.FC = () => {
               transition={{ delay: 0.8, duration: 0.5 }}
               className="text-center mt-4"
             >
-              <p className="text-gray-400">
+              <p className="text-gray-400 text-sm sm:text-base">
                 Don't have an account?{' '}
                 <Link
                   to="/rfid-registration"
@@ -338,10 +336,8 @@ const Login: React.FC = () => {
         </motion.div>
 
         {/* Footer */}
-        <footer className="mt-8 text-center text-gray-400">
+        <footer className="mt-6 sm:mt-8 text-center text-gray-400 text-xs sm:text-sm">
           <p>© 2025 SmartEcoLock Tech System. All rights reserved.</p>
-          <div className="flex justify-center space-x-4 mt-2">
-          </div>
         </footer>
       </div>
     </div>
