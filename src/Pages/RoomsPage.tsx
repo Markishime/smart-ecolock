@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { ref, onValue, off, set } from 'firebase/database';
+import { rtdb } from '../firebase';
 import AdminSidebar from '../components/AdminSidebar';
 import {
   BuildingOfficeIcon,
@@ -15,6 +15,7 @@ import Swal from 'sweetalert2';
 import { theme } from '../styles/theme';
 import AddRoomModal from '../components/AddRoomModal';
 
+// Interfaces based on JSON and requirements
 interface Room {
   id: string;
   name: string;
@@ -23,46 +24,35 @@ interface Room {
   capacity: number;
   type: 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room';
   status: 'available' | 'occupied' | 'maintenance';
-  facilities?: {
-    hasProjector: boolean;
-    hasAC: boolean;
-    hasComputers: boolean;
-    hasWifi: boolean;
-  };
 }
 
 interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  roomName: string;
-}
-
-interface Subject {
-  id: string;
-  name: string;
-  code: string;
-  credits: number;
-  department: string;
-  details: string;
-  sections: Section[];
-  status: 'active' | 'inactive';
-}
-
-interface Section {
-  id: string;
-  code: string;
-  name: string;
-  instructorId: string;
-  instructorName: string;
-  schedules: Schedule[];
+  roomName: string | { name: string };
+  section: string;
+  subject: string;
+  subjectCode: string;
+  instructorName?: string;
+  sectionId?: string;
 }
 
 interface Instructor {
   uid: string;
   fullName: string;
-  email?: string;
-  assignedSubjects: Subject[];
+  email: string;
+  ClassStatus?: {
+    Status: string;
+    dateTime: string;
+    schedule?: Schedule;
+  };
+}
+
+interface Student {
+  schedules: Schedule[];
+  fullName: string;
+  email: string;
 }
 
 interface RoomAssignment {
@@ -71,10 +61,10 @@ interface RoomAssignment {
   isOccupied: boolean;
 }
 
-const RoomsPage = () => {
+const RoomsPage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [instructors, setInstructors] = useState<Instructor[]>([]);
+  const [instructors, setInstructors] = useState<Record<string, Instructor>>({});
+  const [students, setStudents] = useState<Record<string, Student>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<Room['status'] | 'all'>('all');
@@ -82,85 +72,75 @@ const RoomsPage = () => {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
+    setIsLoading(true);
+
+    // Derive rooms from schedules since JSON lacks a Rooms node
     const fetchData = async () => {
-      setIsLoading(true);
-      await Promise.all([fetchRooms(), fetchSubjects(), fetchInstructors()]);
+      const refs = {
+        instructors: ref(rtdb, 'Instructors'),
+        students: ref(rtdb, 'Students'),
+      };
+
+      const listeners = [
+        { path: 'instructors', ref: refs.instructors },
+        { path: 'students', ref: refs.students },
+      ];
+
+      listeners.forEach(({ ref, path }) => {
+        onValue(
+          ref,
+          (snapshot) => {
+            const data = snapshot.val() || {};
+            if (path === 'instructors') {
+              setInstructors(data);
+            } else if (path === 'students') {
+              setStudents(data);
+            }
+          },
+          (error) => {
+            console.error(`Error fetching ${path}:`, error);
+            Swal.fire('Error', `Failed to fetch ${path}`, 'error');
+          }
+        );
+      });
+
+      // Derive rooms from schedules
+      const allSchedules = [
+        ...Object.values(instructors).flatMap((instructor) =>
+          instructor.ClassStatus?.schedule ? [instructor.ClassStatus.schedule] : []
+        ),
+        ...Object.values(students).flatMap((student) => student.schedules || []),
+      ];
+
+      const uniqueRoomNames = Array.from(
+        new Set(
+          allSchedules.map((schedule) =>
+            typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name
+          )
+        )
+      );
+
+      const derivedRooms: Room[] = uniqueRoomNames.map((name, index) => ({
+        id: `room_${index}`,
+        name,
+        building: 'Unknown', // Placeholder, as JSON lacks building
+        floor: 'Unknown', // Placeholder
+        capacity: 0, // Placeholder
+        type: 'classroom', // Default
+        status: 'available',
+      }));
+
+      setRooms(derivedRooms);
       setLastUpdated(new Date());
       setIsLoading(false);
+
+      return () => {
+        listeners.forEach(({ ref }) => off(ref));
+      };
     };
+
     fetchData();
   }, []);
-
-  const fetchRooms = async () => {
-    try {
-      const roomsSnapshot = await getDocs(collection(db, 'rooms'));
-      const roomsData = roomsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name || '',
-          building: data.building || '',
-          floor: data.floor || '',
-          capacity: data.capacity || 0,
-          type: data.type || 'classroom',
-          status: data.status || 'available',
-          facilities: {
-            hasProjector: false,
-            hasAC: false,
-            hasComputers: false,
-            hasWifi: false,
-            ...(data.facilities || {}),
-          },
-        } as Room;
-      });
-      setRooms(roomsData);
-    } catch (error) {
-      console.error('Error fetching rooms:', error);
-      Swal.fire('Error', 'Failed to fetch rooms', 'error');
-    }
-  };
-
-  const fetchSubjects = async () => {
-    try {
-      const subjectsSnapshot = await getDocs(collection(db, 'subjects'));
-      const subjectsData = subjectsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name || 'Unknown Subject',
-          code: data.code || '',
-          credits: data.credits || 0,
-          department: data.department || 'Unassigned',
-          details: data.details || '',
-          sections: data.sections || [],
-          status: data.status || 'active',
-        } as Subject;
-      });
-      setSubjects(subjectsData);
-    } catch (error) {
-      console.error('Error fetching subjects:', error);
-      Swal.fire('Error', 'Failed to fetch subjects', 'error');
-    }
-  };
-
-  const fetchInstructors = async () => {
-    try {
-      const teachersSnapshot = await getDocs(collection(db, 'teachers'));
-      const instructorsData = teachersSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          uid: doc.id,
-          fullName: data.fullName || 'Unknown Instructor',
-          email: data.email || '',
-          assignedSubjects: data.assignedSubjects || [],
-        } as Instructor;
-      });
-      setInstructors(instructorsData);
-    } catch (error) {
-      console.error('Error fetching instructors:', error);
-      Swal.fire('Error', 'Failed to fetch instructors', 'error');
-    }
-  };
 
   const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
     const now = new Date();
@@ -171,28 +151,45 @@ const RoomsPage = () => {
     const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
 
-    instructors.forEach(instructor => {
+    // Check instructor schedules
+    Object.entries(instructors).forEach(([uid, instructor]) => {
       const matchingSchedules: Schedule[] = [];
-      instructor.assignedSubjects.forEach(subject => {
-        subject.sections.forEach(section => {
-          section.schedules.forEach(schedule => {
-            if (schedule.roomName === roomName) {
-              matchingSchedules.push(schedule);
-              if (
-                schedule.day === currentDay &&
-                currentTime >= schedule.startTime &&
-                currentTime <= schedule.endTime
-              ) {
-                isOccupied = true;
-              }
-            }
-          });
-        });
-      });
-      if (matchingSchedules.length > 0) {
-        assignedInstructors.push(instructor);
-        schedulesByInstructor[instructor.uid] = matchingSchedules;
+      if (instructor.ClassStatus?.schedule) {
+        const schedule = instructor.ClassStatus.schedule;
+        const scheduleRoomName =
+          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
+        if (scheduleRoomName === roomName) {
+          matchingSchedules.push(schedule);
+          if (
+            schedule.day === currentDay &&
+            currentTime >= schedule.startTime &&
+            currentTime <= schedule.endTime
+          ) {
+            isOccupied = true;
+          }
+        }
       }
+      if (matchingSchedules.length > 0) {
+        assignedInstructors.push({ ...instructor, uid });
+        schedulesByInstructor[uid] = matchingSchedules;
+      }
+    });
+
+    // Check student schedules
+    Object.values(students).forEach((student) => {
+      student.schedules?.forEach((schedule) => {
+        const scheduleRoomName =
+          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
+        if (scheduleRoomName === roomName) {
+          if (
+            schedule.day === currentDay &&
+            currentTime >= schedule.startTime &&
+            currentTime <= schedule.endTime
+          ) {
+            isOccupied = true;
+          }
+        }
+      });
     });
 
     return {
@@ -205,28 +202,23 @@ const RoomsPage = () => {
   const handleAddRoom = async (roomData: Partial<Room>) => {
     try {
       const completeRoomData: Room = {
-        id: '',
+        id: `room_${Date.now()}`, // Generate a unique ID
         name: roomData.name || '',
-        building: roomData.building || '',
-        floor: roomData.floor || '',
+        building: roomData.building || 'Unknown',
+        floor: roomData.floor || 'Unknown',
         capacity: roomData.capacity || 0,
         type: roomData.type || 'classroom',
         status: roomData.status || 'available',
-        facilities: {
-          hasProjector: roomData.facilities?.hasProjector || false,
-          hasAC: roomData.facilities?.hasAC || false,
-          hasComputers: roomData.facilities?.hasComputers || false,
-          hasWifi: roomData.facilities?.hasWifi || false,
-        },
       };
 
-      await addDoc(collection(db, 'rooms'), {
+      // Write to RTDB
+      await set(ref(rtdb, `Rooms/${completeRoomData.id}`), {
         ...completeRoomData,
         createdAt: new Date().toISOString(),
       });
 
       setIsAddModalOpen(false);
-      await fetchRooms();
+      setRooms((prev) => [...prev, completeRoomData]);
 
       Swal.fire({
         icon: 'success',
@@ -257,14 +249,10 @@ const RoomsPage = () => {
 
   const handleSetMaintenance = async (roomId: string) => {
     try {
-      await updateDoc(doc(db, 'rooms', roomId), {
-        status: 'maintenance',
-      });
+      await set(ref(rtdb, `Rooms/${roomId}/status`), 'maintenance');
 
-      setRooms(prevRooms =>
-        prevRooms.map(r =>
-          r.id === roomId ? { ...r, status: 'maintenance' } : r
-        )
+      setRooms((prevRooms) =>
+        prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'maintenance' } : r))
       );
 
       Swal.fire({
@@ -296,14 +284,10 @@ const RoomsPage = () => {
 
   const handleSetAvailable = async (roomId: string) => {
     try {
-      await updateDoc(doc(db, 'rooms', roomId), {
-        status: 'available',
-      });
+      await set(ref(rtdb, `Rooms/${roomId}/status`), 'available');
 
-      setRooms(prevRooms =>
-        prevRooms.map(r =>
-          r.id === roomId ? { ...r, status: 'available' } : r
-        )
+      setRooms((prevRooms) =>
+        prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'available' } : r))
       );
 
       Swal.fire({
@@ -334,7 +318,7 @@ const RoomsPage = () => {
   };
 
   const filteredRooms = rooms
-    .map(room => {
+    .map((room) => {
       const { instructors, schedules, isOccupied } = getAssignedInstructorAndStatus(room.name);
       return {
         ...room,
@@ -343,7 +327,7 @@ const RoomsPage = () => {
         schedulesByInstructor: schedules,
       };
     })
-    .filter(room => {
+    .filter((room) => {
       const matchesStatus = filterStatus === 'all' || room.status === filterStatus;
       const matchesSearch =
         searchQuery === '' ||
@@ -380,21 +364,25 @@ const RoomsPage = () => {
         <div className={`${theme.components.card} p-4 sm:p-6`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Search Rooms</label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">
+                Search Rooms
+              </label>
               <input
                 type="text"
                 placeholder="Search by room number, name..."
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               />
             </div>
 
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Filter by Status</label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">
+                Filter by Status
+              </label>
               <select
                 value={filterStatus}
-                onChange={e => setFilterStatus(e.target.value as Room['status'] | 'all')}
+                onChange={(e) => setFilterStatus(e.target.value as Room['status'] | 'all')}
                 className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               >
                 <option value="all">All Status</option>
@@ -419,7 +407,7 @@ const RoomsPage = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            {filteredRooms.map(room => (
+            {filteredRooms.map((room) => (
               <motion.div
                 key={room.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -463,10 +451,12 @@ const RoomsPage = () => {
                       Assigned Instructors
                     </span>
                     {room.assignedInstructors.length > 0 ? (
-                      room.assignedInstructors.map(instructor => (
+                      room.assignedInstructors.map((instructor) => (
                         <div key={instructor.uid} className="mb-2">
                           <span className="text-xs sm:text-sm font-medium">
-                            {instructor.fullName.length > 20 ? `${instructor.fullName.substring(0, 17)}...` : instructor.fullName}
+                            {instructor.fullName.length > 20
+                              ? `${instructor.fullName.substring(0, 17)}...`
+                              : instructor.fullName}
                           </span>
                           {room.schedulesByInstructor[instructor.uid]?.length > 0 ? (
                             <div className="mt-1">
@@ -483,7 +473,9 @@ const RoomsPage = () => {
                               </div>
                             </div>
                           ) : (
-                            <div className="text-xs sm:text-sm text-gray-500 mt-1">No schedules in this room</div>
+                            <div className="text-xs sm:text-sm text-gray-500 mt-1">
+                              No schedules in this room
+                            </div>
                           )}
                         </div>
                       ))

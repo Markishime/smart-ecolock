@@ -131,6 +131,7 @@ const Dashboard: React.FC = () => {
   const [newRFIDTag, setNewRFIDTag] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState({
     accessLogs: 1,
     systemLogs: 1,
@@ -200,7 +201,9 @@ const Dashboard: React.FC = () => {
               }).replace(/\//g, '_');
               const todayLogs = Object.values(data)
                 .flatMap((userLogs) =>
-                  Object.values(userLogs as Record<string, any>).filter((log) => log.timestamp?.startsWith(today))
+                  Object.values(userLogs as Record<string, any>).filter((log) =>
+                    log.timestamp?.startsWith(today)
+                  )
                 )
                 .filter((log): log is AccessLog => log !== undefined && log.timestamp !== undefined);
               setStats((prev) => ({ ...prev, totalAccessToday: todayLogs.length }));
@@ -429,30 +432,39 @@ const Dashboard: React.FC = () => {
     </motion.div>
   );
 
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-
   return (
-    <div className="flex min-h-screen bg-gray-50">
-       <AdminSidebar/>
-      <button
-        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-        className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
+    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
+      <div
+        className={`fixed top-0 left-0 h-full bg-white shadow-lg transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:translate-x-0 w-[80px] lg:w-64 z-50`}
       >
-        <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
-        </svg>
-      </button>
+        <AdminSidebar />
+      </div>
 
-      <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
+      <div
+        className={`flex-1 transition-all duration-300 p-4 sm:p-8 overflow-y-auto ${
+          isSidebarOpen ? 'ml-[80px] lg:ml-64' : 'ml-0 md:ml-[80px] lg:ml-64'
+        }`}
+      >
+        <button
+          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+          className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
+        >
+          <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+          </svg>
+        </button>
+
         <motion.h1
           initial={{ opacity: 0, y: -50 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-2xl lg:text-3xl font-bold text-gray-900 mb-6"
+          className="text-xl sm:text-2xl font-bold text-blue-900 mb-6"
         >
-          Smart Eco Lock Dashboard
+          Smart Eco Lock Insights
         </motion.h1>
 
-        {loading && <div className="text-center text-gray-600">Loading data...</div>}
+        {loading && <div className="text-center text-blue-600/80">Loading data...</div>}
 
         <div className="mb-6">
           <input
@@ -460,12 +472,12 @@ const Dashboard: React.FC = () => {
             placeholder="Search personnel, logs, alerts, UIDs..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full sm:w-80 rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3 text-sm"
+            className="w-full sm:w-80 rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-3 text-sm sm:text-base"
             aria-label="Search dashboard data"
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
           <StatCard
             title="Personnel"
             value={stats.totalInstructors + stats.totalStudents + stats.totalAdmins}
@@ -491,7 +503,7 @@ const Dashboard: React.FC = () => {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed top-4 right-4 bg-green-100 border border-green-300 text-green-800 p-3 rounded-lg shadow-lg flex items-center text-sm"
+            className="fixed top-4 right-4 bg-green-100 border border-green-300 text-green-800 p-3 rounded-lg shadow-lg flex items-center text-sm sm:text-base"
             aria-live="polite"
           >
             <TagIcon className="w-5 h-5 mr-2" />
@@ -508,7 +520,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, x: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <UserGroupIcon className="w-5 h-5 mr-2 text-indigo-600" />
               Personnel
             </h2>
@@ -517,7 +529,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <h3 className="font-medium text-gray-800">{instructor.Profile.fullName}</h3>
                   <p className="text-gray-600">Role: {instructor.Profile.role}</p>
@@ -530,7 +542,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <h3 className="font-medium text-gray-800">{student.fullName}</h3>
                   <p className="text-gray-600">Role: {student.role}</p>
@@ -544,7 +556,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <h3 className="font-medium text-gray-800">{admin.fullName}</h3>
                   <p className="text-gray-600">Role: {admin.role}</p>
@@ -562,7 +574,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <ClockIcon className="w-5 h-5 mr-2 text-indigo-600" />
               Schedules
             </h2>
@@ -573,7 +585,7 @@ const Dashboard: React.FC = () => {
                     key={`${uid}-${instructor.ClassStatus.schedule.subjectCode}`}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm"
+                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
                   >
                     <p className="font-medium">
                       {instructor.ClassStatus.schedule.subject} (
@@ -602,7 +614,7 @@ const Dashboard: React.FC = () => {
                     key={`${uid}-${index}`}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm"
+                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
                   >
                     <p className="font-medium">
                       {schedule.subject} ({schedule.subjectCode})
@@ -611,7 +623,12 @@ const Dashboard: React.FC = () => {
                     <p className="text-gray-600">
                       {schedule.day}: {schedule.startTime} - {schedule.endTime}
                     </p>
-                    <p className="text-gray-600">Room: {schedule.roomName as string}</p>
+                    <p className="text-gray-600">
+                      Room:{' '}
+                      {typeof schedule.roomName === 'string'
+                        ? schedule.roomName
+                        : schedule.roomName.name}
+                    </p>
                     <p className="text-gray-600">Section: {schedule.section}</p>
                   </motion.div>
                 ))
@@ -625,7 +642,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <BellIcon className="w-5 h-5 mr-2 text-red-600" />
               Alerts
             </h2>
@@ -634,7 +651,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className={`p-3 rounded-lg border text-sm ${
+                  className={`p-3 rounded-lg border text-sm sm:text-base ${
                     alert.status === 'active' ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'
                   }`}
                 >
@@ -658,7 +675,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <HomeIcon className="w-5 h-5 mr-2 text-indigo-600" />
               Access Logs
             </h2>
@@ -667,7 +684,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`${uid}-${timestamp}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <p className="font-medium">{log.fullName}</p>
                   <p className="text-gray-600">Action: {log.action}</p>
@@ -676,7 +693,7 @@ const Dashboard: React.FC = () => {
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm">
+            <div className="mt-4 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({
@@ -685,7 +702,7 @@ const Dashboard: React.FC = () => {
                   }))
                 }
                 disabled={currentPage.accessLogs === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Previous
               </button>
@@ -701,7 +718,7 @@ const Dashboard: React.FC = () => {
                   currentPage.accessLogs >=
                   Math.ceil(filteredAccessLogs.length / ITEMS_PER_PAGE)
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Next
               </button>
@@ -714,7 +731,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <DocumentTextIcon className="w-5 h-5 mr-2 text-gray-600" />
               System Logs
             </h2>
@@ -723,13 +740,13 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <p className="text-gray-600">{log}</p>
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm">
+            <div className="mt-4 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({
@@ -738,7 +755,7 @@ const Dashboard: React.FC = () => {
                   }))
                 }
                 disabled={currentPage.systemLogs === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Previous
               </button>
@@ -754,7 +771,7 @@ const Dashboard: React.FC = () => {
                   currentPage.systemLogs >=
                   Math.ceil(filteredSystemLogs.length / ITEMS_PER_PAGE)
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Next
               </button>
@@ -767,7 +784,7 @@ const Dashboard: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl shadow-md p-4 sm:p-6"
           >
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
               <TagIcon className="w-5 h-5 mr-2 text-teal-600" />
               RFID UIDs
             </h2>
@@ -776,7 +793,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`reg-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <p className="font-medium">UID: {uid}</p>
                   <p className="text-gray-600">Status: Registered</p>
@@ -787,7 +804,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`unreg-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-yellow-50 rounded-lg border border-yellow-200 hover:bg-yellow-100 transition text-sm"
+                  className="p-3 bg-yellow-50 rounded-lg border border-yellow-200 hover:bg-yellow-100 transition text-sm sm:text-base"
                 >
                   <p className="font-medium">UID: {uid}</p>
                   <p className="text-gray-600">Status: Unregistered</p>
@@ -800,7 +817,7 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`rfid-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <p className="font-medium">UID: {uid}</p>
                   <p className="text-gray-600">Role: {data.role}</p>
@@ -808,13 +825,13 @@ const Dashboard: React.FC = () => {
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm">
+            <div className="mt-4 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({ ...prev, rfid: Math.max(prev.rfid - 1, 1) }))
                 }
                 disabled={currentPage.rfid === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Previous
               </button>
@@ -838,7 +855,7 @@ const Dashboard: React.FC = () => {
                       ITEMS_PER_PAGE
                   )
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
+                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
               >
                 Next
               </button>
