@@ -42,29 +42,39 @@ interface Instructor {
   uid: string;
   fullName: string;
   email: string;
-  ClassStatus?: {
-    Status: string;
-    dateTime: string;
-    schedule?: Schedule;
-  };
+  role?: string; // From rfid node
+  schedules?: Schedule[]; // Derived or mocked
 }
 
-interface Student {
-  schedules: Schedule[];
-  fullName: string;
-  email: string;
+interface AdminPZEM {
+  current: string;
+  energy: string;
+  frequency: string;
+  power: string;
+  powerFactor: string;
+  voltage: string;
+  timestamp: string;
+  roomDetails: {
+    building: string;
+    floor: string;
+    name: string;
+    status: string;
+    type: string;
+  };
 }
 
 interface RoomAssignment {
   instructors: Instructor[];
   schedules: Record<string, Schedule[]>;
   isOccupied: boolean;
+  adminPZEM?: AdminPZEM; // Add AdminPZEM to room assignment
 }
 
 const RoomsPage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [instructors, setInstructors] = useState<Record<string, Instructor>>({});
-  const [students, setStudents] = useState<Record<string, Student>>({});
+  const [accessLogs, setAccessLogs] = useState<any>({});
+  const [rfidData, setRfidData] = useState<any>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<Room['status'] | 'all'>('all');
@@ -76,13 +86,13 @@ const RoomsPage: React.FC = () => {
 
     const fetchData = async () => {
       const refs = {
-        instructors: ref(rtdb, 'Instructors'),
-        students: ref(rtdb, 'Students'),
+        accessLogs: ref(rtdb, 'AccessLogs'),
+        rfid: ref(rtdb, 'rfid'),
       };
 
       const listeners = [
-        { path: 'instructors', ref: refs.instructors },
-        { path: 'students', ref: refs.students },
+        { path: 'accessLogs', ref: refs.accessLogs },
+        { path: 'rfid', ref: refs.rfid },
       ];
 
       listeners.forEach(({ ref, path }) => {
@@ -90,10 +100,10 @@ const RoomsPage: React.FC = () => {
           ref,
           (snapshot) => {
             const data = snapshot.val() || {};
-            if (path === 'instructors') {
-              setInstructors(data);
-            } else if (path === 'students') {
-              setStudents(data);
+            if (path === 'accessLogs') {
+              setAccessLogs(data);
+            } else if (path === 'rfid') {
+              setRfidData(data);
             }
           },
           (error) => {
@@ -113,32 +123,53 @@ const RoomsPage: React.FC = () => {
         );
       });
 
-      // Derive rooms from schedules
-      const allSchedules = [
-        ...Object.values(instructors).flatMap((instructor) =>
-          instructor.ClassStatus?.schedule ? [instructor.ClassStatus.schedule] : []
-        ),
-        ...Object.values(students).flatMap((student) => student.schedules || []),
-      ];
+      // Derive rooms from AccessLogs AdminPZEM roomDetails
+      const derivedRooms: Room[] = [];
+      Object.values(accessLogs).forEach((uidLogs: any) => {
+        Object.values(uidLogs).forEach((log: any) => {
+          if (log.action === 'exit' && log.AdminPZEM?.roomDetails) {
+            const roomDetail = log.AdminPZEM.roomDetails;
+            if (!derivedRooms.find((r) => r.name === roomDetail.name)) {
+              derivedRooms.push({
+                id: `room_${roomDetail.name}`,
+                name: roomDetail.name,
+                building: roomDetail.building,
+                floor: roomDetail.floor,
+                capacity: 0, // Not in JSON
+                type: roomDetail.type as Room['type'],
+                status: roomDetail.status as Room['status'],
+              });
+            }
+          }
+        });
+      });
 
-      const uniqueRoomNames = Array.from(
-        new Set(
-          allSchedules.map((schedule) =>
-            typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name
-          )
-        )
-      );
+      // Mock instructors with schedules (since JSON lacks explicit schedules)
+      const mockInstructors: Record<string, Instructor> = {};
+      Object.entries(rfidData).forEach(([rfidUid, data]: [string, any]) => {
+        if (data.role === 'instructor') {
+          mockInstructors[rfidUid] = {
+            uid: rfidUid,
+            fullName: `Instructor_${rfidUid}`, // Placeholder, replace with Admin data if available
+            email: `instructor_${rfidUid}@example.com`,
+            role: data.role,
+            schedules: [
+              // Mock schedule; replace with actual if available
+              {
+                day: 'Monday',
+                startTime: '08:00',
+                endTime: '10:00',
+                roomName: '705', // Match with room if needed
+                section: 'A',
+                subject: 'Computer Science',
+                subjectCode: 'CS101',
+              },
+            ],
+          };
+        }
+      });
 
-      const derivedRooms: Room[] = uniqueRoomNames.map((name, index) => ({
-        id: `room_${index}`,
-        name,
-        building: 'Unknown', // JSON lacks building
-        floor: 'Unknown', // JSON lacks floor
-        capacity: 0, // JSON lacks capacity
-        type: 'classroom', // Default
-        status: 'available', // Will be updated in getAssignedInstructorAndStatus
-      }));
-
+      setInstructors(mockInstructors);
       setRooms(derivedRooms);
       setLastUpdated(new Date());
       setIsLoading(false);
@@ -149,7 +180,7 @@ const RoomsPage: React.FC = () => {
     };
 
     fetchData();
-  }, [instructors, students]); // Re-run if instructors/students change
+  }, []);
 
   const isTimeWithinSchedule = (schedule: Schedule, now: Date): boolean => {
     const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
@@ -168,48 +199,52 @@ const RoomsPage: React.FC = () => {
   };
 
   const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
-    const now = new Date('2025-04-13T12:00:00'); // Fixed for testing; use new Date() for live
+    const now = new Date('2025-04-13T12:00:00'); // Fixed for testing
     const assignedInstructors: Instructor[] = [];
     const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
+    let adminPZEM: AdminPZEM | undefined;
 
-    // Check instructor schedules
-    Object.entries(instructors).forEach(([uid, instructor]) => {
-      const matchingSchedules: Schedule[] = [];
-      if (instructor.ClassStatus?.schedule) {
-        const schedule = instructor.ClassStatus.schedule;
-        const scheduleRoomName =
-          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
-        if (scheduleRoomName === roomName) {
-          matchingSchedules.push(schedule);
-          if (isTimeWithinSchedule(schedule, now)) {
-            isOccupied = true;
-          }
-        }
-      }
-      if (matchingSchedules.length > 0) {
-        assignedInstructors.push({ ...instructor, uid });
-        schedulesByInstructor[uid] = matchingSchedules;
-      }
-    });
-
-    // Check student schedules
-    Object.values(students).forEach((student) => {
-      student.schedules?.forEach((schedule) => {
-        const scheduleRoomName =
-          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
-        if (scheduleRoomName === roomName) {
-          if (isTimeWithinSchedule(schedule, now)) {
-            isOccupied = true;
+    // Fetch AdminPZEM data for exit action
+    Object.entries(accessLogs).forEach(([uid, logs]: [string, any]) => {
+      Object.entries(logs).forEach(([timestamp, log]: [string, any]) => {
+        if (log.action === 'exit' && log.AdminPZEM?.roomDetails.name === roomName) {
+          adminPZEM = log.AdminPZEM;
+          // Match UID with instructors
+          if (instructors[uid]) {
+            assignedInstructors.push({ ...instructors[uid], uid });
+            schedulesByInstructor[uid] = instructors[uid].schedules || [];
+            if (instructors[uid].schedules?.some((schedule) => isTimeWithinSchedule(schedule, now))) {
+              isOccupied = true;
+            }
           }
         }
       });
+    });
+
+    // Additional check for instructor schedules
+    Object.entries(instructors).forEach(([uid, instructor]) => {
+      if (!schedulesByInstructor[uid]) {
+        const matchingSchedules = instructor.schedules?.filter((schedule) => {
+          const scheduleRoomName =
+            typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
+          return scheduleRoomName === roomName;
+        }) || [];
+        if (matchingSchedules.length > 0) {
+          assignedInstructors.push({ ...instructor, uid });
+          schedulesByInstructor[uid] = matchingSchedules;
+          if (matchingSchedules.some((schedule) => isTimeWithinSchedule(schedule, now))) {
+            isOccupied = true;
+          }
+        }
+      }
     });
 
     return {
       instructors: assignedInstructors,
       schedules: schedulesByInstructor,
       isOccupied,
+      adminPZEM,
     };
   };
 
@@ -263,11 +298,9 @@ const RoomsPage: React.FC = () => {
   const handleSetMaintenance = async (roomId: string) => {
     try {
       await set(ref(rtdb, `Rooms/${roomId}/status`), 'maintenance');
-
       setRooms((prevRooms) =>
         prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'maintenance' } : r))
       );
-
       Swal.fire({
         icon: 'success',
         title: 'Room set to Maintenance',
@@ -298,11 +331,9 @@ const RoomsPage: React.FC = () => {
   const handleSetAvailable = async (roomId: string) => {
     try {
       await set(ref(rtdb, `Rooms/${roomId}/status`), 'available');
-
       setRooms((prevRooms) =>
         prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'available' } : r))
       );
-
       Swal.fire({
         icon: 'success',
         title: 'Room set to Available',
@@ -332,12 +363,13 @@ const RoomsPage: React.FC = () => {
 
   const filteredRooms = rooms
     .map((room) => {
-      const { instructors, schedules, isOccupied } = getAssignedInstructorAndStatus(room.name);
+      const { instructors, schedules, isOccupied, adminPZEM } = getAssignedInstructorAndStatus(room.name);
       return {
         ...room,
         status: room.status === 'maintenance' ? 'maintenance' : isOccupied ? 'occupied' : 'available',
         assignedInstructors: instructors,
         schedulesByInstructor: schedules,
+        adminPZEM,
       };
     })
     .filter((room) => {
@@ -482,7 +514,7 @@ const RoomsPage: React.FC = () => {
                               <div className="text-xs sm:text-sm font-medium">
                                 {room.schedulesByInstructor[instructor.uid].map((schedule, index) => (
                                   <div key={index}>
-                                    {schedule.day} {schedule.startTime}-{schedule.endTime}
+                                    {schedule.day} {schedule.startTime}-{schedule.endTime} ({schedule.subject})
                                   </div>
                                 ))}
                               </div>
@@ -498,6 +530,23 @@ const RoomsPage: React.FC = () => {
                       <span className="text-xs sm:text-sm text-gray-500">None</span>
                     )}
                   </div>
+                  {room.adminPZEM && (
+                    <div className="flex flex-col">
+                      <span className="text-xs sm:text-sm text-gray-600 flex items-center mb-1">
+                        <ClockIcon className="w-4 h-4 mr-1" />
+                        AdminPZEM Data
+                      </span>
+                      <div className="text-xs sm:text-sm font-medium">
+                        <div>Current: {room.adminPZEM.current}</div>
+                        <div>Energy: {room.adminPZEM.energy}</div>
+                        <div>Frequency: {room.adminPZEM.frequency}</div>
+                        <div>Power: {room.adminPZEM.power}</div>
+                        <div>Power Factor: {room.adminPZEM.powerFactor}</div>
+                        <div>Voltage: {room.adminPZEM.voltage}</div>
+                        <div>Timestamp: {room.adminPZEM.timestamp}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row gap-2 sm:gap-3">
