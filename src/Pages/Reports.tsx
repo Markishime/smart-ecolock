@@ -11,6 +11,7 @@ import {
   HomeIcon,
   TagIcon,
   DocumentTextIcon,
+  BoltIcon,
 } from '@heroicons/react/24/solid';
 import Swal from 'sweetalert2';
 
@@ -19,7 +20,7 @@ interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  roomName: string | { name: string }; // Removed pzem
+  roomName: string | { name: string };
   section: string;
   subject: string;
   subjectCode: string;
@@ -82,6 +83,22 @@ interface AccessLog {
   fullName: string;
   role: string;
   timestamp: string;
+  AdminPZEM?: {
+    current: string;
+    energy: string;
+    frequency: string;
+    power: string;
+    powerFactor: string;
+    voltage: string;
+    timestamp: string;
+    roomDetails: {
+      building: string;
+      floor: string;
+      name: string;
+      status: string;
+      type: string;
+    };
+  };
 }
 
 interface Alert {
@@ -90,6 +107,14 @@ interface Alert {
   status: string;
   resolvedByFullName?: string;
   resolvedByUID?: string;
+}
+
+interface OfflineTamper {
+  action: string;
+  name: string;
+  role: string;
+  status: string;
+  timestamp: string;
 }
 
 interface Admin {
@@ -116,6 +141,15 @@ interface RFID {
   uid: string;
 }
 
+interface RoomPowerConsumption {
+  roomName: string;
+  building: string;
+  floor: string;
+  energy: string;
+  power: string;
+  timestamp: string;
+}
+
 const ITEMS_PER_PAGE = 10;
 
 const Dashboard: React.FC = () => {
@@ -124,6 +158,7 @@ const Dashboard: React.FC = () => {
   const [admins, setAdmins] = useState<Record<string, Admin>>({});
   const [accessLogs, setAccessLogs] = useState<Record<string, Record<string, AccessLog>>>({});
   const [alerts, setAlerts] = useState<Record<string, Alert>>({});
+  const [offlineDataLogging, setOfflineDataLogging] = useState<Record<string, OfflineTamper>>({});
   const [systemLogs, setSystemLogs] = useState<Record<string, string>>({});
   const [registeredUIDs, setRegisteredUIDs] = useState<Record<string, RegisteredUID>>({});
   const [unregisteredUIDs, setUnregisteredUIDs] = useState<Record<string, UnregisteredUID>>({});
@@ -136,6 +171,7 @@ const Dashboard: React.FC = () => {
     accessLogs: 1,
     systemLogs: 1,
     rfid: 1,
+    powerConsumption: 1,
   });
 
   const [stats, setStats] = useState({
@@ -146,6 +182,7 @@ const Dashboard: React.FC = () => {
     totalAccessToday: 0,
     totalSystemLogs: 0,
     totalRFIDs: 0,
+    totalRoomsMonitored: 0,
   });
 
   useEffect(() => {
@@ -156,6 +193,7 @@ const Dashboard: React.FC = () => {
       admins: ref(rtdb, 'Admin'),
       accessLogs: ref(rtdb, 'AccessLogs'),
       alerts: ref(rtdb, 'Alerts/Tamper'),
+      offlineDataLogging: ref(rtdb, 'OfflineDataLogging'),
       systemLogs: ref(rtdb, 'SystemLogs'),
       registeredUIDs: ref(rtdb, 'RegisteredUIDs'),
       unregisteredUIDs: ref(rtdb, 'UnregisteredUIDs'),
@@ -168,6 +206,7 @@ const Dashboard: React.FC = () => {
       { path: 'admins', ref: refs.admins },
       { path: 'accessLogs', ref: refs.accessLogs },
       { path: 'alerts', ref: refs.alerts },
+      { path: 'offlineDataLogging', ref: refs.offlineDataLogging },
       { path: 'systemLogs', ref: refs.systemLogs },
       { path: 'registeredUIDs', ref: refs.registeredUIDs },
       { path: 'unregisteredUIDs', ref: refs.unregisteredUIDs },
@@ -206,7 +245,19 @@ const Dashboard: React.FC = () => {
                   )
                 )
                 .filter((log): log is AccessLog => log !== undefined && log.timestamp !== undefined);
-              setStats((prev) => ({ ...prev, totalAccessToday: todayLogs.length }));
+              const roomsMonitored = new Set(
+                Object.values(data)
+                  .flatMap((userLogs) =>
+                    Object.values(userLogs as Record<string, any>)
+                      .filter((log) => log.AdminPZEM?.roomDetails)
+                      .map((log) => log.AdminPZEM.roomDetails.name)
+                  )
+              ).size;
+              setStats((prev) => ({
+                ...prev,
+                totalAccessToday: todayLogs.length,
+                totalRoomsMonitored: roomsMonitored,
+              }));
               break;
             case 'alerts':
               setAlerts(data);
@@ -214,6 +265,9 @@ const Dashboard: React.FC = () => {
                 (alert): alert is Alert => alert !== null && alert !== undefined && alert.status === 'active'
               ).length;
               setStats((prev) => ({ ...prev, activeAlerts }));
+              break;
+            case 'offlineDataLogging':
+              setOfflineDataLogging(data);
               break;
             case 'systemLogs':
               setSystemLogs(data);
@@ -342,19 +396,33 @@ const Dashboard: React.FC = () => {
     return [...logs, ...instructorLogs].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }, [accessLogs, instructors, searchQuery]);
 
-  const filteredAlerts = useMemo(
-    () =>
-      Object.entries(alerts).filter(([_, alert]) =>
-        [
-          alert.startTime,
-          alert.endTime,
-          alert.status,
-          alert.resolvedByFullName,
-          alert.resolvedByUID,
-        ].some((field) => field?.toLowerCase().includes(searchQuery.toLowerCase()))
-      ),
-    [alerts, searchQuery]
-  );
+  const filteredAlerts = useMemo(() => {
+    const alertEntries = Object.entries(alerts).filter(([_, alert]) =>
+      [
+        alert.startTime,
+        alert.endTime,
+        alert.status,
+        alert.resolvedByFullName,
+        alert.resolvedByUID,
+      ].some((field) => field?.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+    const offlineTamperEntries = Object.entries(offlineDataLogging)
+      .filter(([key, tamper]) => tamper.action === 'TamperDetected' && tamper.status === 'Active')
+      .map(([key, tamper]) => [
+        key,
+        {
+          startTime: tamper.timestamp,
+          status: tamper.status,
+          resolvedByFullName: tamper.name,
+          resolvedByUID: null,
+        },
+      ]);
+    return [...alertEntries, ...offlineTamperEntries].sort((a, b) =>
+      (typeof b[1] === 'object' && 'startTime' in b[1] ? b[1].startTime : '').localeCompare(
+        typeof a[1] === 'object' && 'startTime' in a[1] ? a[1].startTime : ''
+      )
+    );
+  }, [alerts, offlineDataLogging, searchQuery]);
 
   const filteredSystemLogs = useMemo(
     () =>
@@ -383,6 +451,26 @@ const Dashboard: React.FC = () => {
     [registeredUIDs, unregisteredUIDs, rfid, searchQuery]
   );
 
+  const roomPowerConsumption = useMemo(() => {
+    const rooms: RoomPowerConsumption[] = [];
+    Object.entries(accessLogs).forEach(([_, logs]) => {
+      Object.values(logs).forEach((log) => {
+        if (log.action === 'exit' && log.AdminPZEM?.roomDetails) {
+          const { roomDetails, energy, power, timestamp } = log.AdminPZEM;
+          rooms.push({
+            roomName: roomDetails.name,
+            building: roomDetails.building,
+            floor: roomDetails.floor,
+            energy,
+            power,
+            timestamp,
+          });
+        }
+      });
+    });
+    return rooms.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }, [accessLogs]);
+
   const paginatedAccessLogs = filteredAccessLogs.slice(
     (currentPage.accessLogs - 1) * ITEMS_PER_PAGE,
     currentPage.accessLogs * ITEMS_PER_PAGE
@@ -408,6 +496,11 @@ const Dashboard: React.FC = () => {
     ),
   };
 
+  const paginatedPowerConsumption = roomPowerConsumption.slice(
+    (currentPage.powerConsumption - 1) * ITEMS_PER_PAGE,
+    currentPage.powerConsumption * ITEMS_PER_PAGE
+  );
+
   const StatCard = ({
     title,
     value,
@@ -422,20 +515,21 @@ const Dashboard: React.FC = () => {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`p-4 bg-white rounded-xl shadow-md flex items-center space-x-3 hover:shadow-lg transition-all ${color}`}
+      whileHover={{ scale: 1.05 }}
+      className={`p-4 sm:p-6 bg-white rounded-2xl shadow-lg flex items-center space-x-3 sm:space-x-4 ${color} transition-all`}
     >
-      <div className="p-2 bg-opacity-20 rounded-full">{icon}</div>
+      <div className="p-2 sm:p-3 bg-opacity-20 rounded-full">{icon}</div>
       <div>
-        <h3 className="text-xs font-medium text-gray-600">{title}</h3>
-        <p className="text-lg font-bold text-gray-800">{value}</p>
+        <h3 className="text-sm sm:text-base font-semibold text-gray-700">{title}</h3>
+        <p className="text-lg sm:text-2xl font-bold text-gray-900">{value}</p>
       </div>
     </motion.div>
   );
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
+    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50/20 to-purple-50/20">
       <div
-        className={`fixed top-0 left-0 h-full bg-white shadow-lg transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 left-0 h-full bg-white shadow-2xl transition-transform duration-300 ease-in-out ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
         } md:translate-x-0 w-[80px] lg:w-64 z-50`}
       >
@@ -443,13 +537,14 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div
-        className={`flex-1 transition-all duration-300 p-4 sm:p-8 overflow-y-auto ${
+        className={`flex-1 transition-all duration-300 p-4 sm:p-6 lg:p-8 overflow-y-auto ${
           isSidebarOpen ? 'ml-[80px] lg:ml-64' : 'ml-0 md:ml-[80px] lg:ml-64'
         }`}
       >
         <button
           onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
+          className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-700 transition-colors"
+          aria-label="Toggle sidebar"
         >
           <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
@@ -459,42 +554,53 @@ const Dashboard: React.FC = () => {
         <motion.h1
           initial={{ opacity: 0, y: -50 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-xl sm:text-2xl font-bold text-blue-900 mb-6"
+          className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-indigo-900 mb-6 sm:mb-8 flex items-center"
         >
-          Smart Eco Lock Insights
+          <HomeIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-indigo-600" />
+          Smart Eco Lock Dashboard
         </motion.h1>
 
-        {loading && <div className="text-center text-blue-600/80">Loading data...</div>}
+        {loading && (
+          <div className="text-center text-indigo-600/80 text-lg sm:text-xl animate-pulse">
+            Loading insights...
+          </div>
+        )}
 
-        <div className="mb-6">
+        <div className="mb-6 sm:mb-8">
           <input
             type="text"
-            placeholder="Search personnel, logs, alerts, UIDs..."
+            placeholder="Search personnel, logs, alerts, power data..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full sm:w-80 rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-3 text-sm sm:text-base"
+            className="w-full sm:w-96 rounded-lg border-gray-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-300 py-2 sm:py-3 px-4 text-sm sm:text-base shadow-sm transition-all"
             aria-label="Search dashboard data"
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <StatCard
-            title="Personnel"
+            title="Total Personnel"
             value={stats.totalInstructors + stats.totalStudents + stats.totalAdmins}
-            icon={<UserGroupIcon className="w-5 h-5 text-blue-500" />}
+            icon={<UserGroupIcon className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />}
             color="border-blue-100"
           />
           <StatCard
             title="Active Alerts"
-            value={stats.activeAlerts}
-            icon={<BellIcon className="w-5 h-5 text-red-500" />}
+            value={stats.activeAlerts + Object.values(offlineDataLogging).filter(t => t.status === 'Active').length}
+            icon={<BellIcon className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />}
             color="border-red-100"
           />
           <StatCard
             title="Access Today"
             value={stats.totalAccessToday}
-            icon={<ChartBarIcon className="w-5 h-5 text-indigo-500" />}
+            icon={<ChartBarIcon className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600" />}
             color="border-indigo-100"
+          />
+          <StatCard
+            title="Rooms Monitored"
+            value={stats.totalRoomsMonitored}
+            icon={<BoltIcon className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />}
+            color="border-green-100"
           />
         </div>
 
@@ -503,25 +609,130 @@ const Dashboard: React.FC = () => {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed top-4 right-4 bg-green-100 border border-green-300 text-green-800 p-3 rounded-lg shadow-lg flex items-center text-sm sm:text-base"
+            className="fixed top-4 right-4 bg-green-100 border border-green-400 text-green-900 p-3 sm:p-4 rounded-xl shadow-lg flex items-center text-sm sm:text-base z-50"
             aria-live="polite"
           >
-            <TagIcon className="w-5 h-5 mr-2" />
+            <TagIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3" />
             <p>
-              New RFID Tag Detected: <span className="font-bold">{newRFIDTag}</span>
+              New RFID Tag Detected: <span className="font-semibold">{newRFIDTag}</span>
             </p>
           </motion.div>
         )}
 
-        <div className="space-y-6">
+        <div className="space-y-6 sm:space-y-8">
+          {/* Power Consumption */}
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
+          >
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <BoltIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-green-600" />
+              Room Power Consumption
+            </h2>
+            <div className="space-y-3 max-h-[400px] overflow-y-auto">
+              {paginatedPowerConsumption.length > 0 ? (
+                paginatedPowerConsumption.map((room, index) => (
+                  <motion.div
+                    key={`${room.roomName}-${room.timestamp}-${index}`}
+                    whileHover={{ scale: 1.02 }}
+                    className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  >
+                    <h3 className="font-medium text-gray-800">Room {room.roomName}</h3>
+                    <p className="text-gray-600">Building: {room.building}</p>
+                    <p className="text-gray-600">Floor: {room.floor}</p>
+                    <p className="text-gray-600">Energy: {room.energy}</p>
+                    <p className="text-gray-600">Power: {room.power}</p>
+                    <p className="text-gray-600">Last Updated: {formatTimestamp(room.timestamp)}</p>
+                  </motion.div>
+                ))
+              ) : (
+                <p className="text-gray-500 text-center">No power consumption data available.</p>
+              )}
+            </div>
+            <div className="mt-4 sm:mt-6 flex justify-between text-sm sm:text-base">
+              <button
+                onClick={() =>
+                  setCurrentPage((prev) => ({
+                    ...prev,
+                    powerConsumption: Math.max(prev.powerConsumption - 1, 1),
+                  }))
+                }
+                disabled={currentPage.powerConsumption === 1}
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
+              >
+                Previous
+              </button>
+              <span>
+                Page {currentPage.powerConsumption} of{' '}
+                {Math.ceil(roomPowerConsumption.length / ITEMS_PER_PAGE)}
+              </span>
+              <button
+                onClick={() =>
+                  setCurrentPage((prev) => ({ ...prev, powerConsumption: prev.powerConsumption + 1 }))
+                }
+                disabled={
+                  currentPage.powerConsumption >=
+                  Math.ceil(roomPowerConsumption.length / ITEMS_PER_PAGE)
+                }
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
+              >
+                Next
+              </button>
+            </div>
+          </motion.div>
+
+          {/* Alerts */}
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
+          >
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <BellIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-red-600" />
+              Alerts
+            </h2>
+            <div className="space-y-3 max-h-[400px] overflow-y-auto">
+              {filteredAlerts.length > 0 ? (
+                filteredAlerts.map(([id, alert]) => (
+                  <motion.div
+                    key={typeof id === 'string' ? id : JSON.stringify(id)}
+                    whileHover={{ scale: 1.02 }}
+                    className={`p-3 sm:p-4 rounded-lg border text-sm sm:text-base ${
+                      typeof alert === 'object' && 'status' in alert && alert.status === 'active'
+                        ? 'bg-red-50 border-red-200'
+                        : 'bg-gray-50 border-gray-200'
+                    } hover:bg-opacity-80 transition`}
+                  >
+                    <p className="font-medium">{typeof id === 'string' && id.includes('Tamper') ? 'Offline Tamper Detection' : 'Tamper Alert'}</p>
+                    {typeof alert !== 'string' && (
+                      <p className="text-gray-600">Started: {formatTimestamp(alert.startTime)}</p>
+                    )}
+                    {typeof alert === 'object' && 'endTime' in alert && alert.endTime && (
+                      <p className="text-gray-600">Ended: {formatTimestamp(alert.endTime)}</p>
+                    )}
+                    {typeof alert === 'object' && 'status' in alert && (
+                      <p className="text-gray-600">Status: {alert.status}</p>
+                    )}
+                    {typeof alert === 'object' && 'resolvedByFullName' in alert && alert.resolvedByFullName && (
+                      <p className="text-gray-600">Resolved by: {alert.resolvedByFullName}</p>
+                    )}
+                  </motion.div>
+                ))
+              ) : (
+                <p className="text-gray-500 text-center">No alerts available.</p>
+              )}
+            </div>
+          </motion.div>
+
           {/* Personnel */}
           <motion.div
             initial={{ opacity: 0, x: -50 }}
             animate={{ opacity: 1, x: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
           >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <UserGroupIcon className="w-5 h-5 mr-2 text-indigo-600" />
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <UserGroupIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-indigo-600" />
               Personnel
             </h2>
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
@@ -529,9 +740,9 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <h3 className="font-medium text-gray-800">{instructor.Profile.fullName}</h3>
+                  <h3 className="font-semibold text-gray-800">{instructor.Profile.fullName}</h3>
                   <p className="text-gray-600">Role: {instructor.Profile.role}</p>
                   <p className="text-gray-600">Email: {instructor.Profile.email}</p>
                   <p className="text-gray-600">Department: {instructor.Profile.department}</p>
@@ -542,9 +753,9 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <h3 className="font-medium text-gray-800">{student.fullName}</h3>
+                  <h3 className="font-semibold text-gray-800">{student.fullName}</h3>
                   <p className="text-gray-600">Role: {student.role}</p>
                   <p className="text-gray-600">Email: {student.email}</p>
                   <p className="text-gray-600">Department: {student.department}</p>
@@ -556,9 +767,9 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <h3 className="font-medium text-gray-800">{admin.fullName}</h3>
+                  <h3 className="font-semibold text-gray-800">{admin.fullName}</h3>
                   <p className="text-gray-600">Role: {admin.role}</p>
                   <p className="text-gray-600">Email: {admin.email}</p>
                   <p className="text-gray-600">ID: {admin.idNumber}</p>
@@ -572,22 +783,22 @@ const Dashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
           >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <ClockIcon className="w-5 h-5 mr-2 text-indigo-600" />
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <ClockIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-indigo-600" />
               Schedules
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 max-h-[400px] overflow-y-auto">
               {Object.entries(instructors).flatMap(([uid, instructor]) =>
                 instructor.ClassStatus?.schedule ? (
                   <motion.div
                     key={`${uid}-${instructor.ClassStatus.schedule.subjectCode}`}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
+                    className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
                   >
-                    <p className="font-medium">
+                    <p className="font-semibold">
                       {instructor.ClassStatus.schedule.subject} (
                       {instructor.ClassStatus.schedule.subjectCode})
                     </p>
@@ -614,9 +825,9 @@ const Dashboard: React.FC = () => {
                     key={`${uid}-${index}`}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
+                    className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 text-sm sm:text-base"
                   >
-                    <p className="font-medium">
+                    <p className="font-semibold">
                       {schedule.subject} ({schedule.subjectCode})
                     </p>
                     <p className="text-gray-600">Student: {student.fullName}</p>
@@ -636,47 +847,14 @@ const Dashboard: React.FC = () => {
             </div>
           </motion.div>
 
-          {/* Alerts */}
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
-          >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <BellIcon className="w-5 h-5 mr-2 text-red-600" />
-              Alerts
-            </h2>
-            <div className="space-y-3 max-h-[300px] overflow-y-auto">
-              {filteredAlerts.map(([id, alert]) => (
-                <motion.div
-                  key={id}
-                  whileHover={{ scale: 1.02 }}
-                  className={`p-3 rounded-lg border text-sm sm:text-base ${
-                    alert.status === 'active' ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'
-                  }`}
-                >
-                  <p className="font-medium">Tamper Alert</p>
-                  <p className="text-gray-600">Started: {formatTimestamp(alert.startTime)}</p>
-                  {alert.endTime && (
-                    <p className="text-gray-600">Ended: {formatTimestamp(alert.endTime)}</p>
-                  )}
-                  <p className="text-gray-600">Status: {alert.status}</p>
-                  {alert.resolvedByFullName && (
-                    <p className="text-gray-600">Resolved by: {alert.resolvedByFullName}</p>
-                  )}
-                </motion.div>
-              ))}
-            </div>
-          </motion.div>
-
           {/* Access Logs */}
           <motion.div
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
           >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <HomeIcon className="w-5 h-5 mr-2 text-indigo-600" />
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <HomeIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-indigo-600" />
               Access Logs
             </h2>
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
@@ -684,16 +862,16 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`${uid}-${timestamp}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <p className="font-medium">{log.fullName}</p>
+                  <p className="font-semibold text-gray-800">{log.fullName}</p>
                   <p className="text-gray-600">Action: {log.action}</p>
                   <p className="text-gray-600">Role: {log.role}</p>
                   <p className="text-gray-600">Time: {formatTimestamp(log.timestamp)}</p>
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm sm:text-base">
+            <div className="mt-4 sm:mt-6 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({
@@ -702,7 +880,7 @@ const Dashboard: React.FC = () => {
                   }))
                 }
                 disabled={currentPage.accessLogs === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Previous
               </button>
@@ -718,7 +896,7 @@ const Dashboard: React.FC = () => {
                   currentPage.accessLogs >=
                   Math.ceil(filteredAccessLogs.length / ITEMS_PER_PAGE)
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Next
               </button>
@@ -729,10 +907,10 @@ const Dashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
           >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <DocumentTextIcon className="w-5 h-5 mr-2 text-gray-600" />
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <DocumentTextIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-gray-600" />
               System Logs
             </h2>
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
@@ -740,13 +918,13 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={id}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
                   <p className="text-gray-600">{log}</p>
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm sm:text-base">
+            <div className="mt-4 sm:mt-6 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({
@@ -755,7 +933,7 @@ const Dashboard: React.FC = () => {
                   }))
                 }
                 disabled={currentPage.systemLogs === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Previous
               </button>
@@ -771,7 +949,7 @@ const Dashboard: React.FC = () => {
                   currentPage.systemLogs >=
                   Math.ceil(filteredSystemLogs.length / ITEMS_PER_PAGE)
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Next
               </button>
@@ -782,10 +960,10 @@ const Dashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-md p-4 sm:p-6"
+            className="bg-white rounded-2xl shadow-lg p-4 sm:p-6"
           >
-            <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
-              <TagIcon className="w-5 h-5 mr-2 text-teal-600" />
+            <h2 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-4 sm:mb-6 flex items-center">
+              <TagIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-teal-600" />
               RFID UIDs
             </h2>
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
@@ -793,9 +971,9 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`reg-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <p className="font-medium">UID: {uid}</p>
+                  <p className="font-semibold text-gray-800">UID: {uid}</p>
                   <p className="text-gray-600">Status: Registered</p>
                   <p className="text-gray-600">Timestamp: {formatTimestamp(data.timestamp)}</p>
                 </motion.div>
@@ -804,9 +982,9 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`unreg-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-yellow-50 rounded-lg border border-yellow-200 hover:bg-yellow-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-yellow-50 rounded-lg border border-yellow-200 hover:bg-yellow-100 transition text-sm sm:text-base"
                 >
-                  <p className="font-medium">UID: {uid}</p>
+                  <p className="font-semibold text-gray-800">UID: {uid}</p>
                   <p className="text-gray-600">Status: Unregistered</p>
                   <p className="text-gray-600">
                     Access Attempt: {formatTimestamp(data.AccessLogs)}
@@ -817,21 +995,21 @@ const Dashboard: React.FC = () => {
                 <motion.div
                   key={`rfid-${uid}`}
                   whileHover={{ scale: 1.02 }}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
+                  className="p-3 sm:p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition text-sm sm:text-base"
                 >
-                  <p className="font-medium">UID: {uid}</p>
+                  <p className="font-semibold text-gray-800">UID: {uid}</p>
                   <p className="text-gray-600">Role: {data.role}</p>
                   <p className="text-gray-600">User ID: {data.uid}</p>
                 </motion.div>
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-sm sm:text-base">
+            <div className="mt-4 sm:mt-6 flex justify-between text-sm sm:text-base">
               <button
                 onClick={() =>
                   setCurrentPage((prev) => ({ ...prev, rfid: Math.max(prev.rfid - 1, 1) }))
                 }
                 disabled={currentPage.rfid === 1}
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Previous
               </button>
@@ -855,7 +1033,7 @@ const Dashboard: React.FC = () => {
                       ITEMS_PER_PAGE
                   )
                 }
-                className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50 hover:bg-gray-300"
+                className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-300 transition"
               >
                 Next
               </button>
