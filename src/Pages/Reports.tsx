@@ -429,9 +429,19 @@ const Dashboard: React.FC = () => {
     </motion.div>
   );
 
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <AdminSidebar />
+       <AdminSidebar/>
+      <button
+        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+        className="md:hidden fixed top-4 left-4 z-50 bg-indigo-600 text-white p-2 rounded-full shadow-lg hover:bg-indigo-500 transition-colors"
+      >
+        <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+        </svg>
+      </button>
 
       <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
         <motion.h1
