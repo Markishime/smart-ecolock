@@ -15,7 +15,7 @@ import Swal from 'sweetalert2';
 import { theme } from '../styles/theme';
 import AddRoomModal from '../components/AddRoomModal';
 
-// Interfaces based on JSON and requirements
+// Interfaces based on JSON
 interface Room {
   id: string;
   name: string;
@@ -74,7 +74,6 @@ const RoomsPage: React.FC = () => {
   useEffect(() => {
     setIsLoading(true);
 
-    // Derive rooms from schedules since JSON lacks a Rooms node
     const fetchData = async () => {
       const refs = {
         instructors: ref(rtdb, 'Instructors'),
@@ -99,7 +98,17 @@ const RoomsPage: React.FC = () => {
           },
           (error) => {
             console.error(`Error fetching ${path}:`, error);
-            Swal.fire('Error', `Failed to fetch ${path}`, 'error');
+            Swal.fire({
+              icon: 'error',
+              title: 'Error',
+              text: `Failed to fetch ${path}`,
+              customClass: {
+                popup: 'rounded-lg sm:rounded-xl',
+                title: 'text-blue-900',
+                htmlContainer: 'text-blue-700',
+                confirmButton: 'bg-blue-600 hover:bg-blue-700',
+              },
+            });
           }
         );
       });
@@ -123,11 +132,11 @@ const RoomsPage: React.FC = () => {
       const derivedRooms: Room[] = uniqueRoomNames.map((name, index) => ({
         id: `room_${index}`,
         name,
-        building: 'Unknown', // Placeholder, as JSON lacks building
-        floor: 'Unknown', // Placeholder
-        capacity: 0, // Placeholder
+        building: 'Unknown', // JSON lacks building
+        floor: 'Unknown', // JSON lacks floor
+        capacity: 0, // JSON lacks capacity
         type: 'classroom', // Default
-        status: 'available',
+        status: 'available', // Will be updated in getAssignedInstructorAndStatus
       }));
 
       setRooms(derivedRooms);
@@ -140,13 +149,26 @@ const RoomsPage: React.FC = () => {
     };
 
     fetchData();
-  }, []);
+  }, [instructors, students]); // Re-run if instructors/students change
+
+  const isTimeWithinSchedule = (schedule: Schedule, now: Date): boolean => {
+    const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
+    if (schedule.day !== currentDay) return false;
+
+    const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
+    const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    const startTimeInMinutes = startHour * 60 + startMinute;
+    const endTimeInMinutes = endHour * 60 + endMinute;
+    const currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+    return currentTimeInMinutes >= startTimeInMinutes && currentTimeInMinutes <= endTimeInMinutes;
+  };
 
   const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
-    const now = new Date();
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
-    const currentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-
+    const now = new Date('2025-04-13T12:00:00'); // Fixed for testing; use new Date() for live
     const assignedInstructors: Instructor[] = [];
     const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
@@ -160,11 +182,7 @@ const RoomsPage: React.FC = () => {
           typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
         if (scheduleRoomName === roomName) {
           matchingSchedules.push(schedule);
-          if (
-            schedule.day === currentDay &&
-            currentTime >= schedule.startTime &&
-            currentTime <= schedule.endTime
-          ) {
+          if (isTimeWithinSchedule(schedule, now)) {
             isOccupied = true;
           }
         }
@@ -181,11 +199,7 @@ const RoomsPage: React.FC = () => {
         const scheduleRoomName =
           typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
         if (scheduleRoomName === roomName) {
-          if (
-            schedule.day === currentDay &&
-            currentTime >= schedule.startTime &&
-            currentTime <= schedule.endTime
-          ) {
+          if (isTimeWithinSchedule(schedule, now)) {
             isOccupied = true;
           }
         }
@@ -202,7 +216,7 @@ const RoomsPage: React.FC = () => {
   const handleAddRoom = async (roomData: Partial<Room>) => {
     try {
       const completeRoomData: Room = {
-        id: `room_${Date.now()}`, // Generate a unique ID
+        id: `room_${Date.now()}`,
         name: roomData.name || '',
         building: roomData.building || 'Unknown',
         floor: roomData.floor || 'Unknown',
@@ -211,7 +225,6 @@ const RoomsPage: React.FC = () => {
         status: roomData.status || 'available',
       };
 
-      // Write to RTDB
       await set(ref(rtdb, `Rooms/${completeRoomData.id}`), {
         ...completeRoomData,
         createdAt: new Date().toISOString(),
@@ -338,7 +351,9 @@ const RoomsPage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
-      <AdminSidebar />
+      <div className="fixed top-0 left-0 h-full bg-white shadow-lg w-[80px] lg:w-64 z-50">
+        <AdminSidebar />
+      </div>
 
       <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-4 sm:p-8 overflow-y-auto">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 sm:mb-8">
