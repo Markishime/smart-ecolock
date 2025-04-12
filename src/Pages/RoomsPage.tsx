@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ref, onValue, off, set } from 'firebase/database';
-import { rtdb } from '../firebase';
+import { collection, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { db } from '../firebase';
 import AdminSidebar from '../components/AdminSidebar';
 import {
   BuildingOfficeIcon,
@@ -15,7 +15,6 @@ import Swal from 'sweetalert2';
 import { theme } from '../styles/theme';
 import AddRoomModal from '../components/AddRoomModal';
 
-// Interfaces based on JSON
 interface Room {
   id: string;
   name: string;
@@ -24,35 +23,46 @@ interface Room {
   capacity: number;
   type: 'classroom' | 'laboratory' | 'lecture_hall' | 'conference_room' | 'faculty_room';
   status: 'available' | 'occupied' | 'maintenance';
+  facilities?: {
+    hasProjector: boolean;
+    hasAC: boolean;
+    hasComputers: boolean;
+    hasWifi: boolean;
+  };
 }
 
 interface Schedule {
   day: string;
   startTime: string;
   endTime: string;
-  roomName: string | { name: string };
-  section: string;
-  subject: string;
-  subjectCode: string;
-  instructorName?: string;
-  sectionId?: string;
+  roomName: string;
+}
+
+interface Subject {
+  id: string;
+  name: string;
+  code: string;
+  credits: number;
+  department: string;
+  details: string;
+  sections: Section[];
+  status: 'active' | 'inactive';
+}
+
+interface Section {
+  id: string;
+  code: string;
+  name: string;
+  instructorId: string;
+  instructorName: string;
+  schedules: Schedule[];
 }
 
 interface Instructor {
   uid: string;
   fullName: string;
-  email: string;
-  ClassStatus?: {
-    Status: string;
-    dateTime: string;
-    schedule?: Schedule;
-  };
-}
-
-interface Student {
-  schedules: Schedule[];
-  fullName: string;
-  email: string;
+  email?: string;
+  assignedSubjects: Subject[];
 }
 
 interface RoomAssignment {
@@ -61,10 +71,10 @@ interface RoomAssignment {
   isOccupied: boolean;
 }
 
-const RoomsPage: React.FC = () => {
+const RoomsPage = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [instructors, setInstructors] = useState<Record<string, Instructor>>({});
-  const [students, setStudents] = useState<Record<string, Student>>({});
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<Room['status'] | 'all'>('all');
@@ -72,125 +82,117 @@ const RoomsPage: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    setIsLoading(true);
-
     const fetchData = async () => {
-      const refs = {
-        rooms: ref(rtdb, 'Rooms'), // Added Rooms reference
-        instructors: ref(rtdb, 'Instructors'),
-        students: ref(rtdb, 'Students'),
-      };
-
-      const listeners = [
-        { path: 'rooms', ref: refs.rooms },
-        { path: 'instructors', ref: refs.instructors },
-        { path: 'students', ref: refs.students },
-      ];
-
-      listeners.forEach(({ ref, path }) => {
-        onValue(
-          ref,
-          (snapshot) => {
-            const data = snapshot.val() || {};
-            if (path === 'rooms') {
-              // Update rooms state with data from Rooms node
-              const fetchedRooms: Room[] = Object.entries(data).map(([id, room]: [string, any]) => ({
-                id,
-                name: room.name,
-                building: room.building,
-                floor: room.floor,
-                capacity: room.capacity,
-                type: room.type,
-                status: room.status,
-              }));
-              setRooms(fetchedRooms);
-            } else if (path === 'instructors') {
-              setInstructors(data);
-            } else if (path === 'students') {
-              setStudents(data);
-            }
-          },
-          (error) => {
-            console.error(`Error fetching ${path}:`, error);
-            Swal.fire({
-              icon: 'error',
-              title: 'Error',
-              text: `Failed to fetch ${path}`,
-              customClass: {
-                popup: 'rounded-lg sm:rounded-xl',
-                title: 'text-blue-900',
-                htmlContainer: 'text-blue-700',
-                confirmButton: 'bg-blue-600 hover:bg-blue-700',
-              },
-            });
-          }
-        );
-      });
-
+      setIsLoading(true);
+      await Promise.all([fetchRooms(), fetchSubjects(), fetchInstructors()]);
       setLastUpdated(new Date());
       setIsLoading(false);
-
-      return () => {
-        listeners.forEach(({ ref }) => off(ref));
-      };
     };
-
     fetchData();
   }, []);
 
-  const isTimeWithinSchedule = (schedule: Schedule, now: Date): boolean => {
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
-    if (schedule.day !== currentDay) return false;
+  const fetchRooms = async () => {
+    try {
+      const roomsSnapshot = await getDocs(collection(db, 'rooms'));
+      const roomsData = roomsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || '',
+          building: data.building || '',
+          floor: data.floor || '',
+          capacity: data.capacity || 0,
+          type: data.type || 'classroom',
+          status: data.status || 'available',
+          facilities: {
+            hasProjector: false,
+            hasAC: false,
+            hasComputers: false,
+            hasWifi: false,
+            ...(data.facilities || {}),
+          },
+        } as Room;
+      });
+      setRooms(roomsData);
+    } catch (error) {
+      console.error('Error fetching rooms:', error);
+      Swal.fire('Error', 'Failed to fetch rooms', 'error');
+    }
+  };
 
-    const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
-    const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+  const fetchSubjects = async () => {
+    try {
+      const subjectsSnapshot = await getDocs(collection(db, 'subjects'));
+      const subjectsData = subjectsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || 'Unknown Subject',
+          code: data.code || '',
+          credits: data.credits || 0,
+          department: data.department || 'Unassigned',
+          details: data.details || '',
+          sections: data.sections || [],
+          status: data.status || 'active',
+        } as Subject;
+      });
+      setSubjects(subjectsData);
+    } catch (error) {
+      console.error('Error fetching subjects:', error);
+      Swal.fire('Error', 'Failed to fetch subjects', 'error');
+    }
+  };
 
-    const startTimeInMinutes = startHour * 60 + startMinute;
-    const endTimeInMinutes = endHour * 60 + endMinute;
-    const currentTimeInMinutes = currentHour * 60 + currentMinute;
-
-    return currentTimeInMinutes >= startTimeInMinutes && currentTimeInMinutes <= endTimeInMinutes;
+  const fetchInstructors = async () => {
+    try {
+      const teachersSnapshot = await getDocs(collection(db, 'teachers'));
+      const instructorsData = teachersSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          uid: doc.id,
+          fullName: data.fullName || 'Unknown Instructor',
+          email: data.email || '',
+          assignedSubjects: data.assignedSubjects || [],
+        } as Instructor;
+      });
+      setInstructors(instructorsData);
+    } catch (error) {
+      console.error('Error fetching instructors:', error);
+      Swal.fire('Error', 'Failed to fetch instructors', 'error');
+    }
   };
 
   const getAssignedInstructorAndStatus = (roomName: string): RoomAssignment => {
-    const now = new Date('2025-04-13T12:00:00'); // Fixed for testing; use new Date() for live
+    const now = new Date();
+    const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
+    const currentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+
     const assignedInstructors: Instructor[] = [];
     const schedulesByInstructor: Record<string, Schedule[]> = {};
     let isOccupied = false;
 
-    // Check instructor schedules
-    Object.entries(instructors).forEach(([uid, instructor]) => {
+    instructors.forEach(instructor => {
       const matchingSchedules: Schedule[] = [];
-      if (instructor.ClassStatus?.schedule) {
-        const schedule = instructor.ClassStatus.schedule;
-        const scheduleRoomName =
-          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
-        if (scheduleRoomName === roomName) {
-          matchingSchedules.push(schedule);
-          if (isTimeWithinSchedule(schedule, now)) {
-            isOccupied = true;
-          }
-        }
-      }
-      if (matchingSchedules.length > 0) {
-        assignedInstructors.push({ ...instructor, uid });
-        schedulesByInstructor[uid] = matchingSchedules;
-      }
-    });
-
-    // Check student schedules
-    Object.values(students).forEach((student) => {
-      student.schedules?.forEach((schedule) => {
-        const scheduleRoomName =
-          typeof schedule.roomName === 'string' ? schedule.roomName : schedule.roomName.name;
-        if (scheduleRoomName === roomName) {
-          if (isTimeWithinSchedule(schedule, now)) {
-            isOccupied = true;
-          }
-        }
+      instructor.assignedSubjects.forEach(subject => {
+        subject.sections.forEach(section => {
+          section.schedules.forEach(schedule => {
+            if (schedule.roomName === roomName) {
+              matchingSchedules.push(schedule);
+              if (
+                schedule.day === currentDay &&
+                currentTime >= schedule.startTime &&
+                currentTime <= schedule.endTime
+              ) {
+                isOccupied = true;
+              }
+            }
+          });
+        });
       });
+      if (matchingSchedules.length > 0) {
+        assignedInstructors.push(instructor);
+        schedulesByInstructor[instructor.uid] = matchingSchedules;
+      }
     });
 
     return {
@@ -203,22 +205,28 @@ const RoomsPage: React.FC = () => {
   const handleAddRoom = async (roomData: Partial<Room>) => {
     try {
       const completeRoomData: Room = {
-        id: `room_${Date.now()}`,
+        id: '',
         name: roomData.name || '',
-        building: roomData.building || 'Unknown',
-        floor: roomData.floor || 'Unknown',
+        building: roomData.building || '',
+        floor: roomData.floor || '',
         capacity: roomData.capacity || 0,
         type: roomData.type || 'classroom',
         status: roomData.status || 'available',
+        facilities: {
+          hasProjector: roomData.facilities?.hasProjector || false,
+          hasAC: roomData.facilities?.hasAC || false,
+          hasComputers: roomData.facilities?.hasComputers || false,
+          hasWifi: roomData.facilities?.hasWifi || false,
+        },
       };
 
-      await set(ref(rtdb, `Rooms/${completeRoomData.id}`), {
+      await addDoc(collection(db, 'rooms'), {
         ...completeRoomData,
         createdAt: new Date().toISOString(),
       });
 
       setIsAddModalOpen(false);
-      setRooms((prev) => [...prev, completeRoomData]);
+      await fetchRooms();
 
       Swal.fire({
         icon: 'success',
@@ -249,22 +257,14 @@ const RoomsPage: React.FC = () => {
 
   const handleSetMaintenance = async (roomId: string) => {
     try {
-      const room = rooms.find((r) => r.id === roomId);
-      if (!room) throw new Error('Room not found');
+      await updateDoc(doc(db, 'rooms', roomId), {
+        status: 'maintenance',
+      });
 
-      // Update Rooms node
-      await set(ref(rtdb, `Rooms/${roomId}/status`), 'maintenance');
-
-      // Update Instructors node for assigned instructors
-      const { instructors } = getAssignedInstructorAndStatus(room.name);
-      const updatePromises = instructors.map((instructor) =>
-        set(ref(rtdb, `Instructors/${instructor.uid}/rooms/${room.name}/status`), 'maintenance')
-      );
-      await Promise.all(updatePromises);
-
-      // Update local state
-      setRooms((prevRooms) =>
-        prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'maintenance' } : r))
+      setRooms(prevRooms =>
+        prevRooms.map(r =>
+          r.id === roomId ? { ...r, status: 'maintenance' } : r
+        )
       );
 
       Swal.fire({
@@ -296,22 +296,14 @@ const RoomsPage: React.FC = () => {
 
   const handleSetAvailable = async (roomId: string) => {
     try {
-      const room = rooms.find((r) => r.id === roomId);
-      if (!room) throw new Error('Room not found');
+      await updateDoc(doc(db, 'rooms', roomId), {
+        status: 'available',
+      });
 
-      // Update Rooms node
-      await set(ref(rtdb, `Rooms/${roomId}/status`), 'available');
-
-      // Update Instructors node for assigned instructors
-      const { instructors } = getAssignedInstructorAndStatus(room.name);
-      const updatePromises = instructors.map((instructor) =>
-        set(ref(rtdb, `Instructors/${instructor.uid}/rooms/${room.name}/status`), 'available')
-      );
-      await Promise.all(updatePromises);
-
-      // Update local state
-      setRooms((prevRooms) =>
-        prevRooms.map((r) => (r.id === roomId ? { ...r, status: 'available' } : r))
+      setRooms(prevRooms =>
+        prevRooms.map(r =>
+          r.id === roomId ? { ...r, status: 'available' } : r
+        )
       );
 
       Swal.fire({
@@ -342,7 +334,7 @@ const RoomsPage: React.FC = () => {
   };
 
   const filteredRooms = rooms
-    .map((room) => {
+    .map(room => {
       const { instructors, schedules, isOccupied } = getAssignedInstructorAndStatus(room.name);
       return {
         ...room,
@@ -351,7 +343,7 @@ const RoomsPage: React.FC = () => {
         schedulesByInstructor: schedules,
       };
     })
-    .filter((room) => {
+    .filter(room => {
       const matchesStatus = filterStatus === 'all' || room.status === filterStatus;
       const matchesSearch =
         searchQuery === '' ||
@@ -362,9 +354,7 @@ const RoomsPage: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-blue-50 via-purple-50/30 to-rose-50/30">
-      <div className="fixed top-0 left-0 h-full bg-white shadow-lg w-[80px] lg:w-64 z-50">
-        <AdminSidebar />
-      </div>
+      <AdminSidebar />
 
       <div className="flex-1 transition-all duration-300 ml-[80px] lg:ml-64 p-4 sm:p-8 overflow-y-auto">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 sm:mb-8">
@@ -390,25 +380,21 @@ const RoomsPage: React.FC = () => {
         <div className={`${theme.components.card} p-4 sm:p-6`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">
-                Search Rooms
-              </label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Search Rooms</label>
               <input
                 type="text"
                 placeholder="Search by room number, name..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={e => setSearchQuery(e.target.value)}
                 className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               />
             </div>
 
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">
-                Filter by Status
-              </label>
+              <label className="block text-xs sm:text-sm font-medium text-teal-700 mb-1 sm:mb-2">Filter by Status</label>
               <select
                 value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value as Room['status'] | 'all')}
+                onChange={e => setFilterStatus(e.target.value as Room['status'] | 'all')}
                 className={`${theme.components.input} text-sm sm:text-base py-1.5 sm:py-2`}
               >
                 <option value="all">All Status</option>
@@ -433,7 +419,7 @@ const RoomsPage: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            {filteredRooms.map((room) => (
+            {filteredRooms.map(room => (
               <motion.div
                 key={room.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -477,12 +463,10 @@ const RoomsPage: React.FC = () => {
                       Assigned Instructors
                     </span>
                     {room.assignedInstructors.length > 0 ? (
-                      room.assignedInstructors.map((instructor) => (
+                      room.assignedInstructors.map(instructor => (
                         <div key={instructor.uid} className="mb-2">
                           <span className="text-xs sm:text-sm font-medium">
-                            {instructor.fullName.length > 20
-                              ? `${instructor.fullName.substring(0, 17)}...`
-                              : instructor.fullName}
+                            {instructor.fullName.length > 20 ? `${instructor.fullName.substring(0, 17)}...` : instructor.fullName}
                           </span>
                           {room.schedulesByInstructor[instructor.uid]?.length > 0 ? (
                             <div className="mt-1">
@@ -499,9 +483,7 @@ const RoomsPage: React.FC = () => {
                               </div>
                             </div>
                           ) : (
-                            <div className="text-xs sm:text-sm text-gray-500 mt-1">
-                              No schedules in this room
-                            </div>
+                            <div className="text-xs sm:text-sm text-gray-500 mt-1">No schedules in this room</div>
                           )}
                         </div>
                       ))
