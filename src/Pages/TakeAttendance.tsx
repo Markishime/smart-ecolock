@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
+import { ref, onValue, off } from 'firebase/database';
 import { db, rtdb } from '../firebase';
 import { useAuth } from '../Pages/AuthContext';
 import {
@@ -8,7 +9,6 @@ import {
   XCircleIcon,
   ClockIcon,
   ArrowDownTrayIcon,
-  UserGroupIcon,
   CalendarIcon,
   MagnifyingGlassIcon,
   ArrowUpIcon,
@@ -17,8 +17,6 @@ import {
 import NavBar from '../components/NavBar';
 import { toast } from 'react-toastify';
 import { motion } from 'framer-motion';
-import SeatPlanLayout from '../components/SeatPlanLayout';
-import { ref, onValue, off, set } from 'firebase/database';
 import Swal from 'sweetalert2';
 
 interface Student {
@@ -42,6 +40,17 @@ interface Student {
   weightAuthenticated: boolean;
   confirmed: boolean;
   assignedSensorId: string;
+  schedules: Array<{
+    day: string;
+    endTime: string;
+    instructorName: string;
+    roomName: string;
+    section: string;
+    sectionId: string;
+    startTime: string;
+    subject: string;
+    subjectCode: string;
+  }>;
 }
 
 interface Section {
@@ -105,7 +114,6 @@ const TakeAttendance: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [currentSchedule, setCurrentSchedule] = useState<Schedule | null>(null);
   const [roomId, setRoomId] = useState<string>('');
-  const [availableSensors, setAvailableSensors] = useState<string[]>([]);
 
   const formattedTime = useMemo(() => currentTime.toLocaleString(), [currentTime]);
 
@@ -114,18 +122,16 @@ const TakeAttendance: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Redirect if not authenticated
   useEffect(() => {
     if (!currentUser) {
       navigate('/login');
     }
   }, [currentUser, navigate]);
 
-  // Fetch subjects from Firestore 'subjects' collection, filtered by instructorId
+  // Fetch subjects from Firestore
   useEffect(() => {
     const fetchSubjects = async () => {
       if (!currentUser) return;
-
       try {
         setSubjectsLoading(true);
         const subjectsRef = collection(db, 'subjects');
@@ -140,7 +146,16 @@ const TakeAttendance: React.FC = () => {
             details: doc.data().details || '',
             learningObjectives: doc.data().learningObjectives || [],
             prerequisites: doc.data().prerequisites || [],
-            sections: doc.data().sections || [],
+            sections: (doc.data().sections || []).map((sec: any) => ({
+              id: sec.id || '',
+              code: sec.code || '',
+              createdAt: sec.createdAt || '',
+              instructorRfidUid: sec.instructorRfidUid || '',
+              name: sec.name || '',
+              students: sec.students || [],
+              subjectId: sec.subjectId || '',
+              instructorId: sec.instructorId || '',
+            })),
           }))
           .filter((subject) =>
             subject.sections.some((section: Section) => section.instructorId === currentUser.uid)
@@ -148,30 +163,55 @@ const TakeAttendance: React.FC = () => {
 
         setSubjects(fetchedSubjects);
         if (fetchedSubjects.length > 0) {
-          setSelectedSubject(fetchedSubjects[0]); // Default to first subject
+          setSelectedSubject(fetchedSubjects[0]);
           const instructorSections = fetchedSubjects[0].sections.filter(
             (section: Section) => section.instructorId === currentUser.uid
           );
-          setSelectedSection(instructorSections[0] || null); // Default to first section
+          setSelectedSection(instructorSections[0] || null);
         } else {
           setSelectedSubject(null);
           setSelectedSection(null);
         }
       } catch (error) {
-        console.error('Error fetching subjects from Firestore:', error);
+        console.error('Error fetching subjects:', error);
         toast.error('Failed to load subjects');
       } finally {
         setSubjectsLoading(false);
         setLoading(false);
       }
     };
-
     fetchSubjects();
   }, [currentUser]);
 
-  // Fetch students for the selected section from RTDB
+  // Fetch instructor data to get fullName
+  const [instructorName, setInstructorName] = useState<string>('');
   useEffect(() => {
-    if (!selectedSection) {
+    if (!currentUser) return;
+
+    const instructorRef = ref(rtdb, `/Instructors`);
+    const unsubscribe = onValue(
+      instructorRef,
+      (snapshot) => {
+        const instructorsData = snapshot.val();
+        if (instructorsData) {
+          const instructor = Object.values(instructorsData).find(
+            (instr: any) => instr.Profile?.email === currentUser.email
+          ) as any;
+          setInstructorName(instructor?.Profile?.fullName || currentUser.displayName || '');
+        }
+      },
+      (error) => {
+        console.error('Error fetching instructor:', error);
+        toast.error('Failed to load instructor data');
+      }
+    );
+
+    return () => off(instructorRef, 'value', unsubscribe);
+  }, [currentUser]);
+
+  // Fetch students from RTDB
+  useEffect(() => {
+    if (!selectedSection || !selectedSubject || !instructorName) {
       setStudents([]);
       setClassStartTime(null);
       setLoading(false);
@@ -183,48 +223,74 @@ const TakeAttendance: React.FC = () => {
       studentsRef,
       (snapshot) => {
         setLoading(true);
-        const studentsData = snapshot.val();
-        if (!studentsData) {
-          setStudents([]);
+        try {
+          const studentsData = snapshot.val();
+          if (!studentsData) {
+            setStudents([]);
+            setClassStartTime(new Date(selectedSection.createdAt));
+            setLoading(false);
+            return;
+          }
+
+          const fetchedStudents: Student[] = Object.entries(studentsData)
+            .map(([rfidUid, studentData]: [string, any]) => {
+              const attendanceKey = Object.keys(studentData.Attendance || {})[0];
+              const attendance = studentData.Attendance?.[attendanceKey] || {};
+
+              if (!attendance.schedules) return null;
+
+              // Match subjectCode, section, and instructor
+              const hasMatchingSchedule = attendance.schedules.some(
+                (schedule: any) =>
+                  schedule.subjectCode === selectedSubject.code &&
+                  schedule.section === selectedSection.name &&
+                  schedule.instructorName === instructorName
+              );
+
+              if (!hasMatchingSchedule) return null;
+
+              return {
+                rfidUid,
+                idNumber: attendance.idNumber || '',
+                studentName: attendance.fullName || 'Unknown',
+                email: attendance.email || '',
+                mobileNumber: attendance.mobileNumber || '',
+                department: attendance.department || '',
+                section: attendance.schedules?.[0]?.section || selectedSection.name,
+                sectionId: attendance.schedules?.[0]?.sectionId || selectedSection.id,
+                classStatus: attendance.Status || 'Unknown',
+                timestamp: attendance.timestamp || '',
+                weight: attendance.weight || 0,
+                sensor: attendance.Sensor || '',
+                role: attendance.role || 'student',
+                date: attendance.date || '',
+                action: attendance.Action || '',
+                attendanceStatus:
+                  attendance.Status?.toLowerCase() === 'pending'
+                    ? 'pending'
+                    : attendance.Status?.toLowerCase() === 'confirmed'
+                    ? 'present'
+                    : 'absent',
+                rfidAuthenticated: attendance.Action === 'Not Confirmed' ? false : true,
+                weightAuthenticated: attendance.weightAuthenticated || false,
+                confirmed: attendance.Status === 'Confirmed' || false,
+                assignedSensorId: attendance.assignedSensorId?.toString() || '',
+                schedules: attendance.schedules || [],
+              };
+            })
+            .filter((student): student is Student => student !== null);
+
+          setStudents(fetchedStudents);
           setClassStartTime(new Date(selectedSection.createdAt));
+        } catch (error) {
+          console.error('Error processing students:', error);
+          toast.error('Failed to load students');
+        } finally {
           setLoading(false);
-          return;
         }
-
-        const fetchedStudents: Student[] = Object.keys(studentsData)
-          .filter((rfidUid) => studentsData[rfidUid].sectionId === selectedSection.id)
-          .map((rfidUid) => {
-            const studentData = studentsData[rfidUid];
-            return {
-              rfidUid,
-              idNumber: studentData.idNumber || '',
-              studentName: studentData.studentName || '',
-              email: studentData.email || '',
-              mobileNumber: studentData.mobileNumber || '',
-              department: studentData.department || '',
-              section: studentData.section || 'Unknown',
-              sectionId: studentData.sectionId || '',
-              classStatus: studentData.classStatus || '',
-              timestamp: studentData.timestamp || '',
-              weight: studentData.weight || 0,
-              sensor: studentData.sensor || '',
-              role: studentData.role || '',
-              date: studentData.date || '',
-              action: studentData.action || '',
-              attendanceStatus: studentData.attendanceStatus || 'absent',
-              rfidAuthenticated: studentData.rfidAuthenticated || false,
-              weightAuthenticated: studentData.weightAuthenticated || false,
-              confirmed: studentData.confirmed || false,
-              assignedSensorId: studentData.assignedSensorId || studentData.sensor || '',
-            };
-          });
-
-        setStudents(fetchedStudents);
-        setClassStartTime(new Date(selectedSection.createdAt));
-        setLoading(false);
       },
       (error) => {
-        console.error('Error fetching students from RTDB:', error);
+        console.error('Error fetching students:', error);
         toast.error('Failed to load students');
         setStudents([]);
         setLoading(false);
@@ -232,59 +298,76 @@ const TakeAttendance: React.FC = () => {
     );
 
     return () => off(studentsRef, 'value', unsubscribe);
-  }, [selectedSection]);
+  }, [selectedSection, selectedSubject, instructorName]);
 
-  // Fetch available weight sensors
+  // Fetch instructor's current schedule from RTDB
   useEffect(() => {
-    setAvailableSensors(['Sensor1', 'Sensor2', 'Sensor3']);
-  }, []);
+    if (!currentUser || !selectedSection || !selectedSubject) return;
 
-  // Fetch teacher's current schedule from RTDB
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-
-    const instructorRef = ref(rtdb, `/Instructors/${currentUser.uid}`);
+    const instructorRef = ref(rtdb, `/Instructors`);
     const unsubscribe = onValue(
       instructorRef,
       (snapshot) => {
-        const instructorData = snapshot.val();
-        if (!instructorData || !instructorData.schedule) {
+        const instructorsData = snapshot.val();
+        if (!instructorsData) {
           setCurrentSchedule(null);
           setRoomId('');
           return;
         }
 
-        const schedules = instructorData.schedule;
+        const instructor = Object.entries(instructorsData).find(
+          ([, instr]: [string, any]) => instr.Profile?.email === currentUser.email
+        )?.[1] as any;
+
+        if (!instructor?.schedule) {
+          setCurrentSchedule(null);
+          setRoomId('');
+          return;
+        }
+
+        const schedules = Array.isArray(instructor.schedule)
+          ? instructor.schedule
+          : Object.values(instructor.schedule);
         const now = new Date();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const currentDay = days[now.getDay()];
         const currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-        const matchingSchedule = schedules.find((schedule: Schedule) => {
+        const matchingSchedule = schedules.find((schedule: any) => {
           return (
             schedule.day === currentDay &&
             schedule.startTime <= currentTime &&
-            schedule.endTime >= currentTime
+            schedule.endTime >= currentTime &&
+            schedule.subjectCode === selectedSubject.code &&
+            schedule.section === selectedSection.name
           );
         });
 
         if (matchingSchedule) {
-          setCurrentSchedule(matchingSchedule);
-          setRoomId(matchingSchedule.room);
+          setCurrentSchedule({
+            id: `${selectedSubject.code}_${selectedSection.name}`,
+            day: matchingSchedule.day,
+            startTime: matchingSchedule.startTime,
+            endTime: matchingSchedule.endTime,
+            room: matchingSchedule.roomName || 'Unknown',
+            section: selectedSection.name,
+            subject: selectedSubject.name,
+          });
+          setRoomId(matchingSchedule.roomName || '');
         } else {
           setCurrentSchedule(null);
           setRoomId('');
         }
       },
       (error) => {
-        console.error('Error fetching instructor schedule from RTDB:', error);
+        console.error('Error fetching schedule:', error);
         setCurrentSchedule(null);
         setRoomId('');
       }
     );
 
     return () => off(instructorRef, 'value', unsubscribe);
-  }, [currentUser]);
+  }, [currentUser, selectedSection, selectedSubject]);
 
   const handleAttendanceChange = (rfidUid: string, status: 'present' | 'absent' | 'late') => {
     const now = new Date();
@@ -335,7 +418,6 @@ const TakeAttendance: React.FC = () => {
 
     try {
       setLoading(true);
-
       const today = new Date().toISOString().split('T')[0];
       const attendanceRef = collection(db, 'attendanceRecords');
       const q = query(
@@ -355,11 +437,6 @@ const TakeAttendance: React.FC = () => {
           showCancelButton: true,
           confirmButtonText: 'Yes, overwrite',
           cancelButtonText: 'No, cancel',
-          customClass: {
-            popup: 'rounded-lg sm:rounded-xl',
-            confirmButton: 'bg-indigo-600 hover:bg-indigo-700',
-            cancelButton: 'bg-gray-200 hover:bg-gray-300',
-          },
         });
 
         if (!confirm.isConfirmed) {
@@ -388,7 +465,7 @@ const TakeAttendance: React.FC = () => {
         date: today,
         submittedBy: {
           id: currentUser.uid,
-          name: currentUser.fullName || 'Instructor',
+          name: currentUser.displayName || 'Instructor',
           role: currentUser.role || 'instructor',
         },
       }));
@@ -412,8 +489,8 @@ const TakeAttendance: React.FC = () => {
       toast.success('Attendance submitted successfully!');
       navigate('/instructor/attendance-management');
     } catch (error) {
-      console.error('Error submitting attendance to Firestore:', error);
-      toast.error('Failed to submit attendance. Please try again.');
+      console.error('Error submitting attendance:', error);
+      toast.error('Failed to submit attendance');
     } finally {
       setLoading(false);
     }
@@ -455,9 +532,9 @@ const TakeAttendance: React.FC = () => {
           : b.studentName.localeCompare(a.studentName);
       }
       if (sortBy === 'status') {
-        const statusOrder = { present: 1, late: 2, absent: 3, pending: 4, undefined: 5 };
-        const statusA = statusOrder[a.attendanceStatus as keyof typeof statusOrder || 'undefined'];
-        const statusB = statusOrder[b.attendanceStatus as keyof typeof statusOrder || 'undefined'];
+        const statusOrder = { present: 1, late: 2, absent: 3, pending: 4 };
+        const statusA = statusOrder[a.attendanceStatus as keyof typeof statusOrder] || 5;
+        const statusB = statusOrder[b.attendanceStatus as keyof typeof statusOrder] || 5;
         return sortOrder === 'asc' ? statusA - statusB : statusB - statusA;
       }
       if (sortBy === 'time') {
@@ -496,50 +573,8 @@ const TakeAttendance: React.FC = () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `attendance_${selectedSection?.name || 'unnamed'}_${selectedSubject?.name || 'unnamed'}_${new Date().toLocaleDateString()}.csv`;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
-  };
-
-  const handleRFIDTap = (rfidUid: string) => {
-    const now = new Date();
-    setStudents((prev) =>
-      prev.map((student) =>
-        student.rfidUid === rfidUid
-          ? { ...student, rfidAuthenticated: true, attendanceStatus: 'pending', timestamp: now.toISOString() }
-          : student
-      )
-    );
-  };
-
-  const assignToSensor = async (rfidUid: string, sensorId: string) => {
-    const student = students.find((s) => s.rfidUid === rfidUid);
-    if (!student || !sensorId) {
-      toast.error('Invalid student or sensor selection');
-      return;
-    }
-
-    try {
-      const studentRef = ref(rtdb, `/Students/${rfidUid}`);
-      await set(studentRef, { ...student, sensor: sensorId, assignedSensorId: sensorId });
-
-      const sensorRef = ref(rtdb, `weightSensors/${roomId}/${sensorId}`);
-      await set(sensorRef, {
-        rfidUid: student.rfidUid,
-        weight: 0,
-      });
-
-      setStudents((prev) =>
-        prev.map((s) =>
-          s.rfidUid === rfidUid ? { ...s, assignedSensorId: sensorId, sensor: sensorId } : s
-        )
-      );
-      toast.success(`Student assigned to sensor ${sensorId}`);
-    } catch (error) {
-      console.error('Error assigning sensor:', error);
-      toast.error('Failed to assign sensor');
-    }
   };
 
   const getStatusDisplay = (student: Student) => {
@@ -604,14 +639,14 @@ const TakeAttendance: React.FC = () => {
       <NavBar
         user={{
           role: currentUser?.role || 'instructor',
-          fullName: currentUser?.fullName || 'Instructor',
+          fullName: currentUser?.displayName || 'Instructor',
           department: currentUser?.department || 'Department',
         }}
         classStatus={{
           status: 'Taking Attendance',
           color: 'bg-indigo-100 text-indigo-800',
           details: selectedSection?.name || 'No section selected',
-          fullName: currentUser?.fullName || 'Instructor',
+          fullName: currentUser?.displayName || 'Instructor',
         }}
       />
 
@@ -624,7 +659,6 @@ const TakeAttendance: React.FC = () => {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6">
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
               <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Take Attendance</h1>
-              {/* Subject Dropdown */}
               {subjectsLoading ? (
                 <div className="flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-5 w-5 sm:h-6 sm:w-6 border-t-2 border-indigo-600"></div>
@@ -661,7 +695,6 @@ const TakeAttendance: React.FC = () => {
                   )}
                 </select>
               )}
-              {/* Section Dropdown */}
               {subjectsLoading || !selectedSubject ? (
                 <div className="flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-5 w-5 sm:h-6 sm:w-6 border-t-2 border-indigo-600"></div>
@@ -727,64 +760,6 @@ const TakeAttendance: React.FC = () => {
             </div>
           )}
 
-          {roomId && selectedSection && (
-            <div className="mb-4 sm:mb-6">
-              <h2 className="text-base sm:text-lg font-semibold text-gray-800 mb-3 sm:mb-4">Room Seat Plan</h2>
-              <SeatPlanLayout roomId={roomId} sectionId={selectedSection.id} />
-            </div>
-          )}
-
-          {selectedSection && (
-            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4 mb-4 sm:mb-6">
-              <div className="relative flex-1 sm:flex-none">
-                <MagnifyingGlassIcon className="w-4 h-4 sm:w-5 sm:h-5 text-gray-400 absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search students..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full sm:w-56 pl-8 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition text-sm"
-                />
-              </div>
-              <div className="flex items-center gap-1 sm:gap-2">
-                <label className="text-xs sm:text-sm text-gray-600 whitespace-nowrap">Filter:</label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as 'all' | 'present' | 'absent' | 'late')}
-                  className="border rounded-lg p-1.5 sm:p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 text-xs sm:text-sm w-28 sm:w-32"
-                >
-                  <option value="all">All</option>
-                  <option value="present">Present</option>
-                  <option value="late">Late</option>
-                  <option value="absent">Absent</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-1 sm:gap-2">
-                <label className="text-xs sm:text-sm text-gray-600 whitespace-nowrap">Sort:</label>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as 'name' | 'status' | 'time')}
-                  className="border rounded-lg p-1.5 sm:p-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 text-xs sm:text-sm w-28 sm:w-32"
-                >
-                  <option value="name">Name</option>
-                  <option value="status">Status</option>
-                  <option value="time">Time</option>
-                </select>
-              </div>
-              <button
-                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                className="flex items-center gap-1 px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-xs sm:text-sm"
-              >
-                {sortOrder === 'asc' ? (
-                  <ArrowUpIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                ) : (
-                  <ArrowDownIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                )}
-                <span>{sortOrder === 'asc' ? 'Asc' : 'Desc'}</span>
-              </button>
-            </div>
-          )}
-
           {selectedSection ? (
             filteredAndSortedStudents.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
@@ -804,48 +779,34 @@ const TakeAttendance: React.FC = () => {
                         <p className="text-xs text-gray-600">UID: {student.rfidUid.substring(0, 8)}...</p>
                         <p className="text-xs text-gray-600">ID: {student.idNumber}</p>
                       </div>
-                      <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-end sm:items-center">
-                        <select
-                          value={student.assignedSensorId || ''}
-                          onChange={(e) => assignToSensor(student.rfidUid, e.target.value)}
-                          className="border rounded-lg p-1 text-xs sm:text-sm w-28 sm:w-32"
+                      <div className="flex gap-1 sm:gap-2">
+                        <button
+                          onClick={() => handleAttendanceChange(student.rfidUid, 'present')}
+                          className={`
+                            p-1.5 sm:p-2 rounded-full
+                            ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white' : 'bg-green-100 text-green-600 hover:bg-green-200'}
+                          `}
                         >
-                          <option value="">Assign Sensor</option>
-                          {availableSensors.map((sensor) => (
-                            <option key={sensor} value={sensor}>
-                              {sensor}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="flex gap-1 sm:gap-2">
-                          <button
-                            onClick={() => handleAttendanceChange(student.rfidUid, 'present')}
-                            className={`
-                              p-1.5 sm:p-2 rounded-full
-                              ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white' : 'bg-green-100 text-green-600 hover:bg-green-200'}
-                            `}
-                          >
-                            <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                          </button>
-                          <button
-                            onClick={() => handleAttendanceChange(student.rfidUid, 'late')}
-                            className={`
-                              p-1.5 sm:p-2 rounded-full
-                              ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
-                            `}
-                          >
-                            <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                          </button>
-                          <button
-                            onClick={() => handleAttendanceChange(student.rfidUid, 'absent')}
-                            className={`
-                              p-1.5 sm:p-2 rounded-full
-                              ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 hover:bg-red-200'}
-                            `}
-                          >
-                            <XCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                          </button>
-                        </div>
+                          <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                        </button>
+                        <button
+                          onClick={() => handleAttendanceChange(student.rfidUid, 'late')}
+                          className={`
+                            p-1.5 sm:p-2 rounded-full
+                            ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
+                          `}
+                        >
+                          <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                        </button>
+                        <button
+                          onClick={() => handleAttendanceChange(student.rfidUid, 'absent')}
+                          className={`
+                            p-1.5 sm:p-2 rounded-full
+                            ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 hover:bg-red-200'}
+                          `}
+                        >
+                          <XCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                        </button>
                       </div>
                     </div>
                     <div className="space-y-1 text-xs sm:text-sm">
@@ -882,10 +843,17 @@ const TakeAttendance: React.FC = () => {
                           <span className="text-red-600">No</span>
                         )}
                       </p>
-                      {student.assignedSensorId && (
-                        <p>
-                          <span className="font-medium text-gray-700">Sensor:</span> {student.assignedSensorId}
-                        </p>
+                      {student.schedules.length > 0 && (
+                        <div>
+                          <span className="font-medium text-gray-700">Schedules:</span>
+                          <ul className="list-disc pl-4">
+                            {student.schedules.map((sched, index) => (
+                              <li key={index} className="text-xs sm:text-sm">
+                                {sched.day} {sched.startTime}-{sched.endTime} ({sched.subject}, Section {sched.section})
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                     </div>
                   </motion.div>
