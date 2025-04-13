@@ -114,6 +114,15 @@ const TakeAttendance: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [currentSchedule, setCurrentSchedule] = useState<Schedule | null>(null);
   const [roomId, setRoomId] = useState<string>('');
+  const [instructorDetails, setInstructorDetails] = useState<{
+    fullName: string;
+    department: string;
+    role: string;
+  }>({
+    fullName: currentUser?.displayName || 'Instructor',
+    department: 'Unknown',
+    role: 'instructor',
+  });
 
   const formattedTime = useMemo(() => currentTime.toLocaleString(), [currentTime]);
 
@@ -127,6 +136,35 @@ const TakeAttendance: React.FC = () => {
       navigate('/login');
     }
   }, [currentUser, navigate]);
+
+  // Fetch instructor details from RTDB
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const instructorRef = ref(rtdb, `/Instructors`);
+    const unsubscribe = onValue(
+      instructorRef,
+      (snapshot) => {
+        const instructorsData = snapshot.val();
+        if (instructorsData) {
+          const instructor = Object.values(instructorsData).find(
+            (instr: any) => instr.Profile?.email === currentUser.email
+          ) as any;
+          setInstructorDetails({
+            fullName: instructor?.Profile?.fullName || currentUser.displayName || 'Instructor',
+            department: instructor?.Profile?.department || 'Unknown',
+            role: instructor?.Profile?.role || 'instructor',
+          });
+        }
+      },
+      (error) => {
+        console.error('Error fetching instructor:', error);
+        toast.error('Failed to load instructor data');
+      }
+    );
+
+    return () => off(instructorRef, 'value', unsubscribe);
+  }, [currentUser]);
 
   // Fetch subjects from Firestore
   useEffect(() => {
@@ -183,35 +221,9 @@ const TakeAttendance: React.FC = () => {
     fetchSubjects();
   }, [currentUser]);
 
-  // Fetch instructor data to get fullName
-  const [instructorName, setInstructorName] = useState<string>('');
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const instructorRef = ref(rtdb, `/Instructors`);
-    const unsubscribe = onValue(
-      instructorRef,
-      (snapshot) => {
-        const instructorsData = snapshot.val();
-        if (instructorsData) {
-          const instructor = Object.values(instructorsData).find(
-            (instr: any) => instr.Profile?.email === currentUser.email
-          ) as any;
-          setInstructorName(instructor?.Profile?.fullName || currentUser.displayName || '');
-        }
-      },
-      (error) => {
-        console.error('Error fetching instructor:', error);
-        toast.error('Failed to load instructor data');
-      }
-    );
-
-    return () => off(instructorRef, 'value', unsubscribe);
-  }, [currentUser]);
-
   // Fetch students from RTDB
   useEffect(() => {
-    if (!selectedSection || !selectedSubject || !instructorName) {
+    if (!selectedSection || !selectedSubject || !instructorDetails.fullName) {
       setStudents([]);
       setClassStartTime(null);
       setLoading(false);
@@ -244,7 +256,7 @@ const TakeAttendance: React.FC = () => {
                 (schedule: any) =>
                   schedule.subjectCode === selectedSubject.code &&
                   schedule.section === selectedSection.name &&
-                  schedule.instructorName === instructorName
+                  schedule.instructorName === instructorDetails.fullName
               );
 
               if (!hasMatchingSchedule) return null;
@@ -298,7 +310,7 @@ const TakeAttendance: React.FC = () => {
     );
 
     return () => off(studentsRef, 'value', unsubscribe);
-  }, [selectedSection, selectedSubject, instructorName]);
+  }, [selectedSection, selectedSubject, instructorDetails.fullName]);
 
   // Fetch instructor's current schedule from RTDB
   useEffect(() => {
@@ -465,8 +477,8 @@ const TakeAttendance: React.FC = () => {
         date: today,
         submittedBy: {
           id: currentUser.uid,
-          name: currentUser.displayName || 'Instructor',
-          role: currentUser.role || 'instructor',
+          name: instructorDetails.fullName,
+          role: instructorDetails.role,
         },
       }));
 
@@ -637,16 +649,17 @@ const TakeAttendance: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <NavBar
+        currentTime={currentTime}
         user={{
-          role: currentUser?.role || 'instructor',
-          fullName: currentUser?.displayName || 'Instructor',
-          department: currentUser?.department || 'Department',
+          role: instructorDetails.role as 'instructor',
+          fullName: instructorDetails.fullName,
+          department: instructorDetails.department,
         }}
         classStatus={{
-          status: 'Taking Attendance',
-          color: 'bg-indigo-100 text-indigo-800',
+          status: currentSchedule ? 'Class In Session' : 'No Active Class',
+          color: currentSchedule ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800',
           details: selectedSection?.name || 'No section selected',
-          fullName: currentUser?.displayName || 'Instructor',
+          fullName: instructorDetails.fullName,
         }}
       />
 
