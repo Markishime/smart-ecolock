@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, set, get } from 'firebase/database';
 import { db, rtdb } from '../firebase';
 import { useAuth } from '../Pages/AuthContext';
 import {
@@ -381,35 +381,100 @@ const TakeAttendance: React.FC = () => {
     return () => off(instructorRef, 'value', unsubscribe);
   }, [currentUser, selectedSection, selectedSubject]);
 
-  const handleAttendanceChange = (rfidUid: string, status: 'present' | 'absent' | 'late') => {
-    const now = new Date();
-    setStudents((prev) =>
-      prev.map((student) =>
-        student.rfidUid === rfidUid
-          ? { ...student, attendanceStatus: status, timestamp: now.toISOString(), confirmed: true }
-          : student
-      )
-    );
-    toast.success(`Marked ${status} for ${students.find((s) => s.rfidUid === rfidUid)?.studentName} at ${now.toLocaleTimeString()}`);
+  const handleAttendanceChange = async (rfidUid: string, status: 'present' | 'absent' | 'late') => {
+    if (!selectedSection || !selectedSubject) {
+      toast.error('Please select a subject and section');
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const attendanceRef = ref(rtdb, `/Students/${rfidUid}/Attendance`);
+      
+      // Fetch current attendance data to preserve fields
+      const snapshot = await get(attendanceRef);
+      const attendanceData = snapshot.val() || {};
+      const sessionId = Object.keys(attendanceData)[0] || `${selectedSubject.code}_${selectedSection.name}_${now.toISOString().split('T')[0]}`;
+      const currentAttendance = attendanceData[sessionId] || {};
+
+      // Determine status for RTDB
+      const dbStatus = status === 'absent' ? 'Not Confirmed' : 'Confirmed';
+      const isPresentOrLate = status === 'present' || status === 'late';
+
+      // Update RTDB
+      await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}`), {
+        ...currentAttendance,
+        Status: dbStatus,
+        timestamp: now.toISOString(),
+        confirmed: isPresentOrLate,
+        rfidAuthenticated: isPresentOrLate,
+        weightAuthenticated: currentAttendance.weightAuthenticated || false,
+        Action: isPresentOrLate ? 'Confirmed' : 'Not Confirmed',
+        fullName: currentAttendance.fullName || students.find((s) => s.rfidUid === rfidUid)?.studentName || '',
+        email: currentAttendance.email || students.find((s) => s.rfidUid === rfidUid)?.email || '',
+        idNumber: currentAttendance.idNumber || students.find((s) => s.rfidUid === rfidUid)?.idNumber || '',
+        mobileNumber: currentAttendance.mobileNumber || students.find((s) => s.rfidUid === rfidUid)?.mobileNumber || '',
+        department: currentAttendance.department || students.find((s) => s.rfidUid === rfidUid)?.department || '',
+        schedules: currentAttendance.schedules || students.find((s) => s.rfidUid === rfidUid)?.schedules || [],
+        weight: currentAttendance.weight || students.find((s) => s.rfidUid === rfidUid)?.weight || 0,
+        Sensor: currentAttendance.Sensor || students.find((s) => s.rfidUid === rfidUid)?.sensor || '',
+        role: currentAttendance.role || 'student',
+        date: now.toISOString().split('T')[0],
+        assignedSensorId: currentAttendance.assignedSensorId || students.find((s) => s.rfidUid === rfidUid)?.assignedSensorId || '',
+      });
+
+      toast.success(`Marked ${status} for ${students.find((s) => s.rfidUid === rfidUid)?.studentName} at ${now.toLocaleTimeString()}`);
+    } catch (error) {
+      console.error('Error updating attendance in RTDB:', error);
+      toast.error('Failed to update attendance status');
+    }
   };
 
-  const confirmAttendance = () => {
-    if (confirmationStudent && confirmationTapTime && classStartTime) {
-      const startTimeMs = classStartTime.getTime();
-      const tapTimeMs = confirmationTapTime.getTime();
-      const gracePeriod = 15 * 60 * 1000;
-      const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
-      const now = new Date();
-      setStudents((prev) =>
-        prev.map((s) =>
-          s.rfidUid === confirmationStudent.rfidUid
-            ? { ...s, attendanceStatus: status, rfidAuthenticated: true, timestamp: now.toISOString() }
-            : s
-        )
-      );
+  const confirmAttendance = async () => {
+    if (confirmationStudent && confirmationTapTime && classStartTime && selectedSection && selectedSubject) {
+      try {
+        const startTimeMs = classStartTime.getTime();
+        const tapTimeMs = confirmationTapTime.getTime();
+        const gracePeriod = 15 * 60 * 1000;
+        const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
+        const now = new Date();
+
+        const attendanceRef = ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance`);
+        const snapshot = await get(attendanceRef);
+        const attendanceData = snapshot.val() || {};
+        const sessionId = Object.keys(attendanceData)[0] || `${selectedSubject.code}_${selectedSection.name}_${now.toISOString().split('T')[0]}`;
+        const currentAttendance = attendanceData[sessionId] || {};
+
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance/${sessionId}`), {
+          ...currentAttendance,
+          Status: 'Confirmed',
+          timestamp: now.toISOString(),
+          confirmed: true,
+          rfidAuthenticated: true,
+          weightAuthenticated: currentAttendance.weightAuthenticated || false,
+          Action: 'Confirmed',
+          fullName: currentAttendance.fullName || confirmationStudent.studentName,
+          email: currentAttendance.email || confirmationStudent.email,
+          idNumber: currentAttendance.idNumber || confirmationStudent.idNumber,
+          mobileNumber: currentAttendance.mobileNumber || confirmationStudent.mobileNumber,
+          department: currentAttendance.department || confirmationStudent.department,
+          schedules: currentAttendance.schedules || confirmationStudent.schedules,
+          weight: currentAttendance.weight || confirmationStudent.weight,
+          Sensor: currentAttendance.Sensor || confirmationStudent.sensor,
+          role: currentAttendance.role || 'student',
+          date: now.toISOString().split('T')[0],
+          assignedSensorId: currentAttendance.assignedSensorId || confirmationStudent.assignedSensorId,
+        });
+
+        toast.success(`Confirmed ${status} for ${confirmationStudent.studentName}`);
+      } catch (error) {
+        console.error('Error confirming attendance in RTDB:', error);
+        toast.error('Failed to confirm attendance');
+      } finally {
+        setConfirmationStudent(null);
+        setConfirmationTapTime(null);
+      }
     }
-    setConfirmationStudent(null);
-    setConfirmationTapTime(null);
   };
 
   const rejectAttendance = () => {
@@ -487,16 +552,20 @@ const TakeAttendance: React.FC = () => {
       );
       await Promise.all(writePromises);
 
-      setStudents((prev) =>
-        prev.map((student) => ({
-          ...student,
-          attendanceStatus: 'absent',
+      // Reset RTDB attendance statuses after submission
+      const resetPromises = students.map((student) =>
+        set(ref(rtdb, `/Students/${student.rfidUid}/Attendance/${selectedSubject.code}_${selectedSection.name}_${today}`), {
+          ...students.find((s) => s.rfidUid === student.rfidUid),
+          Status: 'Not Confirmed',
           timestamp: '',
           confirmed: false,
           rfidAuthenticated: false,
           weightAuthenticated: false,
-        }))
+          Action: 'Not Confirmed',
+          date: today,
+        })
       );
+      await Promise.all(resetPromises);
 
       toast.success('Attendance submitted successfully!');
       navigate('/instructor/attendance-management');
@@ -893,16 +962,8 @@ const TakeAttendance: React.FC = () => {
                 <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 View Records
               </Link>
-              <button
-                onClick={submitAttendance}
-                className="bg-indigo-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 text-xs sm:text-sm disabled:opacity-50"
-                disabled={!selectedSection || !selectedSubject || students.length === 0}
-              >
-                <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                Submit Attendance
-              </button>
+              </div>
             </div>
-          </div>
         </motion.div>
       </main>
 

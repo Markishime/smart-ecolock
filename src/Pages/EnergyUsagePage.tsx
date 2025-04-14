@@ -14,23 +14,10 @@ import {
   UserIcon,
   AcademicCapIcon,
 } from '@heroicons/react/24/solid';
-import { Line } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-} from 'chart.js';
 import Swal from 'sweetalert2';
 import { ref, onValue, off } from 'firebase/database';
-import { rtdb } from '../firebase'; // Import initialized Realtime Database
-
-// Register Chart.js components
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+import { rtdb } from '../firebase';
+import { useAuth } from './AuthContext';
 
 interface Room {
   id: string;
@@ -39,18 +26,15 @@ interface Room {
   floor: string;
 }
 
-interface Schedule {
-  day: string;
-  startTime: string;
-  endTime: string;
-  roomName: {
-    name: string;
-    pzem: PZEMData;
-  };
-  section: string;
-  subject: string;
-  subjectCode: string;
-  pzem?: PZEMData; // Added the missing 'pzem' property
+interface PZEMData {
+  action: string;
+  current: string;
+  energy: string;
+  frequency: string;
+  power: string;
+  powerFactor: string;
+  timestamp: string;
+  voltage: string;
 }
 
 interface EnergyUsage {
@@ -76,23 +60,26 @@ interface EnergyUsage {
   };
 }
 
-interface PZEMData {
+interface Schedule {
+  day: string;
+  endTime: string;
+  roomName: {
+    name: string;
+    pzem?: PZEMData;
+  };
+  section: string;
+  startTime: string;
+  subject: string;
+  subjectCode: string;
+}
+
+interface AccessLogEntry {
   action: string;
-  current: string;
-  energy: string;
-  frequency: string;
-  power: string;
-  powerFactor: string;
+  status: string;
   timestamp: string;
-  voltage: string;
 }
 
 interface InstructorData {
-  ClassStatus?: {
-    Status: string;
-    dateTime: string;
-    schedule?: Schedule;
-  };
   Profile?: {
     fullName: string;
     email?: string;
@@ -102,43 +89,60 @@ interface InstructorData {
     role: string;
     createdAt?: string;
   };
-}
-
-interface InstructorsData {
-  [uid: string]: InstructorData;
+  ClassStatus?: {
+    Status: string;
+    dateTime: string;
+    schedule: Schedule;
+  };
+  AccessLogs?: {
+    [key: string]: AccessLogEntry;
+  };
 }
 
 const VECO_RATE_PER_KWH = 14; // Pesos per kWh
+const SCALING_FACTOR = 20; // Scaling factor set to 20x
 
 const EnergyUsagePage: React.FC = () => {
+  const { currentUser } = useAuth();
   const [energyData, setEnergyData] = useState<EnergyUsage[]>([]);
-  const [instructorsData, setInstructorsData] = useState<InstructorsData>({});
-  const [selectedClassroom, setSelectedClassroom] = useState<string>('');
+  const [instructorData, setInstructorData] = useState<InstructorData>({});
+  const [selectedClassroom, setSelectedClassroom] = useState<string>('704'); // Default to room 704
   const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week'>('hour');
   const [loading, setLoading] = useState(true);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [calcPowerWatts, setCalcPowerWatts] = useState<string>('0');
-  const [calcHours, setCalcHours] = useState<string>('1');
-  const [calcResult, setCalcResult] = useState<{ kWh: string; cost: string } | null>(null);
+  const [calcEnergyKWh, setCalcEnergyKWh] = useState<string>('0');
+  const [calcDurationHours, setCalcDurationHours] = useState<string>('1'); // New state for user-provided duration
+  const [calcResult, setCalcResult] = useState<{
+    prototypeKWh: string;
+    actualKWh: string;
+    prototypeCost: string;
+    actualCost: string;
+    durationHours: string;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Fetch Instructors data from Firebase Realtime Database
+  // Fetch instructor data in real-time, including AccessLogs
   useEffect(() => {
-    const instructorsRef = ref(rtdb, 'Instructors');
+    if (!currentUser?.uid) {
+      setLoading(false);
+      return;
+    }
+
+    const instructorRef = ref(rtdb, `Instructors/149598BA`);
     const unsubscribe = onValue(
-      instructorsRef,
+      instructorRef,
       (snapshot) => {
         const data = snapshot.val();
-        setInstructorsData(data || {});
+        setInstructorData(data || {});
         setLoading(false);
       },
       (error) => {
-        console.error('Error fetching instructors:', error);
+        console.error('Error fetching instructor data:', error);
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to fetch instructors data',
+          text: 'Failed to fetch instructor data',
           customClass: {
             popup: 'rounded-lg sm:rounded-xl',
             title: 'text-blue-900',
@@ -150,26 +154,23 @@ const EnergyUsagePage: React.FC = () => {
       }
     );
 
-    // Cleanup subscription on unmount
-    return () => off(instructorsRef);
-  }, []);
+    return () => off(instructorRef, 'value', unsubscribe);
+  }, [currentUser]);
 
-  // Derive rooms from Instructors data
+  // Derive rooms from instructor data
   useEffect(() => {
-    const fetchRooms = async () => {
+    const fetchRooms = () => {
       try {
         const roomSet = new Set<string>();
-        Object.values(instructorsData).forEach((instructor: any) => {
-          if (instructor.ClassStatus?.schedule?.roomName?.name) {
-            roomSet.add(instructor.ClassStatus.schedule.roomName.name);
-          }
-        });
+        if (instructorData?.ClassStatus?.schedule?.roomName?.name) {
+          roomSet.add(instructorData.ClassStatus.schedule.roomName.name);
+        }
 
         const roomsData: Room[] = Array.from(roomSet).map((name, index) => ({
           id: `room-${index}`,
           name,
-          building: 'Unknown Building',
-          floor: 'Unknown Floor',
+          building: 'GLE Building',
+          floor: '7th Floor',
         }));
 
         const sortedRooms = roomsData.sort((a, b) => a.name.localeCompare(b.name));
@@ -194,34 +195,34 @@ const EnergyUsagePage: React.FC = () => {
     };
 
     fetchRooms();
-  }, [instructorsData]);
+  }, [instructorData, selectedClassroom]);
 
-  // Process energy data based on selected classroom and time range
+  // Process energy data for real-time updates
   useEffect(() => {
-    if (!selectedClassroom || Object.keys(instructorsData).length === 0) return;
+    if (!selectedClassroom || !instructorData?.ClassStatus?.schedule) {
+      setEnergyData([]);
+      return;
+    }
 
     const processData = () => {
       try {
         const energyEntries: EnergyUsage[] = [];
-        const timeRangeHours = timeRange === 'hour' ? 1 : timeRange === 'day' ? 24 : 7 * 24;
+        const startTime = getStartTime();
 
-        Object.entries(instructorsData).forEach(([uid, instructor]) => {
-          const schedule = instructor.ClassStatus?.schedule;
-          if (schedule?.roomName?.name === selectedClassroom && schedule.pzem) {
-            const pzem = schedule.pzem;
-            const powerWatts = parseFloat(pzem.power) || 0;
-            const consumptionKWh = (powerWatts * timeRangeHours) / 1000;
-            const instructorName = instructor.Profile?.fullName || 'Unknown Instructor';
-            const timestampStr = pzem.timestamp.replace(/_/g, ':');
-            const timestamp = new Date(timestampStr);
+        const schedule = instructorData.ClassStatus?.schedule;
+        const roomName = schedule?.roomName;
+        const pzem = roomName?.pzem;
+        const instructorName = instructorData.Profile?.fullName || 'Unknown Instructor';
 
-            if (isNaN(timestamp.getTime())) {
-              console.warn(`Invalid timestamp for UID ${uid}: ${timestampStr}`);
-              return;
-            }
+        if (pzem && roomName?.name && roomName.name === selectedClassroom) {
+          const powerWatts = parseFloat(pzem.power) || 0;
+          const consumptionKWh = parseFloat(pzem.energy) || 0;
+          const timestampStr = pzem.timestamp.replace(/_/g, ':');
+          const timestamp = new Date(timestampStr);
 
+          if (!isNaN(timestamp.getTime()) && timestamp > startTime) {
             energyEntries.push({
-              id: `${uid}_${pzem.timestamp}`,
+              id: `instructor_149598BA_${pzem.timestamp}`,
               classroomId: selectedClassroom,
               timestamp,
               powerWatts,
@@ -233,26 +234,21 @@ const EnergyUsagePage: React.FC = () => {
                 hvac: consumptionKWh * 0.25,
               },
               instructorName,
-              subject: schedule.subject || 'Unknown Subject',
-              subjectCode: schedule.subjectCode || 'N/A',
+              subject: schedule?.subject || 'Unknown Subject',
+              subjectCode: schedule?.subjectCode || 'N/A',
               schedule: {
-                day: schedule.day || 'N/A',
-                startTime: schedule.startTime || 'N/A',
-                endTime: schedule.endTime || 'N/A',
-                section: schedule.section || 'N/A',
+                day: schedule?.day || 'N/A',
+                startTime: schedule?.startTime || 'N/A',
+                endTime: schedule?.endTime || 'N/A',
+                section: schedule?.section || 'N/A',
               },
             });
           }
-        });
+        }
 
-        const startTime = getStartTime();
-        const filteredEnergyData = energyEntries
-          .filter(entry => entry.timestamp > startTime)
-          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-        setEnergyData(filteredEnergyData);
+        setEnergyData(energyEntries);
       } catch (error) {
-        console.error('Error processing Instructors data:', error);
+        console.error('Error processing energy data:', error);
         Swal.fire({
           icon: 'error',
           title: 'Error',
@@ -268,7 +264,19 @@ const EnergyUsagePage: React.FC = () => {
     };
 
     processData();
-  }, [selectedClassroom, timeRange, instructorsData]);
+  }, [selectedClassroom, timeRange, instructorData]);
+
+  // Get the latest PZEM data for real-time display
+  const getCurrentData = () => {
+    if (!instructorData?.ClassStatus?.schedule) return null;
+    const schedule = instructorData.ClassStatus.schedule;
+    const roomName = schedule?.roomName;
+    if (!roomName || !roomName.pzem) return null;
+    return {
+      pzem: roomName.pzem,
+      schedule,
+    };
+  };
 
   const getStartTime = () => {
     const now = new Date();
@@ -284,141 +292,125 @@ const EnergyUsagePage: React.FC = () => {
     }
   };
 
-  const getLatestPzemData = (): { pzem: PZEMData; schedule: Schedule } | null => {
-    let latestData: { pzem: PZEMData; schedule: Schedule } | null = null;
-    Object.entries(instructorsData).forEach(([uid, instructor]) => {
-      const schedule = instructor.ClassStatus?.schedule;
-      if (schedule?.roomName?.name === selectedClassroom && schedule.pzem) {
-        const pzem = schedule.pzem;
-        if (!latestData || pzem.timestamp > latestData.pzem.timestamp) {
-          latestData = { pzem, schedule };
+  // Calculate duration based on AccessLogs timestamps
+  const calculateDuration = () => {
+    if (!instructorData?.AccessLogs) {
+      return 2; // Default to 2 hours if data is missing
+    }
+
+    try {
+      let accessTimestamp: string | null = null;
+      let endSessionTimestamp: string | null = null;
+
+      // Iterate through AccessLogs to find Access and EndSession timestamps
+      Object.values(instructorData.AccessLogs).forEach((log: AccessLogEntry) => {
+        if (log.action === 'Access' && log.status === 'granted') {
+          accessTimestamp = log.timestamp;
+        } else if (log.action === 'EndSession' && log.status === 'completed') {
+          endSessionTimestamp = log.timestamp;
         }
+      });
+
+      if (!accessTimestamp || !endSessionTimestamp) {
+        return 2; // Default to 2 hours if timestamps are missing
       }
-    });
-    return latestData;
-  };
 
-  const getLatestInstructorName = (): string => {
-    let latestInstructorName = 'Unknown Instructor';
-    let latestTimestamp = '';
-    Object.entries(instructorsData).forEach(([uid, instructor]) => {
-      const schedule = instructor.ClassStatus?.schedule;
-      if (schedule?.roomName?.name === selectedClassroom && schedule.pzem) {
-        const pzem = schedule.pzem;
-        if (!latestTimestamp || pzem.timestamp > latestTimestamp) {
-          latestTimestamp = pzem.timestamp;
-          latestInstructorName = instructor.Profile?.fullName || 'Unknown Instructor';
-        }
+      // Helper function to format the timestamp
+      const formatTimestamp = (ts: string): string => {
+        const datePart = ts.substring(0, 10).replace(/_/g, '-');
+        const timePartRaw = ts.substring(11);
+        const hours = timePartRaw.substring(0, 2);
+        const minutes = timePartRaw.substring(2, 4);
+        const seconds = timePartRaw.substring(4, 6);
+        const timePart = `${hours}:${minutes}:${seconds}`;
+        return `${datePart} ${timePart}`;
+      };
+
+      const start = new Date(formatTimestamp(accessTimestamp));
+      const end = new Date(formatTimestamp(endSessionTimestamp));
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return 2; // Default to 2 hours if timestamps are invalid
       }
-    });
-    return latestInstructorName;
+
+      const durationMs = end.getTime() - start.getTime();
+      const durationHours = durationMs / (1000 * 60 * 60); // Convert milliseconds to hours
+
+      return durationHours > 0 ? durationHours : 2; // Ensure at least 2 hours if duration is invalid
+    } catch (error) {
+      console.error('Error calculating duration:', error);
+      return 2; // Default to 2 hours on error
+    }
   };
 
-  const chartData = {
-    labels: energyData.map(entry =>
-      entry.timestamp.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      })
-    ),
-    datasets: [
-      {
-        label: 'Energy Consumption (kWh)',
-        data: energyData.map(entry => entry.consumptionKWh),
-        borderColor: 'rgb(99, 102, 241)',
-        backgroundColor: 'rgba(99, 102, 241, 0.5)',
-        tension: 0.4,
-      },
-      {
-        label: 'Power (W)',
-        data: energyData.map(entry => entry.powerWatts),
-        borderColor: 'rgb(239, 68, 68)',
-        backgroundColor: 'rgba(239, 68, 68, 0.5)',
-        tension: 0.4,
-        yAxisID: 'y1',
-      },
-    ],
-  };
+  const durationHours = calculateDuration();
 
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { position: 'top' as const },
-      title: {
-        display: true,
-        text: `Energy Consumption Over Time - ${selectedClassroom}`,
-        font: { size: 14, weight: 'bold' as 'bold' },
-      },
-      tooltip: {
-        callbacks: {
-          label: function (context: any) {
-            const index = context.dataIndex;
-            const datasetLabel = context.dataset.label || '';
-            const value = context.parsed.y;
-            const entry = energyData[index];
-            if (!entry) return '';
-            return [
-              `${datasetLabel}: ${value.toFixed(2)}`,
-              `Instructor: ${entry.instructorName}`,
-              `Subject: ${entry.subject} (${entry.subjectCode})`,
-              `Schedule: ${entry.schedule.day} ${entry.schedule.startTime}-${entry.schedule.endTime}`,
-              `Section: ${entry.schedule.section}`,
-            ];
-          },
-        },
-      },
-    },
-    scales: {
-      y: {
-        beginAtZero: true,
-        title: { display: true, text: 'Energy (kWh)' },
-      },
-      y1: {
-        position: 'right' as const,
-        beginAtZero: true,
-        title: { display: true, text: 'Power (W)' },
-        grid: { drawOnChartArea: false },
-      },
-      x: { title: { display: true, text: 'Time' } },
-    },
-  };
+  // Calculate prototype and actual power consumption using PZEM energy field
+  const calculatePowerConsumption = () => {
+    let prototypeConsumptionKWh = 0;
 
-  const totalConsumption = energyData.reduce((sum, entry) => sum + entry.consumptionKWh, 0);
-  const averageConsumption = totalConsumption / (energyData.length || 1);
-  const peakUsage = energyData.length > 0 ? Math.max(...energyData.map(d => d.consumptionKWh)) : 0;
+    const currentData = getCurrentData();
+    const pzem = currentData?.pzem;
 
-  const calculatePowerCosts = () => {
-    const consumptionKWh = totalConsumption;
-    const cost = consumptionKWh * VECO_RATE_PER_KWH;
+    if (pzem) {
+      prototypeConsumptionKWh = parseFloat(pzem.energy) || 0;
+
+      if (energyData.length > 0) {
+        const latestEntry = energyData[energyData.length - 1];
+        latestEntry.consumptionKWh = prototypeConsumptionKWh;
+        latestEntry.devices = {
+          lighting: prototypeConsumptionKWh * 0.25,
+          projection: prototypeConsumptionKWh * 0.25,
+          computers: prototypeConsumptionKWh * 0.25,
+          hvac: prototypeConsumptionKWh * 0.25,
+        };
+      }
+    }
+
+    const actualConsumptionKWh = prototypeConsumptionKWh * SCALING_FACTOR;
+    const prototypeCost = prototypeConsumptionKWh * VECO_RATE_PER_KWH;
+    const actualCost = actualConsumptionKWh * VECO_RATE_PER_KWH;
+
     return {
-      consumptionKWh: consumptionKWh.toFixed(2),
-      cost: cost.toFixed(2),
+      prototypeConsumptionKWh: prototypeConsumptionKWh.toFixed(2),
+      actualConsumptionKWh: actualConsumptionKWh.toFixed(2),
+      prototypeCost: prototypeCost.toFixed(2),
+      actualCost: actualCost.toFixed(2),
+      durationHours: durationHours.toFixed(2),
     };
   };
 
-  const powerCosts = calculatePowerCosts();
+  const powerConsumption = calculatePowerConsumption();
+
+  const totalConsumption = parseFloat(powerConsumption.prototypeConsumptionKWh);
+  const averageConsumption = totalConsumption / (energyData.length || 1);
+  const peakUsage = energyData.length > 0 ? totalConsumption : 0;
 
   const handleCalculate = () => {
-    const power = parseFloat(calcPowerWatts) || 0;
-    const hours = parseFloat(calcHours) || 0;
-    const kWh = (power * hours) / 1000;
-    const cost = kWh * VECO_RATE_PER_KWH;
+    const energyKWh = parseFloat(calcEnergyKWh) || 0;
+    const userDurationHours = parseFloat(calcDurationHours) || 0; // Use user-provided duration
+    const prototypeKWh = energyKWh;
+    const actualKWh = prototypeKWh * SCALING_FACTOR;
+    const prototypeCost = prototypeKWh * VECO_RATE_PER_KWH;
+    const actualCost = actualKWh * VECO_RATE_PER_KWH;
+
     setCalcResult({
-      kWh: kWh.toFixed(2),
-      cost: cost.toFixed(2),
+      prototypeKWh: prototypeKWh.toFixed(2),
+      actualKWh: actualKWh.toFixed(2),
+      prototypeCost: prototypeCost.toFixed(2),
+      actualCost: actualCost.toFixed(2),
+      durationHours: userDurationHours.toFixed(2), // Reflect user-provided duration
     });
   };
 
-  const latestData = getLatestPzemData();
-  const latestPzemData = latestData?.pzem;
-  const latestSchedule = latestData?.schedule;
-  const latestInstructorName = getLatestInstructorName();
+  const currentData = getCurrentData();
+  const latestPzemData = currentData?.pzem;
+  const latestSchedule = currentData?.schedule;
+  const latestInstructorName = instructorData.Profile?.fullName || 'Unknown Instructor';
 
-  const filteredEnergyData = energyData.filter(entry =>
+  const filteredEnergyData = energyData.filter((entry) =>
     [entry.instructorName, entry.subject, entry.subjectCode, entry.schedule.section]
-      .some(field => field.toLowerCase().includes(searchQuery.toLowerCase()))
+      .some((field) => field.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
@@ -440,7 +432,7 @@ const EnergyUsagePage: React.FC = () => {
         <div className="mb-6 sm:mb-8">
           <h1 className="text-xl sm:text-3xl font-bold text-gray-900">Energy Usage Analytics</h1>
           <p className="mt-1 sm:mt-2 text-gray-600 text-sm sm:text-base">
-            Monitor and analyze classroom energy consumption with schedule details
+            Monitor and analyze classroom energy consumption in real-time
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
@@ -452,10 +444,10 @@ const EnergyUsagePage: React.FC = () => {
             {rooms.length > 0 ? (
               <select
                 value={selectedClassroom}
-                onChange={e => setSelectedClassroom(e.target.value)}
+                onChange={(e) => setSelectedClassroom(e.target.value)}
                 className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2.5 text-sm sm:text-base"
               >
-                {rooms.map(room => (
+                {rooms.map((room) => (
                   <option key={room.id} value={room.name}>
                     {room.name} - {room.building}, {room.floor}
                   </option>
@@ -474,7 +466,7 @@ const EnergyUsagePage: React.FC = () => {
               Time Range
             </label>
             <div className="flex gap-2 sm:gap-3">
-              {['hour', 'day', 'week'].map(range => (
+              {['hour', 'day', 'week'].map((range) => (
                 <button
                   key={range}
                   onClick={() => setTimeRange(range as any)}
@@ -499,7 +491,7 @@ const EnergyUsagePage: React.FC = () => {
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <BoltIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
-                Real-time Power Consumption ({selectedClassroom})
+                Prototype Power Consumption ({selectedClassroom})
               </h3>
               {latestPzemData && latestSchedule ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 text-xs sm:text-sm">
@@ -593,26 +585,33 @@ const EnergyUsagePage: React.FC = () => {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 <div>
-                  <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Room Consumption</h4>
-                  <p className="text-xs sm:text-sm">Consumption: {powerCosts.consumptionKWh} kWh</p>
-                  <p className="text-xs sm:text-sm">Cost: ₱{powerCosts.cost}</p>
+                  <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Prototype Consumption</h4>
+                  <p className="text-xs sm:text-sm">Duration: {powerConsumption.durationHours} hours</p>
+                  <p className="text-xs sm:text-sm">Consumption: {powerConsumption.prototypeConsumptionKWh} kWh</p>
+                  <p className="text-xs sm:text-sm">Cost: ₱{powerConsumption.prototypeCost}</p>
+                </div>
+                <div>
+                  <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Actual Room Consumption (Scaled x{SCALING_FACTOR})</h4>
+                  <p className="text-xs sm:text-sm">Duration: {powerConsumption.durationHours} hours</p>
+                  <p className="text-xs sm:text-sm">Consumption: {powerConsumption.actualConsumptionKWh} kWh</p>
+                  <p className="text-xs sm:text-sm">Cost: ₱{powerConsumption.actualCost}</p>
                 </div>
               </div>
             </div>
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
-                Interactive Power Calculator
+                Interactive Power Calculator (@ ₱{VECO_RATE_PER_KWH}/kWh)
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">
-                    Power (Watts)
+                    Energy Consumption (kWh)
                   </label>
                   <input
                     type="number"
-                    value={calcPowerWatts}
-                    onChange={e => setCalcPowerWatts(e.target.value)}
+                    value={calcEnergyKWh}
+                    onChange={(e) => setCalcEnergyKWh(e.target.value)}
                     className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     min="0"
                     step="0.01"
@@ -620,12 +619,12 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">
-                    Hours Used
+                    Duration (hours)
                   </label>
                   <input
                     type="number"
-                    value={calcHours}
-                    onChange={e => setCalcHours(e.target.value)}
+                    value={calcDurationHours}
+                    onChange={(e) => setCalcDurationHours(e.target.value)}
                     className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     min="0"
                     step="0.01"
@@ -640,16 +639,23 @@ const EnergyUsagePage: React.FC = () => {
                   </button>
                   {calcResult && (
                     <div className="mt-3 sm:mt-4 p-3 sm:p-4 bg-gray-50 rounded-lg text-xs sm:text-sm">
-                      <p>Energy Consumption: {calcResult.kWh} kWh</p>
-                      <p>Cost (@ ₱{VECO_RATE_PER_KWH}/kWh): ₱{calcResult.cost}</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                        <div>
+                          <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Prototype Consumption</h4>
+                          <p>Duration: {calcResult.durationHours} hours</p>
+                          <p>Consumption: {calcResult.prototypeKWh} kWh</p>
+                          <p>Cost: ₱{calcResult.prototypeCost}</p>
+                        </div>
+                        <div>
+                          <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Actual Room Consumption (Scaled x{SCALING_FACTOR})</h4>
+                          <p>Duration: {calcResult.durationHours} hours</p>
+                          <p>Consumption: {calcResult.actualKWh} kWh</p>
+                          <p>Cost: ₱{calcResult.actualCost}</p>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-            <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
-              <div className="h-[300px] sm:h-[400px]">
-                <Line data={chartData} options={chartOptions} />
               </div>
             </div>
             {energyData.length > 0 && (
@@ -697,7 +703,7 @@ const EnergyUsagePage: React.FC = () => {
                       type="text"
                       placeholder="Search by instructor, subject, or section..."
                       value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
+                      onChange={(e) => setSearchQuery(e.target.value)}
                       className="w-full rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 py-1.5 sm:py-2 px-2 sm:px-3 text-sm sm:text-base"
                     />
                   </div>
@@ -731,11 +737,9 @@ const EnergyUsagePage: React.FC = () => {
                     </thead>
                     <tbody>
                       {filteredEnergyData.length > 0 ? (
-                        filteredEnergyData.map(entry => (
+                        filteredEnergyData.map((entry) => (
                           <tr key={entry.id} className="border-b hover:bg-gray-50">
-                            <td className="px-4 sm:px-6 py-3 sm:py-4">
-                              {entry.timestamp.toLocaleString()}
-                            </td>
+                            <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.timestamp.toLocaleString()}</td>
                             <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.instructorName}</td>
                             <td className="px-4 sm:px-6 py-3 sm:py-4">
                               {entry.subject} ({entry.subjectCode})
@@ -744,12 +748,8 @@ const EnergyUsagePage: React.FC = () => {
                               {entry.schedule.day} {entry.schedule.startTime}-{entry.schedule.endTime}
                             </td>
                             <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.schedule.section}</td>
-                            <td className="px-4 sm:px-6 py-3 sm:py-4">
-                              {entry.powerWatts.toFixed(2)}
-                            </td>
-                            <td className="px-4 sm:px-6 py-3 sm:py-4">
-                              {entry.consumptionKWh.toFixed(2)}
-                            </td>
+                            <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.powerWatts.toFixed(2)}</td>
+                            <td className="px-4 sm:px-6 py-3 sm:py-4">{entry.consumptionKWh.toFixed(2)}</td>
                           </tr>
                         ))
                       ) : (

@@ -470,35 +470,6 @@ const InstructorDashboard = () => {
 
           {/* Sidebar */}
           <div className="lg:col-span-1 space-y-6 sm:space-y-8">
-            {/* Room Occupancy */}
-            <motion.section
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.3, duration: 0.5 }}
-              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50"
-            >
-              <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 flex items-center">
-                <MapPinIcon className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2" />
-                Room Occupancy
-              </h2>
-              {roomOccupancy.length > 0 ? (
-                roomOccupancy.map((room, index) => (
-                  <motion.div
-                    key={index}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.1, duration: 0.4 }}
-                    className="flex items-center p-3 bg-gradient-to-r from-gray-50 to-white rounded-lg sm:rounded-xl mb-3 shadow-sm"
-                  >
-                    <MapPinIcon className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2 sm:mr-3" />
-                    <p className="text-xs sm:text-sm font-medium text-gray-900">Room {room.roomId}: Occupied</p>
-                  </motion.div>
-                ))
-              ) : (
-                <p className="text-gray-600 text-center py-4 text-sm sm:text-base">No rooms currently occupied</p>
-              )}
-            </motion.section>
-
             {/* Quick Actions */}
             <motion.section
               initial={{ opacity: 0, x: 20 }}
