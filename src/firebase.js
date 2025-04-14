@@ -7,15 +7,15 @@ import { getDatabase, ref, onValue, off } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 
 export const firebaseConfig = {
-    apiKey: "AIzaSyDQIMqO4bJ-k4-pjjGnHGwCbCYUFUQe7Hw",
-    authDomain: "smartecolock.firebaseapp.com",
-    projectId: "smartecolock",
-    storageBucket: "smartecolock.firebasestorage.app",
-    messagingSenderId: "300630412358",
-    appId: "1:300630412358:web:44afc1a224507ccb764e47",
-    measurementId: "G-PNBNJ39FE0",
-    databaseURL: "https://smartecolock-default-rtdb.asia-southeast1.firebasedatabase.app"
-  };
+  apiKey: "AIzaSyCnBauXgFmxyWWO5VHcGUNToGy7lulbN6E",
+  authDomain: "smartecolock-94f5a.firebaseapp.com",
+  databaseURL: "https://smartecolock-94f5a-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "smartecolock-94f5a",
+  storageBucket: "smartecolock-94f5a.firebasestorage.app",
+  messagingSenderId: "969191580797",
+  appId: "1:969191580797:web:128057ff7ebe656c3ffd14",
+  measurementId: "G-Q7GMNE9Q52"
+};
   
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
