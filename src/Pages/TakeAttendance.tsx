@@ -30,7 +30,10 @@ interface Student {
   sectionId: string;
   classStatus: string;
   timestamp: string;
+  timeIn: string;
+  timeOut: string;
   weight: number;
+  weightUnit: string;
   sensor: string;
   role: string;
   date: string;
@@ -40,6 +43,9 @@ interface Student {
   weightAuthenticated: boolean;
   confirmed: boolean;
   assignedSensorId: string;
+  subject: string;
+  subjectCode: string;
+  lastSession: string;
   schedules: Array<{
     day: string;
     endTime: string;
@@ -246,48 +252,64 @@ const TakeAttendance: React.FC = () => {
 
           const fetchedStudents: Student[] = Object.entries(studentsData)
             .map(([rfidUid, studentData]: [string, any]) => {
-              const attendanceKey = Object.keys(studentData.Attendance || {})[0];
-              const attendance = studentData.Attendance?.[attendanceKey] || {};
+              // Skip if student data is invalid
+              if (!studentData.personalInfo) return null;
 
-              if (!attendance.schedules) return null;
+              const personalInfo = studentData.personalInfo || {};
+              const subject = studentData.subject || {};
+              const attendanceInfo = studentData.attendanceInfo || {};
+              
+              // Match subjectCode, section, and instructor if schedules exist
+              let hasMatchingSchedule = false;
+              if (studentData.schedules) {
+                hasMatchingSchedule = studentData.schedules.some(
+                  (schedule: any) =>
+                    schedule.subjectCode === selectedSubject.code &&
+                    schedule.section === selectedSection.name &&
+                    schedule.instructorName === instructorDetails.fullName
+                );
+              }
 
-              // Match subjectCode, section, and instructor
-              const hasMatchingSchedule = attendance.schedules.some(
-                (schedule: any) =>
-                  schedule.subjectCode === selectedSubject.code &&
-                  schedule.section === selectedSection.name &&
-                  schedule.instructorName === instructorDetails.fullName
-              );
+              // Also check if the subject code matches directly
+              if (subject.subjectCode === selectedSubject.code) {
+                hasMatchingSchedule = true;
+              }
 
               if (!hasMatchingSchedule) return null;
 
               return {
                 rfidUid,
-                idNumber: attendance.idNumber || '',
-                studentName: attendance.fullName || 'Unknown',
-                email: attendance.email || '',
-                mobileNumber: attendance.mobileNumber || '',
-                department: attendance.department || '',
-                section: attendance.schedules?.[0]?.section || selectedSection.name,
-                sectionId: attendance.schedules?.[0]?.sectionId || selectedSection.id,
-                classStatus: attendance.Status || 'Unknown',
-                timestamp: attendance.timestamp || '',
-                weight: attendance.weight || 0,
-                sensor: attendance.Sensor || '',
-                role: attendance.role || 'student',
-                date: attendance.date || '',
-                action: attendance.Action || '',
-                attendanceStatus:
-                  attendance.Status?.toLowerCase() === 'pending'
-                    ? 'pending'
-                    : attendance.Status?.toLowerCase() === 'confirmed'
-                    ? 'present'
+                idNumber: personalInfo.idNumber || '',
+                studentName: personalInfo.fullName || 'Unknown',
+                email: personalInfo.email || '',
+                mobileNumber: personalInfo.mobileNumber || '',
+                department: personalInfo.department || '',
+                section: selectedSection.name,
+                sectionId: selectedSection.id,
+                classStatus: attendanceInfo.status || 'Unknown',
+                timestamp: attendanceInfo.timestamp || '',
+                timeIn: attendanceInfo.timeIn || '',
+                timeOut: attendanceInfo.timeOut || '',
+                weight: attendanceInfo.weight || 0,
+                weightUnit: attendanceInfo.weightUnit || 'kg',
+                sensor: attendanceInfo.sensor || '',
+                role: personalInfo.role || 'student',
+                date: attendanceInfo.date || '',
+                action: attendanceInfo.action || '',
+                attendanceStatus: 
+                  attendanceInfo.status?.toLowerCase() === 'present' 
+                    ? 'present' 
+                    : attendanceInfo.status?.toLowerCase() === 'late' 
+                    ? 'late' 
                     : 'absent',
-                rfidAuthenticated: attendance.Action === 'Not Confirmed' ? false : true,
-                weightAuthenticated: attendance.weightAuthenticated || false,
-                confirmed: attendance.Status === 'Confirmed' || false,
-                assignedSensorId: attendance.assignedSensorId?.toString() || '',
-                schedules: attendance.schedules || [],
+                rfidAuthenticated: attendanceInfo.action?.includes('Confirmed') || false,
+                weightAuthenticated: attendanceInfo.sensorConfirmed || false,
+                confirmed: attendanceInfo.status === 'Present' || false,
+                assignedSensorId: attendanceInfo.assignedSensorId?.toString() || '',
+                subject: subject.subject || '',
+                subjectCode: subject.subjectCode || '',
+                lastSession: studentData.lastSession || '',
+                schedules: studentData.schedules || [],
               };
             })
             .filter((student): student is Student => student !== null);
@@ -389,41 +411,45 @@ const TakeAttendance: React.FC = () => {
 
     try {
       const now = new Date();
-      const attendanceRef = ref(rtdb, `/Students/${rfidUid}/Attendance`);
+      const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_');
+      const timeStr = dateStr + '_' + 
+        now.getHours().toString().padStart(2, '0') + 
+        now.getMinutes().toString().padStart(2, '0') + 
+        now.getSeconds().toString().padStart(2, '0');
       
-      // Fetch current attendance data to preserve fields
-      const snapshot = await get(attendanceRef);
-      const attendanceData = snapshot.val() || {};
-      const sessionId = Object.keys(attendanceData)[0] || `${selectedSubject.code}_${selectedSection.name}_${now.toISOString().split('T')[0]}`;
-      const currentAttendance = attendanceData[sessionId] || {};
-
+      const student = students.find(s => s.rfidUid === rfidUid);
+      
       // Determine status for RTDB
-      const dbStatus = status === 'absent' ? 'Not Confirmed' : 'Confirmed';
+      const dbStatus = status === 'absent' ? 'Absent' : status === 'late' ? 'Late' : 'Present';
       const isPresentOrLate = status === 'present' || status === 'late';
+      const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
 
-      // Update RTDB
-      await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}`), {
-        ...currentAttendance,
-        Status: dbStatus,
-        timestamp: now.toISOString(),
-        confirmed: isPresentOrLate,
-        rfidAuthenticated: isPresentOrLate,
-        weightAuthenticated: currentAttendance.weightAuthenticated || false,
-        Action: isPresentOrLate ? 'Confirmed' : 'Not Confirmed',
-        fullName: currentAttendance.fullName || students.find((s) => s.rfidUid === rfidUid)?.studentName || '',
-        email: currentAttendance.email || students.find((s) => s.rfidUid === rfidUid)?.email || '',
-        idNumber: currentAttendance.idNumber || students.find((s) => s.rfidUid === rfidUid)?.idNumber || '',
-        mobileNumber: currentAttendance.mobileNumber || students.find((s) => s.rfidUid === rfidUid)?.mobileNumber || '',
-        department: currentAttendance.department || students.find((s) => s.rfidUid === rfidUid)?.department || '',
-        schedules: currentAttendance.schedules || students.find((s) => s.rfidUid === rfidUid)?.schedules || [],
-        weight: currentAttendance.weight || students.find((s) => s.rfidUid === rfidUid)?.weight || 0,
-        Sensor: currentAttendance.Sensor || students.find((s) => s.rfidUid === rfidUid)?.sensor || '',
-        role: currentAttendance.role || 'student',
-        date: now.toISOString().split('T')[0],
-        assignedSensorId: currentAttendance.assignedSensorId || students.find((s) => s.rfidUid === rfidUid)?.assignedSensorId || '',
+      // Update RTDB with new structure
+      await set(ref(rtdb, `/Students/${rfidUid}/attendanceInfo`), {
+        action: isPresentOrLate ? 'Confirmed RFID' : 'Not Confirmed',
+        assignedSensorId: student?.assignedSensorId || '',
+        date: dateStr,
+        sensor: student?.sensor || '',
+        sensorConfirmed: student?.weightAuthenticated || false,
+        sessionId: sessionId,
+        status: dbStatus,
+        timeIn: isPresentOrLate ? timeStr : '',
+        timeOut: '',
+        timestamp: timeStr,
+        weight: student?.weight || 0,
+        weightUnit: student?.weightUnit || 'kg'
       });
+      
+      // Update subject info
+      await set(ref(rtdb, `/Students/${rfidUid}/subject`), {
+        subject: selectedSubject.name,
+        subjectCode: selectedSubject.code
+      });
+      
+      // Update last session
+      await set(ref(rtdb, `/Students/${rfidUid}/lastSession`), sessionId);
 
-      toast.success(`Marked ${status} for ${students.find((s) => s.rfidUid === rfidUid)?.studentName} at ${now.toLocaleTimeString()}`);
+      toast.success(`Marked ${status} for ${student?.studentName} at ${now.toLocaleTimeString()}`);
     } catch (error) {
       console.error('Error updating attendance in RTDB:', error);
       toast.error('Failed to update attendance status');
@@ -438,33 +464,39 @@ const TakeAttendance: React.FC = () => {
         const gracePeriod = 15 * 60 * 1000;
         const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
         const now = new Date();
+        const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_');
+        const timeStr = dateStr + '_' + 
+          now.getHours().toString().padStart(2, '0') + 
+          now.getMinutes().toString().padStart(2, '0') + 
+          now.getSeconds().toString().padStart(2, '0');
+        
+        const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
+        const dbStatus = status === 'present' ? 'Present' : 'Late';
 
-        const attendanceRef = ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance`);
-        const snapshot = await get(attendanceRef);
-        const attendanceData = snapshot.val() || {};
-        const sessionId = Object.keys(attendanceData)[0] || `${selectedSubject.code}_${selectedSection.name}_${now.toISOString().split('T')[0]}`;
-        const currentAttendance = attendanceData[sessionId] || {};
-
-        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance/${sessionId}`), {
-          ...currentAttendance,
-          Status: 'Confirmed',
-          timestamp: now.toISOString(),
-          confirmed: true,
-          rfidAuthenticated: true,
-          weightAuthenticated: currentAttendance.weightAuthenticated || false,
-          Action: 'Confirmed',
-          fullName: currentAttendance.fullName || confirmationStudent.studentName,
-          email: currentAttendance.email || confirmationStudent.email,
-          idNumber: currentAttendance.idNumber || confirmationStudent.idNumber,
-          mobileNumber: currentAttendance.mobileNumber || confirmationStudent.mobileNumber,
-          department: currentAttendance.department || confirmationStudent.department,
-          schedules: currentAttendance.schedules || confirmationStudent.schedules,
-          weight: currentAttendance.weight || confirmationStudent.weight,
-          Sensor: currentAttendance.Sensor || confirmationStudent.sensor,
-          role: currentAttendance.role || 'student',
-          date: now.toISOString().split('T')[0],
-          assignedSensorId: currentAttendance.assignedSensorId || confirmationStudent.assignedSensorId,
+        // Update RTDB with new structure
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/attendanceInfo`), {
+          action: 'Confirmed RFID',
+          assignedSensorId: confirmationStudent.assignedSensorId || '',
+          date: dateStr,
+          sensor: confirmationStudent.sensor || '',
+          sensorConfirmed: confirmationStudent.weightAuthenticated || false,
+          sessionId: sessionId,
+          status: dbStatus,
+          timeIn: timeStr,
+          timeOut: '',
+          timestamp: timeStr,
+          weight: confirmationStudent.weight || 0,
+          weightUnit: confirmationStudent.weightUnit || 'kg'
         });
+        
+        // Update subject info
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/subject`), {
+          subject: selectedSubject.name,
+          subjectCode: selectedSubject.code
+        });
+        
+        // Update last session
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/lastSession`), sessionId);
 
         toast.success(`Confirmed ${status} for ${confirmationStudent.studentName}`);
       } catch (error) {
@@ -554,15 +586,19 @@ const TakeAttendance: React.FC = () => {
 
       // Reset RTDB attendance statuses after submission
       const resetPromises = students.map((student) =>
-        set(ref(rtdb, `/Students/${student.rfidUid}/Attendance/${selectedSubject.code}_${selectedSection.name}_${today}`), {
-          ...students.find((s) => s.rfidUid === student.rfidUid),
-          Status: 'Not Confirmed',
+        set(ref(rtdb, `/Students/${student.rfidUid}/attendanceInfo`), {
+          action: 'Not Confirmed',
+          assignedSensorId: '',
+          date: '',
+          sensor: '',
+          sensorConfirmed: false,
+          sessionId: '',
+          status: 'Not Confirmed',
+          timeIn: '',
+          timeOut: '',
           timestamp: '',
-          confirmed: false,
-          rfidAuthenticated: false,
-          weightAuthenticated: false,
-          Action: 'Not Confirmed',
-          date: today,
+          weight: 0,
+          weightUnit: 'kg'
         })
       );
       await Promise.all(resetPromises);
@@ -661,12 +697,12 @@ const TakeAttendance: React.FC = () => {
   const getStatusDisplay = (student: Student) => {
     const weightInfo = student.weight ? (
       <span className="ml-1 sm:ml-2 text-blue-600 text-xs sm:text-sm">
-        ({student.weight.toFixed(1)} kg)
+        ({student.weight.toFixed(1)} {student.weightUnit})
       </span>
     ) : null;
-    const timeInfo = student.timestamp ? (
+    const timeInfo = student.timeIn ? (
       <span className="ml-1 sm:ml-2 text-gray-500 text-xs">
-        ({new Date(student.timestamp).toLocaleTimeString()})
+        ({student.timeIn.split('_').pop()?.replace(/(\d{2})(\d{2})(\d{2})/, '$1:$2:$3')})
       </span>
     ) : null;
 
@@ -915,7 +951,7 @@ const TakeAttendance: React.FC = () => {
                       </p>
                       <p>
                         <span className="font-medium text-gray-700">Weight:</span>{' '}
-                        {student.weight ? `${student.weight.toFixed(1)} kg` : 'N/A'}
+                        {student.weight ? `${student.weight.toFixed(1)} ${student.weightUnit}` : 'N/A'}
                       </p>
                       <p>
                         <span className="font-medium text-gray-700">Verified:</span>{' '}
