@@ -1,0 +1,76 @@
+// Instructions for fixing the compilation errors in code.ino:
+
+To fix the compilation errors, make the following changes:
+
+1. ESP.wdtFeed() is not available in the ESP32 Arduino core:
+   - Replace all instances of ESP.wdtFeed() with yield() or a custom function
+
+2. Add missing global variables at the top of the file:
+```
+// Firebase operation tracking
+bool inFirebaseOperation = false;
+unsigned long lastFirebaseOperationStart = 0;
+const unsigned long MAX_FIREBASE_TIMEOUT = 8000; // 8 seconds
+
+// Session tracking variables
+String currentRoomName = "";
+String currentSectionName = "";
+String currentSubjectCode = "";
+String sessionStartTime = "";
+int confirmedCount = 0;
+```
+
+3. Fix the feedWatchdog function:
+```
+void feedWatchdog() {
+  // ESP32 Arduino core doesn't have ESP.wdtFeed(), use alternatives
+  yield();
+  delay(1); // Tiny delay to ensure background processes can run
+}
+```
+
+4. Fix the handleFirebaseSSLError function:
+```
+void handleFirebaseSSLError() {
+  Serial.println("Handling Firebase SSL connection error");
+  feedWatchdog();
+  
+  // Reset the Firebase connection
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Attempting to reconnect Firebase...");
+    // Firebase.reconnect doesn't exist, use alternatives
+    Firebase.reconnectWiFi(true);
+    delay(500);
+    feedWatchdog();
+  }
+}
+```
+
+5. Remove the esp_task_wdt_init call in setup:
+```
+// Replace this line:
+// esp_task_wdt_init(10, true); // 10 seconds timeout (default is 5)
+```
+
+6. Fix the logInstructorSessionEnd function to use global variables:
+```
+void logInstructorSessionEnd(String rfidUid, String timestamp, String reason) {
+  // ...
+  // Use these globals directly instead of local variables:
+  // String roomName = currentRoomName;
+  // String sectionName = currentSectionName; 
+  // String subjectCode = currentSubjectCode;
+  // ...
+}
+```
+
+7. Remove the code block that exists outside of any function, around line 5965:
+```
+// Delete this entire block:
+// Add error handling for Firebase operations in logStudentToRTDB function
+if (!sdMode && isConnected && Firebase.ready()) {
+  // ...
+}
+```
+
+8. Remove any duplicate function or variable declarations. 

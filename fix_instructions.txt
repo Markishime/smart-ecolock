@@ -1,0 +1,36 @@
+# Fix for "Redefinition of 'void nonBlockingDelay(long unsigned int)'" Error
+
+You need to remove the duplicate function definition in your code.ino file. The error occurs because the `nonBlockingDelay` function is defined twice:
+1. First at line 329
+2. Again at line 1773
+
+## Step 1: Keep only one implementation (the improved one)
+
+The best version of the function to keep is the enhanced version which includes watchdog protection. Make sure you have only one definition of the function with this implementation:
+
+```cpp
+void nonBlockingDelay(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    yield(); // This is crucial - allows other tasks to run
+    // Add a small actual delay to prevent tight looping that could still trigger watchdog
+    delay(1);
+  }
+}
+```
+
+## Step 2: Find and Remove the Second Implementation
+
+Search for "// Enhanced nonBlockingDelay that yields to prevent watchdog timeouts" in your code. 
+You'll find this comment followed by a second implementation of the nonBlockingDelay function.
+Delete this entire second function implementation (you can keep the comment if you like).
+
+## Step 3: Update your Function Declaration
+
+Make sure the function declaration at the top of your file matches the implementation:
+
+```cpp
+void nonBlockingDelay(unsigned long ms);
+```
+
+## Once you make these changes, your code should compile without the redefinition error.
