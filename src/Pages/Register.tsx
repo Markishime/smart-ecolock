@@ -320,8 +320,8 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     // Fetch RegisteredUIDs and UnregisteredUIDs from RTDB
-    const registeredUidsRef = ref(rtdb, 'RegisteredUIDs');
-    const unregisteredUidsRef = ref(rtdb, 'UnregisteredUIDs');
+    const registeredUidsRef = ref(rtdb, 'Registered');
+    const unregisteredUidsRef = ref(rtdb, 'Unregistered');
 
     const unsubscribe = onValue(
       unregisteredUidsRef,
@@ -415,7 +415,7 @@ const Register: React.FC = () => {
 
       if (formData.rfidUid) {
         // Move UID from UnregisteredUIDs to RegisteredUIDs
-        const uidRef = ref(rtdb, `/UnregisteredUIDs/${formData.rfidUid}`);
+        const uidRef = ref(rtdb, `/Unregistered/${formData.rfidUid}`);
         await set(uidRef, null);
 
         // Store RFID data

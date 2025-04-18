@@ -7,14 +7,14 @@ import { getDatabase, ref, onValue, off } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 
 export const firebaseConfig = {
-  apiKey: "AIzaSyChJnuCK7QY2EXPTtF9Obp7mWyZXGfzsTE",
-  authDomain: "acs-test-3e9f7.firebaseapp.com",
-  databaseURL: "https://acs-test-3e9f7-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "acs-test-3e9f7",
-  storageBucket: "acs-test-3e9f7.firebasestorage.app",
-  messagingSenderId: "488154646618",
-  appId: "1:488154646618:web:bce97845a4a2a9c15b3063",
-  measurementId: "G-BV4DB5HFLX"
+  apiKey: "AIzaSyCnBauXgFmxyWWO5VHcGUNToGy7lulbN6E",
+  authDomain: "smartecolock-94f5a.firebaseapp.com",
+  databaseURL: "https://smartecolock-94f5a-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "smartecolock-94f5a",
+  storageBucket: "smartecolock-94f5a.firebasestorage.app",
+  messagingSenderId: "969191580797",
+  appId: "1:969191580797:web:128057ff7ebe656c3ffd14",
+  measurementId: "G-Q7GMNE9Q52"
 };
   
 const app = initializeApp(firebaseConfig);

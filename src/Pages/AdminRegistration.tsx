@@ -56,7 +56,7 @@ const AdminRegister: React.FC = () => {
 
   // Fetch unregistered UIDs from Realtime Database
   useEffect(() => {
-    const unregisteredUidsRef = ref(rtdb, '/UnregisteredUIDs');
+    const unregisteredUidsRef = ref(rtdb, '/Unregistered');
     
     const handleSnapshot = (snapshot: any) => {
       const uids = snapshot.val();
@@ -113,7 +113,7 @@ const AdminRegister: React.FC = () => {
       });
 
       if (formData.rfidUid) {
-        const uidRef = ref(rtdb, `/UnregisteredUIDs/${formData.rfidUid}`);
+        const uidRef = ref(rtdb, `/Unregistered/${formData.rfidUid}`);
         await set(uidRef, null);
       }
 
