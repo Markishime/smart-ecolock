@@ -18,6 +18,18 @@
 #include <RtcDS1302.h>  // DS1302 RTC library
 #include <set>
 
+// Define ScheduleInfo struct first
+struct ScheduleInfo {
+  bool isValid;
+  String day;
+  String startTime;
+  String endTime;
+  String roomName;
+  String subject;
+  String subjectCode;
+  String section;
+};
+
 // Add missing variable declarations
 bool uidDetailsFetched = false;
 std::map<String, bool> uidDetailsPrinted;
@@ -42,6 +54,7 @@ String getFormattedTime();
 bool checkResetButton();
 void showNeutral();
 void logInstructor(String uid, String timestamp, String action);
+void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensorIndex, String weightConfirmed, String timeOut);
 void logStudentToRTDB(String rfidUid, String timestamp, int sensorIndex, String status, String timeOut = "");
 void logPZEMData(String uid, float voltage, float current, float power, float energy, float frequency, float pf);
 void logUnregisteredUID(String uid, String timestamp);
@@ -67,6 +80,8 @@ void updateRoomStatus(String roomId, String status, String instructorName, Strin
 String getDate();
 bool isAdminUID(String uid);
 std::map<String, String> fetchUserDetails(String uid);
+ScheduleInfo getInstructorScheduleForDay(String uid, String dateStr);
+void logSuperAdmin(String uid, String timestamp);
 
 // Global Objects and Pin Definitions
 LiquidCrystal_I2C_Hangul lcd(0x27, 16, 2);
@@ -144,18 +159,6 @@ float calibrationFactors[] = {999.0, 999.0, 999.0};
 ThreeWire myWire(IO_PIN, SCLK_PIN, CE_PIN);
 RtcDS1302<ThreeWire> Rtc(myWire);
 
-// Add this near the top of your .ino file, after includes but before function declarations
-struct ScheduleInfo {
-  bool isValid;
-  String day;
-  String startTime;
-  String endTime;
-  String roomName;
-  String subject;
-  String subjectCode;
-  String section;
-};
-
 // Relay pins (adjust these based on your hardware setup)
 // Existing constants
 const int RELAY1_PIN = 7; // Door relay
@@ -166,13 +169,13 @@ const unsigned long finalVerificationTimeout = 30000;
 const unsigned long WIFI_TIMEOUT = 10000;
 const unsigned long INACTIVITY_TIMEOUT = 300000; // 5 minutes
 const unsigned long WEIGHT_CONFIRMATION_TIMEOUT = 20000; // 20 seconds per student
-const unsigned long Student_VERIFICATION_WINDOW = 60000; // 1 minutes total
+const unsigned long Student_VERIFICATION_WINDOW = 120000; // 2 minutes total
 const float voltageThreshold = 200.0;
 const unsigned long VERIFICATION_WAIT_DELAY = 3000;
 const unsigned long RFID_DEBOUNCE_DELAY = 2000;
 const unsigned long I2C_RECOVERY_INTERVAL = 5000;
 const unsigned long TAP_OUT_WINDOW = 300000; // 5 minutes for students to tap out
-const unsigned long DOOR_OPEN_DURATION = 30000; // 30 seconds
+const unsigned long DOOR_OPEN_DURATION = 45000; // 30 seconds
 const unsigned long WRONG_SEAT_TIMEOUT = 30000; // 30 seconds timeout for wrong seat
 const unsigned long RESET_DEBOUNCE_DELAY = 50; // 50ms debounce delay
 const String SUPER_ADMIN_UID = "A466BABA";
@@ -656,9 +659,9 @@ bool isAdminUID(String uid) {
       Serial.println("Firestore documents retrieved successfully for 'users' collection.");
       Serial.println("Firestore payload: " + firestoreFbdo.payload());
       FirebaseJson json;
-      json.setJsonData(firestoreFbdo.payload());
+      json.setJsonData(firestoreFbdo.payload().c_str());
       FirebaseJsonData jsonData;
-      if (json.get(jsonData, "documents")) {
+      if (json.get(jsonData, "documents") && jsonData.type == "array") {
         FirebaseJsonArray arr;
         jsonData.getArray(arr);
         for (size_t i = 0; i < arr.size(); i++) {
@@ -1779,15 +1782,30 @@ void checkPendingRelayOperations() {
     // RELAY LOGIC: HIGH = Door unlocked, LOW = Door locked
     digitalWrite(RELAY1, HIGH);
     delay(5);
+    yield(); // Allow system to process
     digitalWrite(RELAY2, HIGH);
     delay(5);
+    yield(); // Allow system to process
     digitalWrite(RELAY3, HIGH);
     delay(5);
+    yield(); // Allow system to process
     digitalWrite(RELAY4, HIGH);
     
     relayActive = false;
     relayTransitionInProgress = false;
     Serial.println("Relays safely deactivated after delay");
+    
+    // Update system state
+    lastActivityTime = millis();
+    lastReadyPrint = millis();
+    
+    // Transition to ready state
+    if (!adminAccessActive && !classSessionActive && !studentVerificationActive && !tapOutPhase) {
+      yield(); // Allow system to process before display update
+      displayMessage("Ready. Tap your", "RFID Card!", 0);
+      readyMessageShown = true;
+      Serial.println("System returned to ready state after relay deactivation");
+    }
   }
   
   // Check for pending operations
@@ -1807,7 +1825,10 @@ void checkPendingRelayOperations() {
   if (relayTransitionInProgress && (millis() - relayTransitionStartTime > RELAY_TRANSITION_TIMEOUT)) {
     Serial.println("WARNING: Relay transition timeout, forcing completion");
     relayTransitionInProgress = false;
+    yield(); // Allow system to process after timeout
   }
+  
+  yield(); // Final yield to ensure smooth operation
 }
 
 // Global FirebaseJson objects to reduce stack usage
@@ -1841,6 +1862,13 @@ void logInstructor(String uid, String timestamp, String action) {
   // Schedule check
   static ScheduleInfo currentSchedule = {false, "", "", "", "", "", "", ""};
   if (action == "Access") {
+    // If we're waiting for instructor to finalize the session, don't start a new session
+    if (waitingForInstructorEnd && uid == lastInstructorUID) {
+      Serial.println("Instructor " + uid + " is finalizing the session after all students tapped out. Not starting a new session.");
+      // The tap-out section will handle saving PZEM data
+      return;
+    }
+    
     currentSchedule = isWithinSchedule(uid, timestamp);
     lastInstructorUID = uid;
   } else if (action == "EndSession" && lastInstructorUID == uid) {
@@ -2420,29 +2448,80 @@ void logInstructor(String uid, String timestamp, String action) {
 
 void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensorIndex, String weightConfirmed, String timeOut) {
   Serial.println("logStudentToRTDB called for UID: " + rfidUid + " at " + timestamp);
+  yield();
+
+  // Check and create student profile in RTDB if needed
+  if (!sdMode && isConnected && Firebase.ready()) {
+    yield();
+    String profilePath = "/Students/" + rfidUid + "/Profile";
+    bool createProfile = true;
+
+    if (Firebase.RTDB.get(&fbdo, profilePath)) {
+      createProfile = false;
+      yield();
+    }
+
+    if (createProfile) {
+      yield();
+      if (firestoreStudents.find(rfidUid) == firestoreStudents.end()) {
+        Serial.println("Refreshing Firestore data for new student...");
+        yield();
+        fetchFirestoreStudents();
+        yield();
+      }
+
+      if (firestoreStudents.find(rfidUid) != firestoreStudents.end()) {
+        yield();
+        FirebaseJson profileJson;
+        auto& studentData = firestoreStudents[rfidUid];
+
+        profileJson.set("fullName", studentData["fullName"].length() > 0 ? studentData["fullName"] : "Unknown");
+        yield();
+        profileJson.set("email", studentData["email"]);
+        profileJson.set("idNumber", studentData["idNumber"]);
+        profileJson.set("mobileNumber", studentData["mobileNumber"]);
+        yield();
+        profileJson.set("role", "student");
+        profileJson.set("department", studentData["department"]);
+        profileJson.set("rfidUid", rfidUid);
+        profileJson.set("createdAt", timestamp);
+        profileJson.set("lastUpdated", timestamp);
+
+        if (studentData["schedules"].length() > 0) {
+          yield();
+          FirebaseJson schedulesJson;
+          schedulesJson.setJsonData(studentData["schedules"]);
+          profileJson.set("schedules", schedulesJson);
+          yield();
+        }
+
+        yield();
+        if (Firebase.RTDB.setJSON(&fbdo, profilePath, &profileJson)) {
+          Serial.println("Created new student profile in RTDB for " + rfidUid);
+        } else {
+          Serial.println("Failed to create student profile: " + fbdo.errorReason());
+        }
+        yield();
+      }
+    }
+  }
+
+  yield(); // Yield before attendance processing
 
   // Default student data
   String studentName = "Unknown";
-  String email = "", idNumber = "", mobileNumber = "", role = "", department = "", schedulesJsonStr = "[]";
+  String email = "", idNumber = "", mobileNumber = "", role = "", department = "";
+  String schedulesJsonStr = "[]";
+  String sectionId = "";
   bool sensorConfirmed = (weightConfirmed == "true");
-  float sensorWeight = sensorConfirmed ? weight : 0.0; // Use provided weight (in kg)
+  float sensorWeight = sensorConfirmed ? weight : 0.0;
   String sensorType = "Weight Sensor";
 
-  yield(); // Prevent watchdog reset
+  yield(); // Yield before cache check
 
-  // Sensor validation
-  if (sensorIndex >= 0 && sensorIndex < NUM_SENSORS) {
-    if (sensorConfirmed) {
-      Serial.println("Sensor " + String(sensorIndex + 1) + " (" + sensorType + "): Confirmed, Weight: " + String(sensorWeight, 2) + " kg");
-    } else {
-      Serial.println("No presence confirmed on Sensor " + String(sensorIndex + 1) + " (" + sensorType + ")");
-    }
-  } else {
-    Serial.println("No sensor assigned for UID: " + rfidUid);
-  }
-
-  // Fetch student data
+  // Get student data from cache
   if (firestoreStudents.find(rfidUid) != firestoreStudents.end()) {
+    yield(); // Yield before data extraction
     studentName = firestoreStudents[rfidUid]["fullName"].length() > 0 ? firestoreStudents[rfidUid]["fullName"] : "Unknown";
     email = firestoreStudents[rfidUid]["email"];
     idNumber = firestoreStudents[rfidUid]["idNumber"];
@@ -2450,74 +2529,64 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
     role = firestoreStudents[rfidUid]["role"].length() > 0 ? firestoreStudents[rfidUid]["role"] : "student";
     department = firestoreStudents[rfidUid]["department"];
     schedulesJsonStr = firestoreStudents[rfidUid]["schedules"].length() > 0 ? firestoreStudents[rfidUid]["schedules"] : "[]";
-    Serial.println("Firestore data found for UID: " + rfidUid + ", Name: " + studentName);
-  } else {
-    Serial.println("No Firestore data for UID: " + rfidUid + ". Retrying...");
-    yield(); // Prevent watchdog reset before fetch
-    fetchFirestoreStudents();
-    yield(); // Prevent watchdog reset after fetch
-    if (firestoreStudents.find(rfidUid) != firestoreStudents.end()) {
-      studentName = firestoreStudents[rfidUid]["fullName"].length() > 0 ? firestoreStudents[rfidUid]["fullName"] : "Unknown";
-      schedulesJsonStr = firestoreStudents[rfidUid]["schedules"].length() > 0 ? firestoreStudents[rfidUid]["schedules"] : "[]";
-      Serial.println("Retry successful for UID: " + rfidUid);
-    }
+    yield(); // Yield after data extraction
   }
 
-  yield(); // Prevent watchdog reset
+  yield(); // Yield before status determination
 
   // Determine status and action
   String finalStatus = sensorConfirmed ? "Present" : "Pending";
   String action = sensorConfirmed ? "Confirmed Weight" : "Initial Tap";
   
-  // Special case for permanently failed verification (-2 sensorIndex)
   if (sensorIndex == -2) {
     finalStatus = "Pending Recovery";
     action = "Wrong Sensor - Recovery Needed";
     sensorConfirmed = false;
-  }
-  
-  // Special case for permanent absence due to wrong sensor (no recovery attempted before class end)
-  if (sensorIndex == -3) {
+  } else if (sensorIndex == -3) {
     finalStatus = "Absent";
     action = "Wrong Sensor - No Recovery";
     sensorConfirmed = false;
   }
-  
+
   String sensorStr = (sensorIndex >= 0) ? "Sensor " + String(sensorIndex + 1) + " (" + sensorType + ")" : "Not Assigned";
 
-  // Log to SD
-  String entry = "Student:UID:" + rfidUid +
-                 " TimeIn:" + timestamp +
-                 " Action:" + action +
-                 " Status:" + finalStatus +
-                 " Sensor:" + sensorStr +
-                 " assignedSensorId:" + String(sensorIndex >= 0 ? sensorIndex : -1) +
-                 (timeOut != "" ? " TimeOut:" + timeOut : "");
-  storeLogToSD(entry);
-  Serial.println("SD log: " + entry);
+  yield(); // Yield before SD operations
 
-  yield(); // Prevent watchdog reset before Firebase operations
+  // Log to SD if offline
+  if (!isConnected || sdMode) {
+    String entry = "Student:UID:" + rfidUid +
+                   " TimeIn:" + timestamp +
+                   " Action:" + action +
+                   " Status:" + finalStatus +
+                   " Sensor:" + sensorStr +
+                   " assignedSensorId:" + String(sensorIndex >= 0 ? sensorIndex : -1) +
+                   (timeOut != "" ? " TimeOut:" + timeOut : "");
+    yield(); // Yield before SD write
+    storeLogToSD(entry);
+    Serial.println("SD log: " + entry);
+    yield(); // Yield after SD write
+  }
+
+  yield(); // Yield before Firebase operations
 
   // Firebase logging with new structure
   if (!sdMode && isConnected && Firebase.ready()) {
-    String path = "/Students/" + rfidUid + "/Attendance/" + currentSessionId;
+    String date = timestamp.substring(0, 10);
     
-    // Process schedules to identify matched schedule and all schedules
+    // Process schedules
     FirebaseJsonArray allSchedulesArray;
     FirebaseJson matchedSchedule;
-    String subjectCode = "Unknown", roomName = "Unknown", sectionName = "Unknown", sectionId = "Unknown";
-    String instructorName = "Unknown", subject = "Unknown";
-    String scheduleDay = "Unknown", startTime = "Unknown", endTime = "Unknown";
+    String subjectCode = "Unknown", roomName = "Unknown", sectionName = "Unknown";
     
     if (schedulesJsonStr != "[]") {
+      yield(); // Yield before schedule processing
       FirebaseJsonArray tempArray;
       if (tempArray.setJsonArrayData(schedulesJsonStr)) {
         String currentDay = getDayFromTimestamp(timestamp);
         String currentTime = timestamp.substring(11, 16);
-        bool foundMatch = false;
         
-        yield(); // Prevent watchdog reset before loop
         for (size_t i = 0; i < tempArray.size(); i++) {
+          if (i % 2 == 0) yield(); // Yield every 2 schedules
           FirebaseJsonData scheduleData;
           if (tempArray.get(scheduleData, i)) {
             FirebaseJson scheduleObj;
@@ -2525,138 +2594,114 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
               FirebaseJson newScheduleObj;
               FirebaseJsonData fieldData;
               
-              // Extract schedule data for allSchedules
-              String scheduleDay, scheduleStartTime, scheduleEndTime, scheduleRoom;
-              String scheduleSubject, scheduleSubjectCode, scheduleSection, scheduleSectionId, scheduleInstructor;
-              
-              if (scheduleObj.get(fieldData, "day")) {
-                scheduleDay = fieldData.stringValue;
-                newScheduleObj.set("day", scheduleDay);
-              }
-              if (scheduleObj.get(fieldData, "startTime")) {
-                scheduleStartTime = fieldData.stringValue;
-                newScheduleObj.set("startTime", scheduleStartTime);
-              }
-              if (scheduleObj.get(fieldData, "endTime")) {
-                scheduleEndTime = fieldData.stringValue;
-                newScheduleObj.set("endTime", scheduleEndTime);
-              }
-              if (scheduleObj.get(fieldData, "roomName")) {
-                scheduleRoom = fieldData.stringValue;
-                newScheduleObj.set("roomName", scheduleRoom);
-              }
-              if (scheduleObj.get(fieldData, "subjectCode")) {
-                scheduleSubjectCode = fieldData.stringValue;
-                newScheduleObj.set("subjectCode", scheduleSubjectCode);
-              }
-              if (scheduleObj.get(fieldData, "subject")) {
-                scheduleSubject = fieldData.stringValue;
-                newScheduleObj.set("subject", scheduleSubject);
-              }
-              if (scheduleObj.get(fieldData, "section")) {
-                scheduleSection = fieldData.stringValue;
-                newScheduleObj.set("section", scheduleSection);
-              }
+              yield(); // Yield before field extraction
+              if (scheduleObj.get(fieldData, "day")) newScheduleObj.set("day", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "startTime")) newScheduleObj.set("startTime", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "endTime")) newScheduleObj.set("endTime", fieldData.stringValue);
+              yield();
+              if (scheduleObj.get(fieldData, "roomName")) newScheduleObj.set("roomName", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "subjectCode")) newScheduleObj.set("subjectCode", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "subject")) newScheduleObj.set("subject", fieldData.stringValue);
+              yield();
+              if (scheduleObj.get(fieldData, "section")) newScheduleObj.set("section", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "instructorName")) newScheduleObj.set("instructorName", fieldData.stringValue);
               if (scheduleObj.get(fieldData, "sectionId")) {
-                scheduleSectionId = fieldData.stringValue;
-                newScheduleObj.set("sectionId", scheduleSectionId);
-              }
-              if (scheduleObj.get(fieldData, "instructorName")) {
-                scheduleInstructor = fieldData.stringValue;
-                newScheduleObj.set("instructorName", scheduleInstructor);
+                newScheduleObj.set("sectionId", fieldData.stringValue);
+                sectionId = fieldData.stringValue; // Store the section ID for later use
               }
               
-              // Add to all schedules array
+              yield(); // Yield before array add
               allSchedulesArray.add(newScheduleObj);
               
-              // Check if this is the matching schedule for current time
-              if (!foundMatch && scheduleDay == currentDay && isTimeInRange(currentTime, scheduleStartTime, scheduleEndTime)) {
-                // Found matching schedule
-                foundMatch = true;
-                subjectCode = scheduleSubjectCode;
-                roomName = scheduleRoom;
-                sectionName = scheduleSection;
-                sectionId = scheduleSectionId;
-                instructorName = scheduleInstructor;
-                subject = scheduleSubject;
-                scheduleDay = scheduleDay;
-                startTime = scheduleStartTime;
-                endTime = scheduleEndTime;
-                
-                // Create matched schedule JSON
-                matchedSchedule.set("day", scheduleDay);
-                matchedSchedule.set("startTime", startTime);
-                matchedSchedule.set("endTime", endTime);
-                matchedSchedule.set("roomName", roomName);
-                matchedSchedule.set("subjectCode", subjectCode);
-                matchedSchedule.set("subject", subject);
-                matchedSchedule.set("section", sectionName);
-                matchedSchedule.set("sectionId", sectionId);
-                matchedSchedule.set("instructorName", instructorName);
+              // Check if this is the current schedule
+              if (scheduleObj.get(fieldData, "day") && fieldData.stringValue == currentDay) {
+                String startTime, endTime;
+                if (scheduleObj.get(fieldData, "startTime")) startTime = fieldData.stringValue;
+                if (scheduleObj.get(fieldData, "endTime")) endTime = fieldData.stringValue;
+                if (isTimeInRange(currentTime, startTime, endTime)) {
+                  if (scheduleObj.get(fieldData, "subjectCode")) subjectCode = fieldData.stringValue;
+                  if (scheduleObj.get(fieldData, "roomName")) roomName = fieldData.stringValue;
+                  if (scheduleObj.get(fieldData, "section")) sectionName = fieldData.stringValue;
+                  matchedSchedule = newScheduleObj;
+                }
               }
+              yield(); // Yield after schedule processing
             }
           }
-          if (i % 5 == 0) yield(); // Prevent watchdog reset during loop (every 5 iterations)
         }
       }
     }
-    
-    yield(); // Prevent watchdog reset before Firebase write
-    
-    // Create sessionId using room, subject, section
-    String sessionId = timestamp.substring(0, 10) + "_" + subjectCode + "_" + sectionName + "_" + roomName;
-    
-    // Create personal info JSON
-    FirebaseJson personalInfo;
-    personalInfo.set("fullName", studentName);
-    personalInfo.set("email", email);
-    personalInfo.set("idNumber", idNumber);
-    personalInfo.set("mobileNumber", mobileNumber);
-    personalInfo.set("role", role);
-    personalInfo.set("department", department);
-    
-    // Create attendance info JSON
-    FirebaseJson attendanceInfo;
-    attendanceInfo.set("sessionId", sessionId);
-    attendanceInfo.set("timestamp", timestamp);
-    attendanceInfo.set("date", timestamp.substring(0, 10));
-    attendanceInfo.set("timeIn", timestamp);
-    attendanceInfo.set("timeOut", timeOut);
-    attendanceInfo.set("status", finalStatus);
-    attendanceInfo.set("action", action);
-    attendanceInfo.set("sensor", sensorStr);
-    attendanceInfo.set("assignedSensorId", sensorIndex >= 0 ? sensorIndex : -1);
-    attendanceInfo.set("weight", sensorWeight);
-    attendanceInfo.set("weightUnit", "kg");
-    attendanceInfo.set("sensorConfirmed", sensorConfirmed);
-    
-    // Create main JSON structure
-    FirebaseJson json;
-    json.set("personalInfo", personalInfo);
-    json.set("attendanceInfo", attendanceInfo);
-    json.set("scheduleMatched", matchedSchedule);
-    json.set("allSchedules", allSchedulesArray);
 
-    if (Firebase.RTDB.setJSON(&fbdo, path, &json)) {
-      Serial.println("Student " + rfidUid + " logged to Firebase: " + finalStatus);
+    yield(); // Yield before final JSON updates
+    
+    // Construct the session ID for this attendance record
+    // Format: YYYY_MM_DD_SubjectCode_Section_Room
+    String sessionId = date + "_" + subjectCode + "_" + sectionName + "_" + roomName;
+    
+    // Path for the new attendance record
+    String path = "/Students/" + rfidUid + "/Attendance/" + sessionId;
+    
+    yield(); // Yield before attendance JSON creation
+    
+    // Create the attendance info JSON object
+    FirebaseJson attendanceInfoJson;
+    attendanceInfoJson.set("action", action);
+    yield();
+    attendanceInfoJson.set("assignedSensorId", sensorIndex >= 0 ? sensorIndex : -1);
+    attendanceInfoJson.set("date", date);
+    attendanceInfoJson.set("sensor", sensorStr);
+    yield();
+    attendanceInfoJson.set("sensorConfirmed", sensorConfirmed);
+    attendanceInfoJson.set("sessionId", sessionId);
+    attendanceInfoJson.set("status", finalStatus);
+    yield();
+    attendanceInfoJson.set("timeIn", timestamp);
+    attendanceInfoJson.set("timeOut", timeOut);
+    attendanceInfoJson.set("timestamp", timestamp);
+    yield();
+    attendanceInfoJson.set("weight", sensorWeight);
+    attendanceInfoJson.set("weightUnit", "kg");
+    
+    // Create the personal info JSON object
+    FirebaseJson personalInfoJson;
+    personalInfoJson.set("department", department);
+    personalInfoJson.set("email", email);
+    personalInfoJson.set("fullName", studentName);
+    personalInfoJson.set("idNumber", idNumber);
+    personalInfoJson.set("mobileNumber", mobileNumber);
+    personalInfoJson.set("role", role);
+    
+    // Create the main JSON object for this attendance record
+    FirebaseJson attendanceJson;
+    attendanceJson.set("allSchedules", allSchedulesArray);
+    attendanceJson.set("attendanceInfo", attendanceInfoJson);
+    attendanceJson.set("personalInfo", personalInfoJson);
+    
+    yield(); // Yield before RTDB update
+    
+    // Update RTDB with the attendance record
+    if (Firebase.RTDB.setJSON(&fbdo, path, &attendanceJson)) {
+      Serial.println("Student attendance logged successfully for " + rfidUid);
       
-      // Also store the UID directly under the Student node instead of RegisteredUIDs
-      if (!Firebase.RTDB.setString(&fbdo, "/Students/" + rfidUid + "/lastSession", currentSessionId)) {
-        Serial.println("Failed to update Student node with session ID: " + fbdo.errorReason());
+      // Update the lastSession field and sectionId field at student root level
+      FirebaseJson updateJson;
+      updateJson.set("lastSession", sessionId);
+      if (sectionId.length() > 0) {
+        updateJson.set("sectionId", sectionId);
+      }
+      
+      if (Firebase.RTDB.updateNode(&fbdo, "/Students/" + rfidUid, &updateJson)) {
+        Serial.println("Updated lastSession for student " + rfidUid);
+      } else {
+        Serial.println("Failed to update lastSession: " + fbdo.errorReason());
       }
     } else {
-      Serial.println("Firebase error: " + fbdo.errorReason());
-      storeLogToSD("Student:FirebaseError UID:" + rfidUid + " Error:" + fbdo.errorReason());
+      Serial.println("Failed to log attendance: " + fbdo.errorReason());
+      storeLogToSD("AttendanceLogFailed:UID:" + rfidUid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
     }
-
-    // We no longer update RegisteredUIDs node for student attendance
-    // The line below is commented out or removed
-    // if (!Firebase.RTDB.setString(&fbdo, "/RegisteredUIDs/" + rfidUid, timestamp)) {
-    //  Serial.println("Failed to update RegisteredUIDs: " + fbdo.errorReason());
-    // }
-  } else {
-    Serial.println("Firebase unavailable. SD logged for " + rfidUid);
   }
+
+  yield(); // Final yield before updating timers
 
   firstActionOccurred = true;
   lastActivityTime = millis();
@@ -2750,6 +2795,8 @@ void logUnregisteredUID(String uid, String timestamp) {
           }
         }
       }
+    } else {
+      Serial.println("Failed to retrieve Firestore students: " + firestoreFbdo.errorReason());
     }
     
     // If we reach here, the UID is not in Firestore, so log it as unregistered
@@ -2841,12 +2888,35 @@ void logAdminAccess(String uid, String timestamp) {
       if (assignedRoomId != "" && firestoreRooms.find(assignedRoomId) != firestoreRooms.end()) {
         const auto& roomData = firestoreRooms[assignedRoomId];
         FirebaseJson roomDetails;
-        roomDetails.set("building", roomData.count("building") ? roomData.at("building") : "Unknown");
-        roomDetails.set("floor", roomData.count("floor") ? roomData.at("floor") : "Unknown");
-        roomDetails.set("name", roomData.count("name") ? roomData.at("name") : "Unknown");
-        roomDetails.set("status", "maintenance");  // Always set to maintenance for admin inspections
-        roomDetails.set("type", roomData.count("type") ? roomData.at("type") : "Unknown");
-        accessJson.set("roomDetails", roomDetails);
+
+        // Use at() for const map access and proper error handling
+        try {
+          roomDetails.set("building", roomData.count("building") ? roomData.at("building") : "Unknown");
+          roomDetails.set("floor", roomData.count("floor") ? roomData.at("floor") : "Unknown");
+          roomDetails.set("name", roomData.count("name") ? roomData.at("name") : "Unknown");
+          roomDetails.set("status", "maintenance");  // Always set to maintenance for admin inspections
+          roomDetails.set("type", roomData.count("type") ? roomData.at("type") : "Unknown");
+          accessJson.set("roomDetails", roomDetails);
+
+          // Also update the room status in Firestore
+          String roomPath = "rooms/" + assignedRoomId;
+          FirebaseJson contentJson;
+          contentJson.set("fields/status/stringValue", "maintenance");
+          
+          if (Firebase.Firestore.patchDocument(&firestoreFbdo, FIRESTORE_PROJECT_ID, "", roomPath.c_str(), contentJson.raw(), "status")) {
+            Serial.println("Room status updated to 'maintenance' in Firestore: " + assignedRoomId);
+          } else {
+            Serial.println("Failed to update room status in Firestore: " + firestoreFbdo.errorReason());
+          }
+        } catch (const std::out_of_range& e) {
+          Serial.println("Error accessing room data: " + String(e.what()));
+          roomDetails.set("building", "Unknown");
+          roomDetails.set("floor", "Unknown");
+          roomDetails.set("name", "Unknown");
+          roomDetails.set("status", "maintenance");
+          roomDetails.set("type", "Unknown");
+          accessJson.set("roomDetails", roomDetails);
+        }
       }
     }
 
@@ -2955,7 +3025,7 @@ void logAdminAccess(String uid, String timestamp) {
         Serial.println("Failed: " + fbdo.errorReason());
         storeLogToSD("AdminUpdateFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
       }
-      yield();
+    yield();
     }
   }
 
@@ -3961,7 +4031,8 @@ bool schedulesMatch(const ScheduleInfo& studentSchedule, FirebaseJson& instructo
 }
 
 ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
-  ScheduleInfo result = {false, "", "", "", "", "", "", ""}; // Default: no match
+  ScheduleInfo result = {false, "", "", "", "", "", "", ""};
+  yield(); // Yield at start of function
 
   int currentHour, currentMinute;
   String currentDay;
@@ -3978,6 +4049,7 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
     currentMinute = now.Minute();
   } else {
     struct tm timeinfo;
+    yield(); // Yield before getting time
     if (!getLocalTime(&timeinfo)) {
       Serial.println("Failed to get local time in isWithinSchedule");
       return result;
@@ -3992,85 +4064,122 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
   String minuteStr = (currentMinute < 10 ? "0" : "") + String(currentMinute);
   Serial.println("Current day: " + currentDay + ", time: " + String(currentHour) + ":" + minuteStr);
 
+  // First try with cached data
+  yield(); // Yield before first schedule check
+  result = checkSchedule(uidStr, currentDay, currentHour, currentMinute);
+  
+  // If no valid schedule found and we're online, refresh Firestore data and try again
+  if (!result.isValid && !sdMode && isConnected && Firebase.ready()) {
+    Serial.println("No valid schedule found initially. Refreshing Firestore data...");
+    displayMessage("Checking for", "Schedule Updates", 2000);
+    
+    yield(); // Yield before Firestore operations
+    
+    // Refresh both teachers and students data
+    if (firestoreTeachers.find(uidStr) != firestoreTeachers.end()) {
+      Serial.println("Refreshing instructor schedules...");
+      fetchFirestoreTeachers();
+      yield(); // Yield after teacher fetch
+    } else if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
+      Serial.println("Refreshing student schedules...");
+      fetchFirestoreStudents();
+      yield(); // Yield after student fetch
+    }
+    
+    // Check schedule again with fresh data
+    yield(); // Yield before second schedule check
+    result = checkSchedule(uidStr, currentDay, currentHour, currentMinute);
+    
+    if (result.isValid) {
+      Serial.println("Valid schedule found after Firestore refresh!");
+      displayMessage("Schedule Found", "After Update", 2000);
+    } else {
+      Serial.println("No valid schedule found even after refresh.");
+      displayMessage("No Schedule", "Found", 2000);
+    }
+  }
+
+  yield(); // Final yield before returning
+  return result;
+}
+
+// Helper function to check schedule with current data
+ScheduleInfo checkSchedule(String uidStr, String currentDay, int currentHour, int currentMinute) {
+  ScheduleInfo result = {false, "", "", "", "", "", "", ""};
+  yield(); // Yield at start of function
+  
   // Load schedules from SD or Firestore
   FirebaseJson schedulesJson;
   bool loadedFromSD = false;
 
   if (sdMode) {
+    yield(); // Yield before SD operations
     if (SD.begin(SD_CS, fsSPI, 4000000)) {
       File scheduleFile = SD.open("/schedules.json", FILE_READ);
       if (scheduleFile) {
         String jsonStr;
         while (scheduleFile.available()) {
           jsonStr += (char)scheduleFile.read();
+          if (jsonStr.length() % 512 == 0) yield(); // Yield periodically during file read
         }
         scheduleFile.close();
         schedulesJson.setJsonData(jsonStr);
         loadedFromSD = (jsonStr.length() > 0);
-        Serial.println("Loaded schedules from SD: " + String(jsonStr.length()) + " bytes");
-      } else {
-        Serial.println("Failed to open /schedules.json for reading.");
       }
       SD.end();
-    } else {
-      Serial.println("SD card init failed in isWithinSchedule.");
     }
 
-    // Check if UID exists in SD-loaded schedules
-    FirebaseJsonData uidData;
-    if (loadedFromSD && schedulesJson.get(uidData, uidStr)) {
-      FirebaseJson teacherSchedules;
-      teacherSchedules.setJsonData(uidData.stringValue);
-      FirebaseJsonData schedulesData;
-      if (teacherSchedules.get(schedulesData, "schedules")) {
-        schedulesJson.clear();
-        schedulesJson.setJsonData(schedulesData.stringValue);
-        Serial.println("Using SD-loaded schedules for UID: " + uidStr);
+    yield(); // Yield after SD operations
+
+    if (loadedFromSD) {
+      FirebaseJsonData uidData;
+      if (schedulesJson.get(uidData, uidStr)) {
+        FirebaseJson teacherSchedules;
+        teacherSchedules.setJsonData(uidData.stringValue);
+        FirebaseJsonData schedulesData;
+        if (teacherSchedules.get(schedulesData, "schedules")) {
+          schedulesJson.clear();
+          schedulesJson.setJsonData(schedulesData.stringValue);
+        } else {
+          loadedFromSD = false;
+        }
       } else {
-        Serial.println("No 'schedules' field found in SD data for UID: " + uidStr);
         loadedFromSD = false;
       }
-    } else if (loadedFromSD) {
-      Serial.println("UID " + uidStr + " not found in SD schedules.");
-      loadedFromSD = false;
     }
   }
 
-  // Fallback to Firestore data (for students or teachers)
-  if (!loadedFromSD) {
-    auto student = firestoreStudents.find(uidStr);
-    auto teacher = firestoreTeachers.find(uidStr);
-    String schedulesStr;
+  yield(); // Yield before Firestore data processing
 
-    if (student != firestoreStudents.end()) {
-      schedulesStr = student->second["schedules"];
-      Serial.println("Checking student schedules for UID: " + uidStr);
-    } else if (teacher != firestoreTeachers.end()) {
-      schedulesStr = teacher->second["schedules"];
-      Serial.println("Checking teacher schedules for UID: " + uidStr);
-    } else {
-      Serial.println("UID " + uidStr + " not found in firestoreStudents or firestoreTeachers");
-      return result;
+  // Use Firestore data if not loaded from SD
+  if (!loadedFromSD) {
+    String schedulesStr;
+    if (firestoreTeachers.find(uidStr) != firestoreTeachers.end()) {
+      schedulesStr = firestoreTeachers[uidStr]["schedules"];
+    } else if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
+      schedulesStr = firestoreStudents[uidStr]["schedules"];
     }
 
     if (schedulesStr == "[]" || schedulesStr.length() == 0) {
-      Serial.println("No schedules found for UID: " + uidStr);
       return result;
     }
 
     schedulesJson.setJsonData(schedulesStr);
-    Serial.println("Using Firestore schedules for UID: " + uidStr + ": " + schedulesStr);
   }
 
-  // Iterate through schedules
+  yield(); // Yield before schedule iteration
+
+  // Check schedules
   size_t scheduleCount = 0;
   FirebaseJsonData uidData;
   while (schedulesJson.get(uidData, "[" + String(scheduleCount) + "]")) {
     scheduleCount++;
+    if (scheduleCount % 5 == 0) yield(); // Yield every 5 schedules during counting
   }
-  Serial.println("Checking " + String(scheduleCount) + " schedules for UID: " + uidStr);
 
   for (size_t i = 0; i < scheduleCount; i++) {
+    if (i % 3 == 0) yield(); // Yield every 3 iterations during schedule checking
+    
     String path = "[" + String(i) + "]";
     FirebaseJsonData scheduleData;
     if (schedulesJson.get(scheduleData, path)) {
@@ -4080,25 +4189,28 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
       FirebaseJsonData fieldData;
       String scheduleDay, startTime, endTime, subject, subjectCode, section, roomName;
 
-      #define GET_FIELD(field, var) \
-        if (!schedule.get(fieldData, field) || fieldData.stringValue.length() == 0) { \
-          Serial.println("Missing or empty '" field "' in schedule " + String(i)); \
-          continue; \
-        } else { \
-          var = fieldData.stringValue; \
-        }
+      if (!schedule.get(fieldData, "day") || fieldData.stringValue.length() == 0) continue;
+      scheduleDay = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "startTime") || fieldData.stringValue.length() == 0) continue;
+      startTime = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "endTime") || fieldData.stringValue.length() == 0) continue;
+      endTime = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "roomName") || fieldData.stringValue.length() == 0) continue;
+      roomName = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "subject") || fieldData.stringValue.length() == 0) continue;
+      subject = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "subjectCode") || fieldData.stringValue.length() == 0) continue;
+      subjectCode = fieldData.stringValue;
+      
+      if (!schedule.get(fieldData, "section") || fieldData.stringValue.length() == 0) continue;
+      section = fieldData.stringValue;
 
-      GET_FIELD("day", scheduleDay);
-      GET_FIELD("startTime", startTime);
-      GET_FIELD("endTime", endTime);
-      GET_FIELD("roomName", roomName);
-      GET_FIELD("subject", subject);
-      GET_FIELD("subjectCode", subjectCode);
-      GET_FIELD("section", section);
-
-      Serial.println("Checking schedule: " + scheduleDay + " " + startTime + "-" + endTime +
-                     ", Subject: " + subject + ", Code: " + subjectCode + ", Section: " + section +
-                     ", Room: " + roomName);
+      yield(); // Yield after field extraction
 
       if (scheduleDay.equalsIgnoreCase(currentDay)) {
         int startHour = startTime.substring(0, 2).toInt();
@@ -4113,7 +4225,6 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
         // Handle overnight schedules
         if (endMins < startMins) {
           if (currentMins >= startMins || currentMins <= endMins) {
-            Serial.println("Within overnight schedule: " + scheduleDay + " " + startTime + "-" + endTime);
             result.isValid = true;
             result.day = scheduleDay;
             result.startTime = startTime;
@@ -4125,7 +4236,6 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
             return result;
           }
         } else if (currentMins >= startMins && currentMins <= endMins) {
-          Serial.println("Within schedule: " + scheduleDay + " " + startTime + "-" + endTime);
           result.isValid = true;
           result.day = scheduleDay;
           result.startTime = startTime;
@@ -4137,15 +4247,12 @@ ScheduleInfo isWithinSchedule(String uidStr, String timestamp) {
           return result;
         }
       }
-    } else {
-      Serial.println("Failed to parse schedule at index " + String(i));
     }
   }
 
-  Serial.println("No matching schedule for " + currentDay + " at " + String(currentHour) + ":" + minuteStr);
+  yield(); // Final yield before returning
   return result;
 }
-
 
 void customLoopTask(void *pvParameters) {
   Serial.println("customLoopTask started with stack size: 20480 bytes");
@@ -4273,7 +4380,7 @@ void setup() {
     tone(BUZZER_PIN, 500, 1000);
     while (1) {
       if (checkResetButton()) ESP.restart();
-      yield();
+    yield();
     }
   }
   lcd.backlight();
@@ -5195,7 +5302,7 @@ void loop() {
       String uidStr = getUIDString();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
-      if (!isConnected) {
+  if (!isConnected) {
         WiFi.reconnect();
         unsigned long wifiStartTime = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - wifiStartTime < 10000) yield();
@@ -5303,7 +5410,7 @@ void loop() {
         if (!sdMode && isConnected && Firebase.ready() && currentTamperAlertId.length() > 0) {
           String tamperPath = "/Alerts/Tamper/" + currentTamperAlertId;
           
-          FirebaseJson updateJson;
+      FirebaseJson updateJson;
           updateJson.set("status", "resolved");
           updateJson.set("resolvedBy", uidStr);
           updateJson.set("resolverName", "CIT-U SUPER ADMIN");
@@ -5347,7 +5454,7 @@ void loop() {
           
           if (Firebase.RTDB.updateNode(&fbdo, tamperPath, &updateJson)) {
             Serial.println("Successfully updated tamper alert status");
-          } else {
+      } else {
             Serial.println("Failed to update tamper alert: " + fbdo.errorReason());
           }
         }
@@ -5364,7 +5471,7 @@ void loop() {
         displayMessage("Ready. Tap your", "RFID Card!", 0);
         readyMessageShown = true;
         currentTamperAlertId = "";
-      } else {
+    } else {
         deniedFeedback();
         displayMessage("Tamper Detected", sdMode ? "Super Admin Req." : "Admin Card Req.", 2000);
         if (!buzzerActive) tone(BUZZER_PIN, 1000);
@@ -6139,8 +6246,8 @@ void logSuperAdmin(String uid, String timestamp) {
     accessJson.set("role", "superadmin");
     accessJson.set("timestamp", sanitizedTimestamp);
     
-    // Add room details if available - add for both entry and exit
-    if (assignedRoomId != "" && firestoreRooms.find(assignedRoomId) != firestoreRooms.end()) {
+    // Add room details ONLY during entry
+    if (isEntry && assignedRoomId != "" && firestoreRooms.find(assignedRoomId) != firestoreRooms.end()) {
       FirebaseJson roomJson;
       roomJson.set("name", firestoreRooms[assignedRoomId].at("name"));
       
@@ -6157,7 +6264,8 @@ void logSuperAdmin(String uid, String timestamp) {
       }
       roomJson.set("floor", floor);
       
-      roomJson.set("status", isEntry ? "occupied" : "available");
+      // Set status to "maintenance" during entry
+      roomJson.set("status", "maintenance");
       
       String type = "classroom";
       if (firestoreRooms[assignedRoomId].find("type") != firestoreRooms[assignedRoomId].end()) {
@@ -6166,6 +6274,17 @@ void logSuperAdmin(String uid, String timestamp) {
       roomJson.set("type", type);
       
       accessJson.set("roomDetails", roomJson);
+
+          // Also update the room status in Firestore
+          String roomPath = "rooms/" + assignedRoomId;
+          FirebaseJson contentJson;
+          contentJson.set("fields/status/stringValue", "maintenance");
+          
+          if (Firebase.Firestore.patchDocument(&firestoreFbdo, FIRESTORE_PROJECT_ID, "", roomPath.c_str(), contentJson.raw(), "status")) {
+            Serial.println("Room status updated to 'maintenance' in Firestore: " + assignedRoomId);
+          } else {
+            Serial.println("Failed to update room status in Firestore: " + firestoreFbdo.errorReason());
+          }
     }
     
     // If this is an exit tap, add PZEM data if available
@@ -6231,7 +6350,7 @@ void logSuperAdmin(String uid, String timestamp) {
     adminAccessActive = false;
     lastAdminUID = "";
     
-    // Update room status if needed
+    // Update room status back to "available" if needed
     if (assignedRoomId != "" && !sdMode && isConnected && Firebase.ready()) {
       String roomPath = "rooms/" + assignedRoomId;
       FirebaseJson contentJson;

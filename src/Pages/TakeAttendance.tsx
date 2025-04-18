@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
-import { ref, onValue, off, set } from 'firebase/database';
+import { ref, onValue, off, set, get } from 'firebase/database';
 import { db, rtdb } from '../firebase';
 import { useAuth } from '../Pages/AuthContext';
 import {
@@ -257,30 +257,56 @@ const TakeAttendance: React.FC = () => {
             .map(([rfidUid, studentData]: [string, any]) => {
               console.log(`Processing student: ${rfidUid}`);
 
+              // Check profile data exists
+              if (!studentData.Profile) {
+                console.warn(`No Profile data for student ${rfidUid}`);
+                return null;
+              }
+
               // Check if student has Attendance data
               if (!studentData.Attendance) {
                 console.warn(`No Attendance data for student ${rfidUid}`);
                 return null;
               }
 
+              // Get profile data
+              const profile = studentData.Profile;
+
               // Find the attendance record for the specific session
-              const attendanceKey = Object.keys(studentData.Attendance).find((key) =>
+              let attendanceKey: string | undefined = Object.keys(studentData.Attendance).find((key) =>
                 key.includes(sessionKeyPattern)
               );
               
+              // Use lastSession as fallback if no matching key found
+              if (!attendanceKey && studentData.lastSession) {
+                attendanceKey = studentData.lastSession;
+              }
+              
+              // If still no key found, skip this student
               if (!attendanceKey) {
                 console.warn(`No attendance key matching ${sessionKeyPattern} for ${rfidUid}`);
                 return null;
               }
 
-              // Get the session data
-              const sessionData = studentData.Attendance[attendanceKey];
+              // Get the session data - attendanceKey is guaranteed to be a string at this point
+              const sessionData = studentData.Attendance[attendanceKey as string];
+              if (!sessionData) {
+                console.warn(`Session data not found for ${attendanceKey}`);
+                return null;
+              }
               
-              // Extract data from the session
-              const attendanceInfo = sessionData?.attendanceInfo || {};
-              const personalInfo = sessionData?.personalInfo || studentData.personalInfo || {};
-              const schedules = sessionData?.allSchedules || [];
-              const scheduleMatched = sessionData?.scheduleMatched || null;
+              // Extract attendance info and personal info
+              const attendanceInfo = sessionData.attendanceInfo || sessionData;
+              const personalInfo = sessionData.personalInfo || profile;
+              
+              // Check if the student has the correct schedule
+              // Look in allSchedules in attendance data first
+              let schedules = sessionData.allSchedules || [];
+              
+              // If not in attendance data, check profile schedules
+              if ((!schedules || schedules.length === 0) && profile.schedules) {
+                schedules = profile.schedules;
+              }
 
               // Verify the schedule matches the subject, section, and instructor
               const hasMatchingSchedule = schedules.some(
@@ -290,7 +316,7 @@ const TakeAttendance: React.FC = () => {
                   schedule.instructorName === instructorDetails.fullName
               );
 
-              if (!hasMatchingSchedule && !scheduleMatched) {
+              if (!hasMatchingSchedule) {
                 console.warn(
                   `No schedule match for ${rfidUid}. Expected: subjectCode=${selectedSubject.code}, section=${selectedSection.name}, instructor=${instructorDetails.fullName}`
                 );
@@ -302,11 +328,11 @@ const TakeAttendance: React.FC = () => {
               // Create the student object with all available data
               return {
                 rfidUid,
-                idNumber: personalInfo.idNumber || '',
-                studentName: personalInfo.fullName || 'Unknown',
-                email: personalInfo.email || '',
-                mobileNumber: personalInfo.mobileNumber || '',
-                department: personalInfo.department || '',
+                idNumber: personalInfo.idNumber || profile.idNumber || '',
+                studentName: personalInfo.fullName || profile.fullName || 'Unknown',
+                email: personalInfo.email || profile.email || '',
+                mobileNumber: personalInfo.mobileNumber || profile.mobileNumber || '',
+                department: personalInfo.department || profile.department || '',
                 section: selectedSection.name,
                 sectionId: selectedSection.id,
                 classStatus: attendanceInfo.status || 'Unknown',
@@ -316,7 +342,7 @@ const TakeAttendance: React.FC = () => {
                 weight: attendanceInfo.weight || 0,
                 weightUnit: attendanceInfo.weightUnit || 'kg',
                 sensor: attendanceInfo.sensor || '',
-                role: personalInfo.role || 'student',
+                role: personalInfo.role || profile.role || 'student',
                 date: attendanceInfo.date || '',
                 action: attendanceInfo.action || '',
                 attendanceStatus: 
@@ -466,20 +492,53 @@ const TakeAttendance: React.FC = () => {
       const isPresentOrLate = status === 'present' || status === 'late';
       const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
 
-      // Update the attendanceInfo in the correct path
-      await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}/attendanceInfo`), {
-        action: isPresentOrLate ? 'Confirmed RFID' : 'Not Confirmed',
-        assignedSensorId: student?.assignedSensorId || '',
-        date: dateStr,
-        sensor: student?.sensor || '',
-        sensorConfirmed: student?.weightAuthenticated || false,
-        sessionId: sessionId,
-        status: dbStatus,
-        timeIn: isPresentOrLate ? timeStr : '',
-        timeOut: '',
-        timestamp: timeStr,
-        weight: student?.weight || 0,
-        weightUnit: student?.weightUnit || 'kg',
+      // Get student's schedules from RTDB
+      const studentRef = ref(rtdb, `/Students/${rfidUid}`);
+      const snapshot = await get(studentRef);
+      const studentData = snapshot.val();
+      const schedules = studentData?.Profile?.schedules || [];
+
+      // Filter schedules that match the current subject and section
+      const relevantSchedules = schedules.filter(
+        (schedule: any) => 
+          schedule.subjectCode === selectedSubject.code && 
+          schedule.section === selectedSection.name
+      );
+
+      // Get weight from existing record or use default
+      const weightValue = student?.weight || 0;
+      const weightUnit = student?.weightUnit || 'kg';
+      const sensorConfirmed = student?.weightAuthenticated || false;
+      const sensor = student?.sensor || 'Weight Sensor';
+
+      // Get personal info
+      const personalInfo = {
+        department: studentData?.Profile?.department || '',
+        email: studentData?.Profile?.email || '',
+        fullName: studentData?.Profile?.fullName || '',
+        idNumber: studentData?.Profile?.idNumber || '',
+        mobileNumber: studentData?.Profile?.mobileNumber || '',
+        role: studentData?.Profile?.role || 'student'
+      };
+
+      // Update the attendance data with the new structure
+      await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}`), {
+        allSchedules: relevantSchedules,
+        attendanceInfo: {
+          action: isPresentOrLate ? 'Confirmed RFID' : 'Not Confirmed',
+          assignedSensorId: student?.assignedSensorId || '',
+          date: dateStr,
+          sensor: sensor,
+          sensorConfirmed: sensorConfirmed,
+          sessionId: sessionId,
+          status: dbStatus,
+          timeIn: isPresentOrLate ? timeStr : '',
+          timeOut: '',
+          timestamp: timeStr,
+          weight: weightValue,
+          weightUnit: weightUnit
+        },
+        personalInfo: personalInfo
       });
 
       // Update lastSession
@@ -511,20 +570,53 @@ const TakeAttendance: React.FC = () => {
         const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
         const dbStatus = status === 'present' ? 'Present' : 'Late';
 
-        // Update the attendanceInfo in the correct path
-        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance/${sessionId}/attendanceInfo`), {
-          action: 'Confirmed RFID',
-          assignedSensorId: confirmationStudent.assignedSensorId || '',
-          date: dateStr,
-          sensor: confirmationStudent.sensor || '',
-          sensorConfirmed: confirmationStudent.weightAuthenticated || false,
-          sessionId: sessionId,
-          status: dbStatus,
-          timeIn: timeStr,
-          timeOut: '',
-          timestamp: timeStr,
-          weight: confirmationStudent.weight || 0,
-          weightUnit: confirmationStudent.weightUnit || 'kg',
+        // Get student's schedules from RTDB
+        const studentRef = ref(rtdb, `/Students/${confirmationStudent.rfidUid}`);
+        const snapshot = await get(studentRef);
+        const studentData = snapshot.val();
+        const schedules = studentData?.Profile?.schedules || [];
+
+        // Filter schedules that match the current subject and section
+        const relevantSchedules = schedules.filter(
+          (schedule: any) => 
+            schedule.subjectCode === selectedSubject.code && 
+            schedule.section === selectedSection.name
+        );
+
+        // Get weight from existing record or use default
+        const weightValue = confirmationStudent?.weight || 0;
+        const weightUnit = confirmationStudent?.weightUnit || 'kg';
+        const sensorConfirmed = confirmationStudent?.weightAuthenticated || false;
+        const sensor = confirmationStudent?.sensor || 'Weight Sensor';
+
+        // Get personal info
+        const personalInfo = {
+          department: studentData?.Profile?.department || '',
+          email: studentData?.Profile?.email || '',
+          fullName: studentData?.Profile?.fullName || '',
+          idNumber: studentData?.Profile?.idNumber || '',
+          mobileNumber: studentData?.Profile?.mobileNumber || '',
+          role: studentData?.Profile?.role || 'student'
+        };
+
+        // Update the attendance data with the new structure
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance/${sessionId}`), {
+          allSchedules: relevantSchedules,
+          attendanceInfo: {
+            action: 'Confirmed RFID',
+            assignedSensorId: confirmationStudent.assignedSensorId || '',
+            date: dateStr,
+            sensor: sensor,
+            sensorConfirmed: sensorConfirmed,
+            sessionId: sessionId,
+            status: dbStatus,
+            timeIn: timeStr,
+            timeOut: '',
+            timestamp: timeStr,
+            weight: weightValue,
+            weightUnit: weightUnit
+          },
+          personalInfo: personalInfo
         });
 
         // Update lastSession
@@ -602,6 +694,8 @@ const TakeAttendance: React.FC = () => {
         confirmed: student.confirmed,
         rfidAuthenticated: student.rfidAuthenticated,
         weightAuthenticated: student.weightAuthenticated,
+        weight: student.weight || 0,
+        weightUnit: student.weightUnit || 'kg',
         timestamp: Timestamp.fromDate(new Date(student.timestamp || new Date())),
         date: today,
         submittedBy: {
@@ -616,22 +710,36 @@ const TakeAttendance: React.FC = () => {
       );
       await Promise.all(writePromises);
 
-      const resetPromises = students.map((student) =>
-        set(ref(rtdb, `/Students/${student.rfidUid}/Attendance/${student.lastSession}/attendanceInfo`), {
-          action: 'Not Confirmed',
-          assignedSensorId: '',
-          date: '',
-          sensor: '',
-          sensorConfirmed: false,
-          sessionId: '',
-          status: 'Not Confirmed',
-          timeIn: '',
-          timeOut: '',
-          timestamp: '',
-          weight: 0,
-          weightUnit: 'kg',
-        })
-      );
+      // Reset the student's attendance status in RTDB
+      const resetPromises = students.map((student) => {
+        const personalInfo = {
+          department: student.department || '',
+          email: student.email || '',
+          fullName: student.studentName || '',
+          idNumber: student.idNumber || '',
+          mobileNumber: student.mobileNumber || '',
+          role: student.role || 'student'
+        };
+        
+        return set(ref(rtdb, `/Students/${student.rfidUid}/Attendance/${student.lastSession}`), {
+          allSchedules: student.schedules,
+          attendanceInfo: {
+            action: 'Not Confirmed',
+            assignedSensorId: '',
+            date: '',
+            sensor: '',
+            sensorConfirmed: false,
+            sessionId: '',
+            status: 'Not Confirmed',
+            timeIn: '',
+            timeOut: '',
+            timestamp: '',
+            weight: 0,
+            weightUnit: 'kg'
+          },
+          personalInfo: personalInfo
+        });
+      });
       await Promise.all(resetPromises);
 
       toast.success('Attendance submitted successfully!');
