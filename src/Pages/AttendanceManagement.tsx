@@ -23,11 +23,16 @@ import Swal from 'sweetalert2';
 interface Student {
   id: string;
   fullName: string;
-  email: string;
   idNumber: string;
-  major: string;
+  email: string;
+  mobileNumber?: string;
+  department?: string;
+  role?: string;
+  major?: string;
   sections?: string[];
-  attendance?: Record<string, AttendanceRecordRTDB>;
+  attendance?: {
+    [key: string]: AttendanceRecordRTDB;
+  };
 }
 
 interface Section {
@@ -64,22 +69,50 @@ interface AttendanceRecord {
 }
 
 interface AttendanceRecordRTDB {
-  Action: string;
-  Sensor: string;
-  Status: 'Present' | 'Absent' | 'Late';
-  'Time In': string;
-  'Time Out': string;
-  assignedSensorId: number;
-  date: string;
-  department: string;
-  email: string;
-  fullName: string;
-  idNumber: string;
-  mobileNumber: string;
-  role: string;
-  schedules: ScheduleRTDB[];
-  sessionId: string;
-  timestamp: string;
+  allSchedules: {
+    day: string;
+    endTime: string;
+    instructorName: string;
+    roomName: string;
+    section: string;
+    sectionId: string;
+    startTime: string;
+    subject: string;
+    subjectCode: string;
+  }[];
+  attendanceInfo: {
+    action: string;
+    assignedSensorId: number;
+    date: string;
+    sensor: string;
+    sensorConfirmed: boolean;
+    sessionId: string;
+    status: string;
+    timeIn: string;
+    timeOut: string;
+    timestamp: string;
+    weight: number;
+    weightUnit: string;
+  };
+  personalInfo: {
+    department: string;
+    email: string;
+    fullName: string;
+    idNumber: string;
+    mobileNumber: string;
+    role: string;
+  };
+  scheduleMatched: {
+    day: string;
+    endTime: string;
+    instructorName: string;
+    roomName: string;
+    section: string;
+    sectionId: string;
+    startTime: string;
+    subject: string;
+    subjectCode: string;
+  };
 }
 
 interface ScheduleRTDB {
@@ -97,6 +130,10 @@ interface ScheduleRTDB {
 interface AttendanceSummary {
   weekly: { present: number; late: number; absent: number };
   monthly: { present: number; late: number; absent: number };
+  detailedRecords: {
+    weekly: AttendanceRecordRTDB[];
+    monthly: AttendanceRecordRTDB[];
+  };
 }
 
 interface AttendanceStats {
@@ -121,6 +158,7 @@ const AttendanceManagement: React.FC = () => {
   const [sections, setSections] = useState<Section[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>('');
+  const [selectedSubject, setSelectedSubject] = useState<string>('');
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -220,47 +258,28 @@ const AttendanceManagement: React.FC = () => {
   useEffect(() => {
     const fetchStudents = async () => {
       try {
-        // Fetch student profiles from Firestore
         const studentsRef = collection(db, 'students');
-        const studentsSnapshot = await getDocs(studentsRef);
-        const fetchedStudents: Student[] = studentsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          fullName: doc.data().fullName || '',
-          email: doc.data().email || '',
-          idNumber: doc.data().idNumber || '',
-          major: doc.data().major || '',
-          sections: doc.data().sections || [],
-        }));
-
-        // Fetch attendance data from RTDB
-        const studentsWithAttendance: Student[] = [];
-        for (const student of fetchedStudents) {
-          const studentRef = ref(rtdb, `Students/${student.id}/Attendance`);
-          await new Promise<void>((resolve) => {
-            onValue(
-              studentRef,
-              (snapshot) => {
-                const data = snapshot.val();
-                studentsWithAttendance.push({
-                  ...student,
-                  attendance: data || {},
-                });
-                resolve();
-              },
-              (error) => {
-                console.error(`Error fetching attendance for student ${student.id}:`, error);
-                studentsWithAttendance.push({
-                  ...student,
-                  attendance: {},
-                });
-                resolve();
-              },
-              { onlyOnce: true }
-            );
-          });
+        const q = query(studentsRef, where('role', '==', 'student'));
+        const querySnapshot = await getDocs(q);
+        
+        const fetchedStudents: Student[] = [];
+        for (const doc of querySnapshot.docs) {
+          const studentData = doc.data();
+          const student: Student = {
+            id: doc.id,
+            fullName: studentData.fullName || '',
+            idNumber: studentData.idNumber || '',
+            email: studentData.email || '',
+            mobileNumber: studentData.mobileNumber,
+            department: studentData.department,
+            role: studentData.role,
+            major: studentData.major,
+            sections: studentData.sections || [],
+            attendance: {}
+          };
+          fetchedStudents.push(student);
         }
-
-        setStudents(studentsWithAttendance);
+        setStudents(fetchedStudents);
       } catch (error) {
         console.error('Error fetching students:', error);
         toast.error('Failed to load students');
@@ -354,17 +373,17 @@ const AttendanceManagement: React.FC = () => {
 
   // Check if class has ended
   const hasClassEnded = (record: AttendanceRecordRTDB): boolean => {
-    if (!record.date) return false;
+    if (!record.attendanceInfo.date) return false;
 
-    const recordDate = new Date(record.date.replace(/_/g, '-'));
+    const recordDate = new Date(record.attendanceInfo.date.replace(/_/g, '-'));
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const recordDay = dayNames[recordDate.getDay()];
 
     const schedule = schedules.find(
       (sched) =>
-        sched.sectionId === record.schedules?.[0]?.sectionId &&
+        sched.sectionId === record.scheduleMatched.sectionId &&
         sched.day === recordDay &&
-        sched.subjectCode === record.schedules?.[0]?.subjectCode
+        sched.subjectCode === record.scheduleMatched.subjectCode
     );
 
     if (!schedule || !schedule.endTime) return false;
@@ -385,61 +404,46 @@ const AttendanceManagement: React.FC = () => {
     return new Date(year, month - 1, day, hour, minute, second);
   };
 
-  // Calculate attendance summaries from RTDB
+  // Update the getAttendanceSummary function to better handle the RTDB structure
   const getAttendanceSummary = (student: Student): AttendanceSummary => {
     const now = new Date();
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
-    weekStart.setHours(0, 0, 0, 0);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
 
-    const selectedSectionObj = sections.find((s) => s.id === selectedSection);
-    const selectedSubject = subjects.find((s) => s.id === selectedSectionObj?.subjectId);
-    if (!selectedSectionObj || !selectedSubject) {
-      return {
-        weekly: { present: 0, late: 0, absent: 0 },
-        monthly: { present: 0, late: 0, absent: 0 },
-      };
-    }
+    const weeklyRecords: AttendanceRecordRTDB[] = [];
+    const monthlyRecords: AttendanceRecordRTDB[] = [];
 
-    const studentRecords = Object.values(student.attendance || {})
-      .filter((record) => {
-        // Check if the record matches the instructor's section and subject
-        const matchesSection = record.schedules?.some(
-          (sched) => sched.sectionId === selectedSectionObj.id
-        );
-        const matchesSubject = record.schedules?.some(
-          (sched) => sched.subjectCode === selectedSubject.code
-        );
-
-        // Check if the student is enrolled in the section
-        const isEnrolledInSection =
-          student.sections?.includes(selectedSectionObj.id) ||
-          selectedSectionObj.students.includes(student.fullName);
-
-        return matchesSection && matchesSubject && isEnrolledInSection && hasClassEnded(record);
-      });
-
-    const weeklyRecords = studentRecords.filter((record) => {
-      const recordDate = parseRTDBTimestamp(record.timestamp);
-      return recordDate >= weekStart;
+    Object.entries(student.attendance || {}).forEach(([sessionId, record]) => {
+      const recordDate = new Date(record.attendanceInfo.date.replace(/_/g, '-'));
+      
+      if (recordDate >= oneWeekAgo) {
+        weeklyRecords.push(record);
+      }
+      if (recordDate >= oneMonthAgo) {
+        monthlyRecords.push(record);
+      }
     });
 
-    const monthlyRecords = studentRecords.filter((record) => {
-      const recordDate = parseRTDBTimestamp(record.timestamp);
-      return recordDate >= monthStart;
-    });
+    const getStatusCount = (records: AttendanceRecordRTDB[]) => {
+      return records.reduce(
+        (acc, record) => {
+          acc[record.attendanceInfo.status.toLowerCase() as keyof typeof acc]++;
+          return acc;
+        },
+        { present: 0, late: 0, absent: 0 }
+      );
+    };
 
     return {
-      weekly: {
-        present: weeklyRecords.filter((r) => r.Status.toLowerCase() === 'present').length,
-        late: weeklyRecords.filter((r) => r.Status.toLowerCase() === 'late').length,
-        absent: weeklyRecords.filter((r) => r.Status.toLowerCase() === 'absent').length,
-      },
-      monthly: {
-        present: monthlyRecords.filter((r) => r.Status.toLowerCase() === 'present').length,
-        late: monthlyRecords.filter((r) => r.Status.toLowerCase() === 'late').length,
-        absent: monthlyRecords.filter((r) => r.Status.toLowerCase() === 'absent').length,
+      weekly: getStatusCount(weeklyRecords),
+      monthly: getStatusCount(monthlyRecords),
+      detailedRecords: {
+        weekly: weeklyRecords.sort((a, b) => 
+          new Date(b.attendanceInfo.timestamp).getTime() - new Date(a.attendanceInfo.timestamp).getTime()
+        ),
+        monthly: monthlyRecords.sort((a, b) => 
+          new Date(b.attendanceInfo.timestamp).getTime() - new Date(a.attendanceInfo.timestamp).getTime()
+        ),
       },
     };
   };
@@ -575,6 +579,26 @@ const AttendanceManagement: React.FC = () => {
     window.URL.revokeObjectURL(url);
   };
 
+  // Add this new function to format dates for display
+  const formatDate = (timestamp: string): string => {
+    const date = parseRTDBTimestamp(timestamp);
+    return date.toLocaleDateString('en-US', { 
+      weekday: 'short', 
+      month: 'short', 
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  // Add this new function to format time for display
+  const formatTime = (timestamp: string): string => {
+    const date = parseRTDBTimestamp(timestamp);
+    return date.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit'
+    });
+  };
+
   if (loading && !sections.length) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -627,12 +651,8 @@ const AttendanceManagement: React.FC = () => {
 
           {selectedSection && (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                {[
-                  { label: 'Total Students', value: stats.totalStudents, icon: ChartBarIcon, color: 'text-indigo-600' },
-                  { label: 'Present', value: stats.present, icon: CheckCircleIcon, color: 'text-green-600' },
-                  { label: 'Late', value: stats.late, icon: ClockIcon, color: 'text-yellow-600' },
-                  { label: 'Absent', value: stats.absent, icon: XCircleIcon, color: 'text-red-600' },
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[                
                   {
                     label: 'Attendance Rate',
                     value: `${stats.attendanceRate.toFixed(1)}%`,
@@ -675,80 +695,188 @@ const AttendanceManagement: React.FC = () => {
               <div className="bg-white rounded-xl shadow-sm p-6">
                 <h2 className="text-lg font-semibold text-gray-800 mb-4">Student Attendance Summaries</h2>
                 {filteredStudents.length === 0 ? (
-                  <p className="text-center py-8 text-gray-500">No students found</p>
+                  <p className="text-center py-8 text-gray-500">No students found for this section</p>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 gap-6">
                     {filteredStudents.map((student) => {
                       const summary = getAttendanceSummary(student);
-                      const latestRecord = attendanceRecords
-                        .filter((r) => r.studentName === student.fullName)
-                        .sort((a, b) => b.timestamp.seconds - a.timestamp.seconds)[0];
-                      const section = sections.find((s) => s.id === selectedSection);
-                      const subject = subjects.find((s) => s.id === section?.subjectId);
-
-                      // Hide if no valid records
-                      if (
-                        summary.weekly.present + summary.weekly.late + summary.weekly.absent === 0 &&
-                        summary.monthly.present + summary.monthly.late + summary.monthly.absent === 0
-                      ) {
-                        return null;
-                      }
-
                       return (
-                        <motion.div
-                          key={student.id}
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="border rounded-lg p-4 hover:shadow-md"
-                        >
-                          <div className="space-y-2">
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <h3 className="font-medium text-gray-900">{student.fullName}</h3>
-                                <p className="text-sm text-gray-500">{student.idNumber}</p>
+                        <div key={student.id} className="bg-white rounded-lg shadow-md p-6 mb-6">
+                          <div className="flex flex-col md:flex-row justify-between items-start gap-6 mb-6">
+                            <div className="w-full md:w-auto">
+                              <div className="bg-gradient-to-r from-indigo-50 to-blue-50 rounded-xl p-6 shadow-sm">
+                                <div className="flex items-center gap-4 mb-4">
+                                  <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center">
+                                    <span className="text-2xl font-bold text-indigo-600">
+                                      {student.fullName.split(' ').map(n => n[0]).join('')}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <h3 className="text-2xl font-bold text-gray-800">{student.fullName}</h3>
+                                    <p className="text-indigo-600 font-medium">ID: {student.idNumber}</p>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="flex items-center gap-2">
+                                    <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                    </svg>
+                                    <p className="text-gray-600">{student.email}</p>
+                                  </div>
+                                  {student.mobileNumber && (
+                                    <div className="flex items-center gap-2">
+                                      <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                                      </svg>
+                                      <p className="text-gray-600">{student.mobileNumber}</p>
+                                    </div>
+                                  )}
+                                  {student.department && (
+                                    <div className="flex items-center gap-2">
+                                      <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                                      </svg>
+                                      <p className="text-gray-600">{student.department}</p>
+                                    </div>
+                                  )}
+                                  {student.role && (
+                                    <div className="flex items-center gap-2">
+                                      <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                      </svg>
+                                      <p className="text-gray-600 capitalize">{student.role}</p>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                              {latestRecord && (
-                                <span
-                                  className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                    latestRecord.status === 'present'
-                                      ? 'bg-green-100 text-green-800'
-                                      : latestRecord.status === 'late'
-                                      ? 'bg-yellow-100 text-yellow-800'
-                                      : 'bg-red-100 text-red-800'
-                                  }`}
-                                >
-                                  {latestRecord.status.charAt(0).toUpperCase() + latestRecord.status.slice(1)}
-                                </span>
-                              )}
                             </div>
-                            <div className="text-sm text-gray-600">
-                              <p>Subject: {subject?.name || 'N/A'}</p>
-                              <p>Room: {section?.room || 'N/A'}</p>
-                              <p>Weekly: P:{summary.weekly.present} L:{summary.weekly.late} A:{summary.weekly.absent}</p>
-                              <p>Monthly: P:{summary.monthly.present} L:{summary.monthly.late} A:{summary.monthly.absent}</p>
-                            </div>
-                            {latestRecord && (
-                              <div className="flex gap-2 mt-2">
-                                <button
-                                  onClick={() => handleEditAttendance(latestRecord.id, latestRecord.status)}
-                                  className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                                >
-                                  <PencilIcon className="w-4 h-4" />
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteAttendance(latestRecord.id)}
-                                  className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700"
-                                >
-                                  <TrashIcon className="w-4 h-4" />
-                                  Delete
-                                </button>
+                            <div className="text-right">
+                              <div className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                                {summary.weekly.present + summary.weekly.late + summary.weekly.absent} times this week
                               </div>
-                            )}
+                              <div className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800 ml-2">
+                                {summary.monthly.present + summary.monthly.late + summary.monthly.absent} times this month
+                              </div>
+                            </div>
                           </div>
-                        </motion.div>
+
+                          {/* Weekly Attendance Summary */}
+                          <div className="mb-4">
+                            <h4 className="text-lg font-medium text-gray-700 mb-2">Weekly Attendance</h4>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-green-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Present</p>
+                                <p className="text-xl font-semibold text-green-600">{summary.weekly.present}</p>
+                              </div>
+                              <div className="bg-yellow-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Late</p>
+                                <p className="text-xl font-semibold text-yellow-600">{summary.weekly.late}</p>
+                              </div>
+                              <div className="bg-red-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Absent</p>
+                                <p className="text-xl font-semibold text-red-600">{summary.weekly.absent}</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Monthly Attendance Summary */}
+                          <div className="mb-4">
+                            <h4 className="text-lg font-medium text-gray-700 mb-2">Monthly Attendance</h4>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-green-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Present</p>
+                                <p className="text-xl font-semibold text-green-600">{summary.monthly.present}</p>
+                              </div>
+                              <div className="bg-yellow-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Late</p>
+                                <p className="text-xl font-semibold text-yellow-600">{summary.monthly.late}</p>
+                              </div>
+                              <div className="bg-red-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-600">Absent</p>
+                                <p className="text-xl font-semibold text-red-600">{summary.monthly.absent}</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Detailed Attendance Records */}
+                          <div>
+                            <h4 className="text-lg font-medium text-gray-700 mb-4">Recent Attendance Records</h4>
+                            <div className="overflow-x-auto rounded-lg border border-gray-200">
+                              <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time In</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Out</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sensor</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                  {Object.entries(student.attendance || {}).length > 0 ? (
+                                    Object.entries(student.attendance || {})
+                                      .sort(([, a], [, b]) => {
+                                        const dateA = new Date(a.attendanceInfo.date.replace(/_/g, '-'));
+                                        const dateB = new Date(b.attendanceInfo.date.replace(/_/g, '-'));
+                                        return dateB.getTime() - dateA.getTime();
+                                      })
+                                      .map(([sessionId, record]) => {
+                                        const attendanceInfo = record.attendanceInfo;
+                                        const scheduleMatched = record.scheduleMatched;
+                                        return (
+                                          <tr key={sessionId} className="hover:bg-gray-50 transition-colors duration-150">
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {formatDate(attendanceInfo.date)}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {formatTime(attendanceInfo.timestamp)}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                              <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                                attendanceInfo.status.toLowerCase() === 'present' 
+                                                  ? 'bg-green-100 text-green-800' 
+                                                  : attendanceInfo.status.toLowerCase() === 'late'
+                                                  ? 'bg-yellow-100 text-yellow-800'
+                                                  : 'bg-red-100 text-red-800'
+                                              }`}>
+                                                {attendanceInfo.status}
+                                              </span>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {scheduleMatched.subjectCode}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {scheduleMatched.roomName}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {formatTime(attendanceInfo.timeIn)}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {formatTime(attendanceInfo.timeOut)}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                              {attendanceInfo.sensor}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })
+                                  ) : (
+                                    <tr>
+                                      <td colSpan={8} className="px-4 py-3 text-center text-sm text-gray-500">
+                                        No attendance records found
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
                       );
-                    }).filter((card): card is JSX.Element => card !== null)}
+                    })}
                   </div>
                 )}
               </div>

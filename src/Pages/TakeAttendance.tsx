@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
-import { ref, onValue, off, set, get } from 'firebase/database';
+import { ref, onValue, off, set } from 'firebase/database';
 import { db, rtdb } from '../firebase';
 import { useAuth } from '../Pages/AuthContext';
 import {
@@ -10,9 +10,6 @@ import {
   ClockIcon,
   ArrowDownTrayIcon,
   CalendarIcon,
-  MagnifyingGlassIcon,
-  ArrowUpIcon,
-  ArrowDownIcon,
 } from '@heroicons/react/24/solid';
 import NavBar from '../components/NavBar';
 import { toast } from 'react-toastify';
@@ -227,9 +224,10 @@ const TakeAttendance: React.FC = () => {
     fetchSubjects();
   }, [currentUser]);
 
-  // Fetch students from RTDB
+  // Fetch students from RTDB based on JSON structure
   useEffect(() => {
     if (!selectedSection || !selectedSubject || !instructorDetails.fullName) {
+      console.log('Missing required data:', { selectedSection, selectedSubject, instructorFullName: instructorDetails.fullName });
       setStudents([]);
       setClassStartTime(null);
       setLoading(false);
@@ -244,39 +242,64 @@ const TakeAttendance: React.FC = () => {
         try {
           const studentsData = snapshot.val();
           if (!studentsData) {
+            console.warn('No students data found in RTDB');
             setStudents([]);
             setClassStartTime(new Date(selectedSection.createdAt));
             setLoading(false);
             return;
           }
 
+          // Create a pattern to match the session key
+          const sessionKeyPattern = `${selectedSubject.code}_${selectedSection.name}`;
+          console.log('Looking for session key pattern:', sessionKeyPattern);
+
           const fetchedStudents: Student[] = Object.entries(studentsData)
             .map(([rfidUid, studentData]: [string, any]) => {
-              // Skip if student data is invalid
-              if (!studentData.personalInfo) return null;
+              console.log(`Processing student: ${rfidUid}`);
 
-              const personalInfo = studentData.personalInfo || {};
-              const subject = studentData.subject || {};
-              const attendanceInfo = studentData.attendanceInfo || {};
+              // Check if student has Attendance data
+              if (!studentData.Attendance) {
+                console.warn(`No Attendance data for student ${rfidUid}`);
+                return null;
+              }
+
+              // Find the attendance record for the specific session
+              const attendanceKey = Object.keys(studentData.Attendance).find((key) =>
+                key.includes(sessionKeyPattern)
+              );
               
-              // Match subjectCode, section, and instructor if schedules exist
-              let hasMatchingSchedule = false;
-              if (studentData.schedules) {
-                hasMatchingSchedule = studentData.schedules.some(
-                  (schedule: any) =>
-                    schedule.subjectCode === selectedSubject.code &&
-                    schedule.section === selectedSection.name &&
-                    schedule.instructorName === instructorDetails.fullName
+              if (!attendanceKey) {
+                console.warn(`No attendance key matching ${sessionKeyPattern} for ${rfidUid}`);
+                return null;
+              }
+
+              // Get the session data
+              const sessionData = studentData.Attendance[attendanceKey];
+              
+              // Extract data from the session
+              const attendanceInfo = sessionData?.attendanceInfo || {};
+              const personalInfo = sessionData?.personalInfo || studentData.personalInfo || {};
+              const schedules = sessionData?.allSchedules || [];
+              const scheduleMatched = sessionData?.scheduleMatched || null;
+
+              // Verify the schedule matches the subject, section, and instructor
+              const hasMatchingSchedule = schedules.some(
+                (schedule: any) =>
+                  schedule.subjectCode === selectedSubject.code &&
+                  schedule.section === selectedSection.name &&
+                  schedule.instructorName === instructorDetails.fullName
+              );
+
+              if (!hasMatchingSchedule && !scheduleMatched) {
+                console.warn(
+                  `No schedule match for ${rfidUid}. Expected: subjectCode=${selectedSubject.code}, section=${selectedSection.name}, instructor=${instructorDetails.fullName}`
                 );
+                return null;
               }
 
-              // Also check if the subject code matches directly
-              if (subject.subjectCode === selectedSubject.code) {
-                hasMatchingSchedule = true;
-              }
+              console.log(`Student ${rfidUid} matched criteria`);
 
-              if (!hasMatchingSchedule) return null;
-
+              // Create the student object with all available data
               return {
                 rfidUid,
                 idNumber: personalInfo.idNumber || '',
@@ -306,14 +329,31 @@ const TakeAttendance: React.FC = () => {
                 weightAuthenticated: attendanceInfo.sensorConfirmed || false,
                 confirmed: attendanceInfo.status === 'Present' || false,
                 assignedSensorId: attendanceInfo.assignedSensorId?.toString() || '',
-                subject: subject.subject || '',
-                subjectCode: subject.subjectCode || '',
-                lastSession: studentData.lastSession || '',
-                schedules: studentData.schedules || [],
+                subject: selectedSubject.name,
+                subjectCode: selectedSubject.code,
+                lastSession: attendanceKey || '',
+                schedules: schedules.map((sched: any) => ({
+                  day: sched.day || '',
+                  endTime: sched.endTime || '',
+                  instructorName: sched.instructorName || '',
+                  roomName: sched.roomName || '',
+                  section: sched.section || '',
+                  sectionId: sched.sectionId || '',
+                  startTime: sched.startTime || '',
+                  subject: sched.subject || '',
+                  subjectCode: sched.subjectCode || '',
+                })),
               };
             })
-            .filter((student): student is Student => student !== null);
+            .filter((student): student is Student => {
+              if (!student) {
+                console.warn('Filtered out null student');
+                return false;
+              }
+              return true;
+            });
 
+          console.log('Fetched students:', JSON.stringify(fetchedStudents, null, 2));
           setStudents(fetchedStudents);
           setClassStartTime(new Date(selectedSection.createdAt));
         } catch (error) {
@@ -344,6 +384,7 @@ const TakeAttendance: React.FC = () => {
       (snapshot) => {
         const instructorsData = snapshot.val();
         if (!instructorsData) {
+          console.warn('No instructors data found');
           setCurrentSchedule(null);
           setRoomId('');
           return;
@@ -353,42 +394,42 @@ const TakeAttendance: React.FC = () => {
           ([, instr]: [string, any]) => instr.Profile?.email === currentUser.email
         )?.[1] as any;
 
-        if (!instructor?.schedule) {
+        if (!instructor?.ClassStatus?.schedule) {
+          console.warn('No ClassStatus or schedule found for instructor');
           setCurrentSchedule(null);
           setRoomId('');
           return;
         }
 
-        const schedules = Array.isArray(instructor.schedule)
-          ? instructor.schedule
-          : Object.values(instructor.schedule);
+        const schedule = instructor.ClassStatus.schedule;
         const now = new Date();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const currentDay = days[now.getDay()];
         const currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-        const matchingSchedule = schedules.find((schedule: any) => {
-          return (
-            schedule.day === currentDay &&
-            schedule.startTime <= currentTime &&
-            schedule.endTime >= currentTime &&
-            schedule.subjectCode === selectedSubject.code &&
-            schedule.section === selectedSection.name
-          );
-        });
-
-        if (matchingSchedule) {
+        if (
+          schedule.day === currentDay &&
+          schedule.startTime <= currentTime &&
+          schedule.endTime >= currentTime &&
+          schedule.subjectCode === selectedSubject.code &&
+          schedule.section === selectedSection.name
+        ) {
+          console.log('Schedule match found:', schedule);
           setCurrentSchedule({
             id: `${selectedSubject.code}_${selectedSection.name}`,
-            day: matchingSchedule.day,
-            startTime: matchingSchedule.startTime,
-            endTime: matchingSchedule.endTime,
-            room: matchingSchedule.roomName || 'Unknown',
+            day: schedule.day,
+            startTime: schedule.startTime,
+            endTime: schedule.endTime,
+            room: schedule.roomName?.name || 'Unknown',
             section: selectedSection.name,
             subject: selectedSubject.name,
           });
-          setRoomId(matchingSchedule.roomName || '');
+          setRoomId(schedule.roomName?.name || '');
         } else {
+          console.warn(
+            `No schedule match. Current: day=${currentDay}, time=${currentTime}, subjectCode=${selectedSubject.code}, section=${selectedSection.name}`,
+            `Schedule: ${JSON.stringify(schedule)}`
+          );
           setCurrentSchedule(null);
           setRoomId('');
         }
@@ -412,20 +453,21 @@ const TakeAttendance: React.FC = () => {
     try {
       const now = new Date();
       const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_');
-      const timeStr = dateStr + '_' + 
-        now.getHours().toString().padStart(2, '0') + 
-        now.getMinutes().toString().padStart(2, '0') + 
+      const timeStr =
+        dateStr +
+        '_' +
+        now.getHours().toString().padStart(2, '0') +
+        now.getMinutes().toString().padStart(2, '0') +
         now.getSeconds().toString().padStart(2, '0');
-      
-      const student = students.find(s => s.rfidUid === rfidUid);
-      
-      // Determine status for RTDB
+
+      const student = students.find((s) => s.rfidUid === rfidUid);
+
       const dbStatus = status === 'absent' ? 'Absent' : status === 'late' ? 'Late' : 'Present';
       const isPresentOrLate = status === 'present' || status === 'late';
       const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
 
-      // Update RTDB with new structure
-      await set(ref(rtdb, `/Students/${rfidUid}/attendanceInfo`), {
+      // Update the attendanceInfo in the correct path
+      await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}/attendanceInfo`), {
         action: isPresentOrLate ? 'Confirmed RFID' : 'Not Confirmed',
         assignedSensorId: student?.assignedSensorId || '',
         date: dateStr,
@@ -437,16 +479,10 @@ const TakeAttendance: React.FC = () => {
         timeOut: '',
         timestamp: timeStr,
         weight: student?.weight || 0,
-        weightUnit: student?.weightUnit || 'kg'
+        weightUnit: student?.weightUnit || 'kg',
       });
-      
-      // Update subject info
-      await set(ref(rtdb, `/Students/${rfidUid}/subject`), {
-        subject: selectedSubject.name,
-        subjectCode: selectedSubject.code
-      });
-      
-      // Update last session
+
+      // Update lastSession
       await set(ref(rtdb, `/Students/${rfidUid}/lastSession`), sessionId);
 
       toast.success(`Marked ${status} for ${student?.studentName} at ${now.toLocaleTimeString()}`);
@@ -465,16 +501,18 @@ const TakeAttendance: React.FC = () => {
         const status = tapTimeMs <= startTimeMs + gracePeriod ? 'present' : 'late';
         const now = new Date();
         const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_');
-        const timeStr = dateStr + '_' + 
-          now.getHours().toString().padStart(2, '0') + 
-          now.getMinutes().toString().padStart(2, '0') + 
+        const timeStr =
+          dateStr +
+          '_' +
+          now.getHours().toString().padStart(2, '0') +
+          now.getMinutes().toString().padStart(2, '0') +
           now.getSeconds().toString().padStart(2, '0');
-        
+
         const sessionId = `${dateStr}_${selectedSubject.code}_${selectedSection.name}_${roomId || 'Unknown'}`;
         const dbStatus = status === 'present' ? 'Present' : 'Late';
 
-        // Update RTDB with new structure
-        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/attendanceInfo`), {
+        // Update the attendanceInfo in the correct path
+        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/Attendance/${sessionId}/attendanceInfo`), {
           action: 'Confirmed RFID',
           assignedSensorId: confirmationStudent.assignedSensorId || '',
           date: dateStr,
@@ -486,16 +524,10 @@ const TakeAttendance: React.FC = () => {
           timeOut: '',
           timestamp: timeStr,
           weight: confirmationStudent.weight || 0,
-          weightUnit: confirmationStudent.weightUnit || 'kg'
+          weightUnit: confirmationStudent.weightUnit || 'kg',
         });
-        
-        // Update subject info
-        await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/subject`), {
-          subject: selectedSubject.name,
-          subjectCode: selectedSubject.code
-        });
-        
-        // Update last session
+
+        // Update lastSession
         await set(ref(rtdb, `/Students/${confirmationStudent.rfidUid}/lastSession`), sessionId);
 
         toast.success(`Confirmed ${status} for ${confirmationStudent.studentName}`);
@@ -584,9 +616,8 @@ const TakeAttendance: React.FC = () => {
       );
       await Promise.all(writePromises);
 
-      // Reset RTDB attendance statuses after submission
       const resetPromises = students.map((student) =>
-        set(ref(rtdb, `/Students/${student.rfidUid}/attendanceInfo`), {
+        set(ref(rtdb, `/Students/${student.rfidUid}/Attendance/${student.lastSession}/attendanceInfo`), {
           action: 'Not Confirmed',
           assignedSensorId: '',
           date: '',
@@ -598,7 +629,7 @@ const TakeAttendance: React.FC = () => {
           timeOut: '',
           timestamp: '',
           weight: 0,
-          weightUnit: 'kg'
+          weightUnit: 'kg',
         })
       );
       await Promise.all(resetPromises);
@@ -649,9 +680,9 @@ const TakeAttendance: React.FC = () => {
           : b.studentName.localeCompare(a.studentName);
       }
       if (sortBy === 'status') {
-        const statusOrder = { present: 1, late: 2, absent: 3, pending: 4 };
-        const statusA = statusOrder[a.attendanceStatus as keyof typeof statusOrder] || 5;
-        const statusB = statusOrder[b.attendanceStatus as keyof typeof statusOrder] || 5;
+        const statusOrder = { present: 1, late: 2, absent: 3 };
+        const statusA = statusOrder[a.attendanceStatus as keyof typeof statusOrder] || 4;
+        const statusB = statusOrder[b.attendanceStatus as keyof typeof statusOrder] || 4;
         return sortOrder === 'asc' ? statusA - statusB : statusB - statusA;
       }
       if (sortBy === 'time') {
@@ -998,8 +1029,16 @@ const TakeAttendance: React.FC = () => {
                 <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 View Records
               </Link>
-              </div>
+              <button
+                onClick={submitAttendance}
+                className="bg-indigo-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 text-xs sm:text-sm"
+                disabled={!selectedSection || !selectedSubject || !currentSchedule}
+              >
+                <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                Submit Attendance
+              </button>
             </div>
+          </div>
         </motion.div>
       </main>
 
