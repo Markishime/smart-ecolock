@@ -1,3 +1,5 @@
+
+
 #include <Wire.h>
 #include <LiquidCrystal_I2C_Hangul.h>
 #include <WiFi.h>
@@ -30,9 +32,16 @@ struct ScheduleInfo {
   String section;
 };
 
+// Global variable declarations
+ScheduleInfo currentSchedule = {false, "", "", "", "", "", "", ""}; // Current active schedule
+ScheduleInfo tapOutSchedule = {false, "", "", "", "", "", "", ""}; // Schedule saved for tap-out phase
+bool pzemLoggedForSession = false; // Flag to track if PZEM data was logged for the current session
+
 // Add missing variable declarations
 bool uidDetailsFetched = false;
 std::map<String, bool> uidDetailsPrinted;
+// Add I2C_ERROR_COUNTER variable declaration
+int I2C_ERROR_COUNTER = 0;
 
 // Forward declarations for functions
 void initSDCard();
@@ -49,13 +58,13 @@ void accessFeedback();
 void deniedFeedback();
 void storeLogToSD(String entry);
 bool syncOfflineLogs();
-void watchdogCheck();
+void watchdogCheck(); // Add the feedWatchdog function declaration here
+void feedWatchdog(); // Added missing function declaration
 String getFormattedTime();
 bool checkResetButton();
 void showNeutral();
 void logInstructor(String uid, String timestamp, String action);
 void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensorIndex, String weightConfirmed, String timeOut);
-void logStudentToRTDB(String rfidUid, String timestamp, int sensorIndex, String status, String timeOut = "");
 void logPZEMData(String uid, float voltage, float current, float power, float energy, float frequency, float pf);
 void logUnregisteredUID(String uid, String timestamp);
 void logAdminAccess(String uid, String timestamp);
@@ -69,6 +78,7 @@ void displayMessage(String line1, String line2, unsigned long duration);
 void streamCallback(FirebaseStream data);
 void streamTimeoutCallback(bool timeout);
 void resetWeightSensors();
+void setupWeightSensors(); // Added missing function declaration
 void enterPowerSavingMode();
 void exitPowerSavingMode();
 void recoverI2C();
@@ -82,6 +92,14 @@ bool isAdminUID(String uid);
 std::map<String, String> fetchUserDetails(String uid);
 ScheduleInfo getInstructorScheduleForDay(String uid, String dateStr);
 void logSuperAdmin(String uid, String timestamp);
+void handleFirebaseSSLError();
+void checkAdminDoorAutoLock();
+bool syncSchedulesToSD(); // Added missing function declaration
+bool syncOfflineLogsToRTDB(); // Added missing function declaration
+ScheduleInfo checkSchedule(String uid, String day, int hour, int minute); // Added missing function declaration
+String getDayFromTimestamp(String timestamp); // Added missing function declaration
+bool isTimeInRange(String currentTime, String startTime, String endTime); // Added missing function declaration
+void smoothTransitionToReady(); // Added missing function declaration
 
 // Global Objects and Pin Definitions
 LiquidCrystal_I2C_Hangul lcd(0x27, 16, 2);
@@ -191,10 +209,16 @@ unsigned long studentVerificationStartTime = 0;
 bool adminAccessActive = false;
 String lastAdminUID = "";
 bool tamperActive = false;
-bool tamperAlertTriggered = false;
-String tamperStartTime = "";
-String currentTamperAlertId = "";  // Global variable to track current tamper alert ID
+bool tamperAlertTriggered = false;  // Add this missing variable
+bool tamperMessageDisplayed = false;  // Add this missing variable
+bool buzzerActive = false;  // Add this missing variable for buzzer pulsing
+unsigned long lastBuzzerToggle = 0;  // Add this missing variable for buzzer pulsing
 unsigned long lastActivityTime = 0;
+// Add admin door timeout tracking
+#define ADMIN_DOOR_TIMEOUT 60000  // 60 seconds timeout for admin door
+unsigned long adminDoorOpenTime = 0;  // Tracks when admin door was opened
+bool adminDoorLockPending = false;    // Tracks if auto door lock is pending
+unsigned long adminDoorLockTime = 0;  // Tracks when door should be locked
 unsigned long lastReadyPrint = 0;
 bool readyMessageShown = false;
 unsigned long lastSleepMessageTime = 0;
@@ -238,7 +262,6 @@ float lastFrequency = 0.0;
 float lastPowerFactor = 0.0;
 bool tapOutPhase = false;
 unsigned long tapOutStartTime = 0;
-ScheduleInfo tapOutSchedule = {false, "", "", "", "", "", "", ""}; // Schedule saved for tap-out phase
 int presentCount = 0;
 String currentSessionId = "";
 unsigned long weightConfirmationStartTime = 0;
@@ -268,13 +291,13 @@ int sessionEndTimeInMins = -1;
 // Relay state management variables
 bool relayTransitionInProgress = false;
 unsigned long relayTransitionStartTime = 0;
-const unsigned long RELAY_TRANSITION_TIMEOUT = 500; // 500ms timeout for transitions
+const unsigned long RELAY_TRANSITION_TIMEOUT = 1000; // 1000ms timeout for transitions (increased from 500ms)
 unsigned long scheduledDeactivationTime = 0;
 bool relayOperationPending = false;
 bool pendingRelayActivation = false;
 bool relayPendingDeactivation = false;
 unsigned long relayDeactivationTime = 0;
-const unsigned long RELAY_SAFE_DELAY = 250; // 250ms safety delay
+const unsigned long RELAY_SAFE_DELAY = 500; // 500ms safety delay (increased from 250ms)
 
 #define DEBUG_MODE false  // Set to true for debug output, false for production
 
@@ -288,6 +311,38 @@ unsigned long lastStudentTapTime = 0;
 
 // First, define sensor types at the top with other global variables
 const String sensorTypes[NUM_SENSORS] = {"Chair", "Seat", "Floor"};  // Define sensor types
+
+// Add the smoothTransitionToReady function declaration at the top of the file with other function declarations
+void smoothTransitionToReady();
+
+// Global variables for Firebase and SSL recovery
+unsigned long sdModeRetryTime = 0; // Used for auto recovery from SSL errors
+
+// Add missing tamper detection variables
+bool tamperDetected = false;
+String tamperStartTime = "";
+String currentTamperAlertId = "";
+
+// Define constants for weight sensors
+// These are now defined in a central location for easy adjustment
+// Note these are in kg
+#define WEIGHT_NOISE_THRESHOLD 5.0    // Consider anything below this as zero (noise)
+#define WEIGHT_MINIMUM_THRESHOLD 30.0 // Minimum weight to consider as a valid person
+#define WEIGHT_MAXIMUM_THRESHOLD 150.0 // Maximum reasonable weight (to filter out errors)
+#define WEIGHT_STABILITY_THRESHOLD 0.5 // Maximum variation for "stable" weight
+#define WEIGHT_STABILITY_READINGS 5   // Number of stable readings required
+#define WEIGHT_STABILITY_TIME 3000    // Min time (ms) for weight to be considered stable
+
+// For tracking the stability of each sensor
+bool sensorInUse[NUM_SENSORS] = {false};
+int readingCounter[NUM_SENSORS] = {0};
+unsigned long stableReadingStartTime[NUM_SENSORS] = {0};
+float lastReadings[NUM_SENSORS] = {0};
+float weightHistory[NUM_SENSORS][WEIGHT_STABILITY_READINGS] = {{0}};
+
+// Add these variables to track finalized weight readings
+std::map<String, bool> uidWeightFinalized; // Track UIDs that have already had their weight finalized
+std::map<int, String> sensorAssignedUid; // Track which UID is assigned to which sensor
 
 String getFormattedTime() {
   if (sdMode) {
@@ -392,6 +447,29 @@ void deniedFeedback() {
   lastReadyPrint = millis();
 }
 
+// Function to check and auto-lock admin door after timeout
+void checkAdminDoorAutoLock() {
+  // Check if the admin door is open and needs to be auto-locked due to timeout
+  if (adminDoorOpenTime > 0 && relayActive && (millis() - adminDoorOpenTime > ADMIN_DOOR_TIMEOUT)) {
+    Serial.println("Admin door auto-lock timeout reached");
+    
+    // Deactivate the relay
+    digitalWrite(RELAY1, HIGH);
+    
+    // Reset the admin door state
+    relayActive = false;
+    adminDoorOpenTime = 0;
+    
+    // Provide feedback
+    deniedFeedback();
+    displayMessage("Admin Door", "Auto-Locked", 2000);
+    logSystemEvent("Admin Door Auto-Locked due to timeout");
+    
+    // Return to ready state
+    smoothTransitionToReady();
+  }
+}
+
 void connectWiFi() {
   Serial.print("Connecting to WiFi");
   lcd.clear();
@@ -459,8 +537,10 @@ void initFirebase() {
   config.database_url = DATABASE_URL;
   
   // Increase timeout to handle slow networks
-  config.timeout.serverResponse = 15000; // 15 seconds for server response (covers both read and write)
-  config.timeout.wifiReconnect = 10000;  // 10 seconds for WiFi reconnect
+  config.timeout.serverResponse = 20000;  // 20 seconds for server response
+  config.timeout.wifiReconnect = 15000;   // 15 seconds for WiFi reconnect
+  config.timeout.socketConnection = 10000; // 10 seconds for socket connection
+  config.timeout.sslHandshake = 8000;     // 8 seconds for SSL handshake
   
   Serial.println("Initializing Firebase...");
   
@@ -468,15 +548,46 @@ void initFirebase() {
   if (Firebase.authenticated()) {
     Serial.println("Already authenticated with Firebase.");
   } else {
+    // Clear previous session data
+    Firebase.reset(&config);
+    
+    // Add a small delay for network stabilization
+    feedWatchdog();
+    delay(500);
+    
     if (!Firebase.signUp(&config, &auth, "", "")) { // Anonymous sign-up
       Serial.printf("Firebase signup error: %s\n", config.signer.signupError.message.c_str());
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Firebase Error:");
-      lcd.setCursor(0, 1);
-      lcd.print(config.signer.signupError.message.c_str());
-      nonBlockingDelay(5000);
-      ESP.restart();
+      
+      // Check if error is SSL-related, and try one more time
+      String errorMessage = config.signer.signupError.message.c_str();
+      if (errorMessage.indexOf("ssl") >= 0 || 
+          errorMessage.indexOf("SSL") >= 0 || 
+          errorMessage.indexOf("connection") >= 0 ||
+          errorMessage.indexOf("handshake") >= 0) {
+        
+        Serial.println("SSL-related error detected. Attempting one more time...");
+        feedWatchdog();
+        delay(1000);
+        
+        if (!Firebase.signUp(&config, &auth, "", "")) {
+          Serial.printf("Second Firebase signup attempt failed: %s\n", config.signer.signupError.message.c_str());
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Firebase Error:");
+          lcd.setCursor(0, 1);
+          lcd.print(config.signer.signupError.message.c_str());
+          nonBlockingDelay(5000);
+          ESP.restart();
+        }
+      } else {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Firebase Error:");
+        lcd.setCursor(0, 1);
+        lcd.print(config.signer.signupError.message.c_str());
+        nonBlockingDelay(5000);
+        ESP.restart();
+      }
     } else {
       Serial.println("Firebase anonymous sign-up successful.");
     }
@@ -509,14 +620,24 @@ void initFirebase() {
     if (info.status == token_status_error) {
       Serial.printf("Token error: %s. Refreshing...\n", info.error.message.c_str());
       Firebase.refreshToken(&config);
+      
+      // If error is SSL-related, handle it
+      String errorMessage = info.error.message.c_str();
+      if (errorMessage.indexOf("ssl") >= 0 || 
+          errorMessage.indexOf("SSL") >= 0 || 
+          errorMessage.indexOf("connection") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
   };
   
   // Initialize Firebase with configuration
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
-  Firebase.RTDB.setReadTimeout(&fbdo, 10000);  // Set 10-second timeout for RTDB read operations
-
+  Firebase.RTDB.setReadTimeout(&fbdo, 15000);  // Set 15-second timeout for RTDB read operations
+  Firebase.RTDB.setReadTimeout(&fbdo, 15000); // Set 15-second timeout for RTDB write operations
+  Firebase.RTDB.enableClassicRequest(&fbdo, true); // Use classic HTTP for more reliable connections
+  
   // Wait and verify Firebase is ready
   unsigned long startTime = millis();
   while (!Firebase.ready() && (millis() - startTime < 15000)) {
@@ -550,27 +671,64 @@ String getUIDString() {
 }
 
 bool isRegisteredUID(String uid) {
+  Serial.println("Checking if UID '" + uid + "' is registered");
+  
   // Super Admin UID should be recognized in both SD mode and online mode
   if (uid == SUPER_ADMIN_UID) {
+    Serial.println("UID '" + uid + "' recognized as Super Admin");
     return true;
   }
 
   // First, check the firestoreStudents map - which is cached data
   if (firestoreStudents.find(uid) != firestoreStudents.end()) {
-    Serial.println("UID " + uid + " is registered as a student (from cached data).");
+    Serial.println("UID '" + uid + "' is registered as a student (from cached data)");
     return true;
   }
 
   // Then check firestoreTeachers map - also cached data
   if (firestoreTeachers.find(uid) != firestoreTeachers.end()) {
-    Serial.println("UID " + uid + " is registered as a teacher (from cached data).");
+    Serial.println("UID '" + uid + "' is registered as a teacher (from cached data)");
     return true;
+  }
+  
+  // Check directly in RegisteredUIDs database if online
+  if (!sdMode && isConnected && Firebase.ready()) {
+    Serial.println("Checking UID '" + uid + "' directly in RTDB");
+    if (Firebase.RTDB.get(&fbdo, "/RegisteredUIDs/" + uid)) {
+      Serial.println("UID '" + uid + "' found directly in RegisteredUIDs RTDB");
+      // Also add to firestoreStudents or firestoreTeachers as appropriate
+      if (!Firebase.RTDB.getJSON(&fbdo, "/Students/" + uid)) {
+        if (!Firebase.RTDB.getJSON(&fbdo, "/Instructors/" + uid)) {
+          // Just a generic registered UID with no specific role
+          Serial.println("UID '" + uid + "' is registered without specific role");
+        } else {
+          // An instructor
+          Serial.println("UID '" + uid + "' is an instructor");
+          std::map<String, String> instructorData;
+          instructorData["fullName"] = "Unknown";
+          instructorData["role"] = "instructor";
+          firestoreTeachers[uid] = instructorData;
+        }
+      } else {
+        // A student
+        Serial.println("UID '" + uid + "' is a student");
+        std::map<String, String> studentData;
+        studentData["fullName"] = "Unknown";
+        studentData["role"] = "student";
+        firestoreStudents[uid] = studentData;
+      }
+      return true;
+    } else {
+      Serial.println("UID '" + uid + "' not found in RTDB: " + fbdo.errorReason());
+    }
+  } else {
+    Serial.println("Skipping RTDB check: sdMode=" + String(sdMode) + ", isConnected=" + String(isConnected) + ", Firebase.ready=" + String(Firebase.ready()));
   }
 
   // If not found in cache, try direct Firestore query
   if (!sdMode && isConnected) {
     // First check teachers collection
-    Serial.println("Checking if UID " + uid + " is registered in Firestore teachers...");
+    Serial.println("Checking if UID '" + uid + "' is registered in Firestore teachers...");
     String firestorePath = "teachers";
     if (Firebase.Firestore.getDocument(&firestoreFbdo, FIRESTORE_PROJECT_ID, "", firestorePath.c_str(), "")) {
       FirebaseJson json;
@@ -589,7 +747,7 @@ bool isRegisteredUID(String uid) {
           if (doc.get(fieldData, "fields/rfidUid/stringValue")) {
             rfidUid = fieldData.stringValue;
             if (rfidUid == uid) {
-              Serial.println("UID " + uid + " is registered as a teacher.");
+              Serial.println("UID '" + uid + "' is registered as a teacher");
               // Cache this data for future use
               std::map<String, String> teacherData;
               String fullName = "";
@@ -608,7 +766,7 @@ bool isRegisteredUID(String uid) {
     }
     
     // Then check students collection
-    Serial.println("Checking if UID " + uid + " is registered in Firestore students...");
+    Serial.println("Checking if UID '" + uid + "' is registered in Firestore students...");
     firestorePath = "students";
     if (Firebase.Firestore.getDocument(&firestoreFbdo, FIRESTORE_PROJECT_ID, "", firestorePath.c_str(), "")) {
       FirebaseJson json;
@@ -627,7 +785,7 @@ bool isRegisteredUID(String uid) {
           if (doc.get(fieldData, "fields/rfidUid/stringValue")) {
             rfidUid = fieldData.stringValue;
             if (rfidUid == uid) {
-              Serial.println("UID " + uid + " is registered as a student.");
+              Serial.println("UID '" + uid + "' is registered as a student");
               // Cache this data for future use
               std::map<String, String> studentData;
               String fullName = "";
@@ -647,7 +805,7 @@ bool isRegisteredUID(String uid) {
     }
   }
   
-  Serial.println("UID " + uid + " is not registered or Firestore unavailable.");
+  Serial.println("UID '" + uid + "' is not registered");
   return false;
 }
 
@@ -690,6 +848,11 @@ bool isAdminUID(String uid) {
       }
     } else {
       Serial.println("Failed to retrieve Firestore documents: " + firestoreFbdo.errorReason());
+      if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+          fbdo.errorReason().indexOf("connection") >= 0 || 
+          fbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
   } else {
     Serial.println("Cannot check admin UID: sdMode=" + String(sdMode) + ", isConnected=" + String(isConnected));
@@ -765,6 +928,11 @@ std::map<String, String> fetchUserDetails(String uid) {
       }
     } else {
       Serial.println("Failed to retrieve Firestore documents: " + firestoreFbdo.errorReason());
+      if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+          fbdo.errorReason().indexOf("connection") >= 0 || 
+          fbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
   } else {
     Serial.println("Cannot fetch user details: sdMode=" + String(sdMode) + ", isConnected=" + String(isConnected));
@@ -789,6 +957,13 @@ void fetchRegisteredUIDs() {
         registeredUIDs.push_back(key);
       }
       json->iteratorEnd();
+    }
+  } else {
+    Serial.println("Failed to fetch registered UIDs: " + fbdo.errorReason());
+    if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+        fbdo.errorReason().indexOf("connection") >= 0 || 
+        fbdo.errorReason().indexOf("SSL") >= 0) {
+      handleFirebaseSSLError();
     }
   }
   lastUIDFetchTime = millis();
@@ -970,6 +1145,11 @@ void fetchFirestoreTeachers() {
       }
     } else {
       Serial.println("Failed to fetch Firestore teachers: " + firestoreFbdo.errorReason());
+      if (firestoreFbdo.errorReason().indexOf("ssl") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("connection") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
   } else {
     Serial.println("Skipping fetchFirestoreTeachers: sdMode=" + String(sdMode) + 
@@ -1114,6 +1294,11 @@ void fetchFirestoreStudents() {
         delay(5000);
         Firebase.reconnectWiFi(true);
       }
+      if (firestoreFbdo.errorReason().indexOf("ssl") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("connection") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
     yield(); // Prevent watchdog reset after Firebase call
   }
@@ -1149,7 +1334,39 @@ bool ensureFirebaseAuthenticated() {
     // Try to sign in again
     if (!Firebase.signUp(&config, &auth, "", "")) {
       Serial.printf("Firebase re-auth failed: %s\n", config.signer.signupError.message.c_str());
-      return false;
+      
+      // Check for SSL errors in authentication failure
+      String errorMessage = config.signer.signupError.message.c_str();
+      if (errorMessage.indexOf("ssl") >= 0 || 
+          errorMessage.indexOf("SSL") >= 0 || 
+          errorMessage.indexOf("connection") >= 0 ||
+          errorMessage.indexOf("handshake") >= 0 ||
+          errorMessage.indexOf("certificate") >= 0 ||
+          errorMessage.indexOf("network") >= 0) {
+        Serial.println("SSL or network issue detected during authentication");
+        
+        // Try WiFi reconnection
+        if (WiFi.status() != WL_CONNECTED) {
+          Serial.println("WiFi disconnected during auth. Reconnecting...");
+          connectWiFi();
+        } else {
+          // Reset WiFi connection
+          Serial.println("Resetting WiFi connection");
+          WiFi.disconnect();
+          delay(500);
+          connectWiFi();
+        }
+        
+        delay(500);
+        
+        // Retry authentication one more time after WiFi reset
+        if (!Firebase.signUp(&config, &auth, "", "")) {
+          Serial.printf("Second Firebase auth attempt failed: %s\n", config.signer.signupError.message.c_str());
+          return false;
+        }
+      } else {
+        return false;
+      }
     }
     
     delay(1000); // Give it time to process
@@ -1242,7 +1459,7 @@ void fetchFirestoreRooms() {
       Serial.println("No documents found in rooms collection or invalid format.");
     }
   } else {
-    Serial.println("Failed to fetch Firestore rooms: " + fbdo.errorReason());
+    Serial.println("Failed to fetch Firestore rooms: " + fbdo.payload());
     
     // Additional debugging for Firestore permissions issue
     Serial.println("Attempting to reconnect and retry...");
@@ -1322,6 +1539,11 @@ void fetchFirestoreRooms() {
       Serial.println("Second attempt also failed: " + firestoreFbdo.errorReason());
       Serial.println("Firebase auth status: " + String(Firebase.authenticated()));
       Serial.println("Verify Firestore rules and authentication.");
+    }
+    if (firestoreFbdo.errorReason().indexOf("ssl") >= 0 || 
+        firestoreFbdo.errorReason().indexOf("connection") >= 0 || 
+        firestoreFbdo.errorReason().indexOf("SSL") >= 0) {
+      handleFirebaseSSLError();
     }
   }
 }
@@ -1484,6 +1706,7 @@ void assignRoomToInstructor(String uid, String timestamp) {
     }
   }
 }
+
 void updateRoomStatus(String roomId, String status, String instructorName, String subject, String sessionStart, String sessionEnd, float startReading, float endReading, float totalUsage) {
   if (!sdMode && isConnected && isVoltageSufficient) {
     String path = "rooms/" + roomId;
@@ -1507,16 +1730,13 @@ void updateRoomStatus(String roomId, String status, String instructorName, Strin
 }
 
 void storeLogToSD(String entry) {
-  // Only store logs if WiFi is disconnected (offline mode)
   if (isConnected) {
     Serial.println("WiFi is connected. Skipping SD log storage for: " + entry);
     return;
   }
 
-  // Static flag to track if we've already tried reinitializing in this call
   static bool reinitializedInThisCall = false;
 
-  // Check if SD card is initialized; initialize only once during setup or after a known failure
   if (!sdInitialized && !reinitializedInThisCall) {
     if (!SD.begin(SD_CS, fsSPI, 4000000)) {
       Serial.println("SD card initialization failed during setup. Cannot store log: " + entry);
@@ -1525,20 +1745,21 @@ void storeLogToSD(String entry) {
     }
     sdInitialized = true;
     Serial.println("SD card initialized for logging.");
+    yield(); // Yield after SD initialization
   }
 
-  // Attempt to open the file for appending
   File logFile = SD.open(OFFLINE_LOG_FILE, FILE_APPEND);
   if (logFile) {
     logFile.println(entry);
-    logFile.flush();  // Ensure data is written to SD card
-    logFile.close();  // Explicitly close to release the handle
+    logFile.flush();
+    logFile.close();
     Serial.println("Stored to SD: " + entry);
-    reinitializedInThisCall = false;  // Reset flag on success
+    reinitializedInThisCall = false;
+    yield(); // Yield after SD write
   } else {
     Serial.println("Failed to open " + String(OFFLINE_LOG_FILE) + " for writing. Diagnosing...");
+    yield(); // Yield during error handling
 
-    // Check if SD card is still responsive without immediately reinitializing
     File root = SD.open("/");
     if (!root) {
       Serial.println("SD card root directory inaccessible. Attempting reinitialization...");
@@ -1552,12 +1773,13 @@ void storeLogToSD(String entry) {
         Serial.println("Falling back to serial-only logging: " + entry);
         return;
       }
+      yield(); // Yield after reinitialization attempt
     } else {
       root.close();
       Serial.println("SD card root accessible, issue is file-specific.");
+      yield(); // Yield after root check
     }
 
-    // Check if the file exists and try to recreate it if necessary
     if (SD.exists(OFFLINE_LOG_FILE)) {
       Serial.println(String(OFFLINE_LOG_FILE) + " exists but can't be opened. Attempting to delete...");
       if (SD.remove(OFFLINE_LOG_FILE)) {
@@ -1566,18 +1788,20 @@ void storeLogToSD(String entry) {
         Serial.println("Failed to delete " + String(OFFLINE_LOG_FILE) + ". Possible write protection or corruption.");
         return;
       }
+      yield(); // Yield after file deletion
     } else {
       Serial.println(String(OFFLINE_LOG_FILE) + " does not exist yet. Creating new file...");
+      yield(); // Yield before file creation
     }
 
-    // Retry opening the file after potential deletion or if it didn't exist
     logFile = SD.open(OFFLINE_LOG_FILE, FILE_APPEND);
     if (logFile) {
       logFile.println(entry);
-      logFile.flush();  // Ensure data is written
+      logFile.flush();
       logFile.close();
       Serial.println("Recreated and stored to SD: " + entry);
-      reinitializedInThisCall = false;  // Reset flag on success
+      reinitializedInThisCall = false;
+      yield(); // Yield after successful retry
     } else {
       Serial.println("Retry failed for " + String(OFFLINE_LOG_FILE) + ". Testing SD card integrity...");
       File testFile = SD.open("/test_log.txt", FILE_WRITE);
@@ -1591,6 +1815,7 @@ void storeLogToSD(String entry) {
         sdInitialized = false;
         Serial.println("Falling back to serial-only logging: " + entry);
       }
+      yield(); // Yield after test write
     }
   }
 }
@@ -1706,14 +1931,37 @@ void activateRelays() {
   // HIGH = Relay OFF/Inactive = Door unlocked
   // LOW = Relay ON/Active = Door locked
   
-  // Locking the doors (activating relays)
+  // Check system status before relay changes
+  yield(); // Yield CPU to prevent watchdog trigger
+  
+  // Temporarily disable interrupts during critical relay state changes
+  noInterrupts();
+  
+  // Locking the doors (activating relays) with improved timing
+  // First relay - activate with longer delay
   digitalWrite(RELAY1, LOW);
-  delay(5); // Minimal delay that won't cause system instability
+  delay(25);  // Increased from 20ms to 25ms for more stability
+  yield(); // Add yield between relay operations
+  
+  // Second relay - activate with delay
   digitalWrite(RELAY2, LOW);
-  delay(5);
+  delay(25);  // Increased from 20ms to 25ms for more stability
+  yield(); // Add yield between relay operations
+  
+  // Third relay - activate with delay
   digitalWrite(RELAY3, LOW);
-  delay(5);
+  delay(25);  // Increased from 20ms to 25ms for more stability
+  yield(); // Add yield between relay operations
+  
+  // Fourth relay - activate with final delay
   digitalWrite(RELAY4, LOW);
+  delay(25);  // Increased from 20ms to 25ms for more stability
+  
+  // Re-enable interrupts
+  interrupts();
+  
+  // Allow system to breathe after relay operation
+  yield();
   
   // Update state flags
   relayActive = true;
@@ -1723,7 +1971,14 @@ void activateRelays() {
   Serial.println("Relays activated (locked) with safe timing");
   
   // Non-blocking approach to delay PZEM readings
-  lastPZEMUpdate = millis() + 1000; // Wait 1 second before next PZEM reading
+  lastPZEMUpdate = millis() + 1500; // Wait 1.5 seconds before next PZEM reading (increased from 1 sec)
+  
+  // Update watchdog timers
+  lastActivityTime = millis();
+  lastReadyPrint = millis();
+  
+  // Final yield to stabilize system
+  yield();
 }
 
 void deactivateRelays() {
@@ -1749,27 +2004,60 @@ void deactivateRelays() {
   relayTransitionInProgress = true;
   relayTransitionStartTime = millis();
   
+  // Allow system to prepare for relay operation
+  yield();
+  
   // RELAY LOGIC:
   // HIGH = Relay OFF/Inactive = Door unlocked
   // LOW = Relay ON/Active = Door locked
   
-  // Unlocking the doors (deactivating relays)
+  // Temporarily disable interrupts during critical relay state changes
+  noInterrupts();
+  
+  // Unlocking the doors (deactivating relays) with progressive delays
   digitalWrite(RELAY1, HIGH);
-  delay(5); // Minimal delay that won't cause system instability
+  delay(25); // Increased delay for smoother deactivation
+  yield(); // Add yield between relay operations
+  
   digitalWrite(RELAY2, HIGH);
-  delay(5);
+  delay(25); // Increased delay for smoother deactivation
+  yield(); // Add yield between relay operations
+  
   digitalWrite(RELAY3, HIGH);
-  delay(5);
+  delay(25); // Increased delay for smoother deactivation
+  yield(); // Add yield between relay operations
+  
   digitalWrite(RELAY4, HIGH);
+  delay(25); // Increased final delay for stability
+  
+  // Re-enable interrupts
+  interrupts();
+  
+  // Allow system to stabilize after relay operation
+  yield();
   
   // Update state flags
   relayActive = false;
   relayTransitionInProgress = false;
   
   Serial.println("Relays deactivated (unlocked) with safe timing");
+  
+  // Update watchdog timers
+  lastActivityTime = millis();
+  lastReadyPrint = millis();
+  
+  // Final yield to stabilize system
+  yield();
 }
 
 void checkPendingRelayOperations() {
+  // Add a static variable to track consecutive errors
+  static int consecutiveErrors = 0;
+  static unsigned long lastSuccessfulOperation = 0;
+  
+  // Initial yield to ensure system stability
+  yield();
+  
   // Check for pending relay deactivation
   if (relayPendingDeactivation && millis() >= relayDeactivationTime) {
     Serial.println("Executing delayed relay deactivation");
@@ -1779,25 +2067,44 @@ void checkPendingRelayOperations() {
     relayTransitionInProgress = true;
     relayTransitionStartTime = millis();
     
+    // Yield before operation to prevent watchdog issues
+    yield();
+    
+    // Disable interrupts for relay operations
+    noInterrupts();
+    
     // RELAY LOGIC: HIGH = Door unlocked, LOW = Door locked
     digitalWrite(RELAY1, HIGH);
-    delay(5);
+    delay(25); // Increased delay for smoother deactivation
     yield(); // Allow system to process
     digitalWrite(RELAY2, HIGH);
-    delay(5);
+    delay(25); // Increased delay for smoother deactivation
     yield(); // Allow system to process
     digitalWrite(RELAY3, HIGH);
-    delay(5);
+    delay(25); // Increased delay for smoother deactivation
     yield(); // Allow system to process
     digitalWrite(RELAY4, HIGH);
+    delay(25); // Add final delay for stability
+    
+    // Re-enable interrupts
+    interrupts();
+    
+    // Yield after relay state changes
+    yield();
     
     relayActive = false;
     relayTransitionInProgress = false;
+    lastSuccessfulOperation = millis(); // Mark this operation as successful
+    consecutiveErrors = 0; // Reset error counter
+    
     Serial.println("Relays safely deactivated after delay");
     
     // Update system state
     lastActivityTime = millis();
     lastReadyPrint = millis();
+    
+    // Allow system to stabilize before display update
+    yield();
     
     // Transition to ready state
     if (!adminAccessActive && !classSessionActive && !studentVerificationActive && !tapOutPhase) {
@@ -1808,27 +2115,346 @@ void checkPendingRelayOperations() {
     }
   }
   
+  // Check system resources before proceeding
+  if (ESP.getFreeHeap() < 10000) {
+    Serial.println("WARNING: Low memory detected in relay operations, skipping checks");
+    yield(); // Allow system tasks to process
+    return;
+  }
+  
   // Check for pending operations
   if (relayOperationPending && !relayTransitionInProgress) {
+    // Yield before operation to prevent watchdog issues
+    yield();
+    
     relayOperationPending = false;
     
     if (pendingRelayActivation) {
       Serial.println("Executing pending relay activation");
       activateRelays();
+      lastSuccessfulOperation = millis();
+      consecutiveErrors = 0;
     } else if (!relayPendingDeactivation) {
       Serial.println("Executing pending relay deactivation");
       deactivateRelays();
+      lastSuccessfulOperation = millis();
+      consecutiveErrors = 0;
     }
   }
   
   // Check for transition timeout (safety mechanism)
-  if (relayTransitionInProgress && (millis() - relayTransitionStartTime > RELAY_TRANSITION_TIMEOUT)) {
-    Serial.println("WARNING: Relay transition timeout, forcing completion");
-    relayTransitionInProgress = false;
-    yield(); // Allow system to process after timeout
+  if (relayTransitionInProgress) {
+    // How long has the transition been active?
+    unsigned long transitionDuration = millis() - relayTransitionStartTime;
+    
+    if (transitionDuration > RELAY_TRANSITION_TIMEOUT) {
+      Serial.println("WARNING: Relay transition timeout after " + String(transitionDuration) + "ms, forcing completion");
+      
+      // Force reset of transition state
+      relayTransitionInProgress = false;
+      
+      // Increment error counter
+      consecutiveErrors++;
+      
+      // If we have too many consecutive errors, try a recovery procedure
+      if (consecutiveErrors >= 3) {
+        Serial.println("CRITICAL: Multiple relay transition timeouts detected, performing recovery");
+        
+        // Ensure relays are in a safe state
+        digitalWrite(RELAY1, HIGH);
+        delay(50);
+        yield();
+        digitalWrite(RELAY2, HIGH);
+        delay(50);
+        yield();
+        digitalWrite(RELAY3, HIGH);
+        delay(50);
+        yield();
+        digitalWrite(RELAY4, HIGH);
+        
+        // Reset all relay state variables
+        relayActive = false;
+        relayOperationPending = false;
+        pendingRelayActivation = false;
+        relayPendingDeactivation = false;
+        
+        // Log recovery
+        logSystemEvent("Relay recovery triggered after multiple timeouts");
+        consecutiveErrors = 0;
+      }
+      
+      yield(); // Allow system to process after timeout handling
+    }
+    // If transition has been active for a long time but still within timeout,
+    // add yield to prevent watchdog from triggering
+    else if (transitionDuration > (RELAY_TRANSITION_TIMEOUT / 2)) {
+      yield(); // Additional yield for long transitions
+    }
   }
   
-  yield(); // Final yield to ensure smooth operation
+  // If it's been a long time since a successful operation but we still have pending operations,
+  // check for deadlocks
+  if ((relayOperationPending || relayPendingDeactivation) && 
+      lastSuccessfulOperation > 0 && 
+      (millis() - lastSuccessfulOperation > 60000)) {  // 1 minute timeout
+    
+    Serial.println("WARNING: Potential relay operation deadlock detected, resetting state");
+    
+    // Reset all relay operation flags
+    relayOperationPending = false;
+    pendingRelayActivation = false;
+    relayPendingDeactivation = false;
+    relayTransitionInProgress = false;
+    
+    // Ensure relays are in a safe state (all deactivated)
+    digitalWrite(RELAY1, HIGH);
+    delay(50);
+    yield();
+    digitalWrite(RELAY2, HIGH);
+    delay(50);
+    yield();
+    digitalWrite(RELAY3, HIGH);
+    delay(50);
+    yield();
+    digitalWrite(RELAY4, HIGH);
+    
+    // Reset state
+    relayActive = false;
+    
+    // Log the recovery
+    logSystemEvent("Relay deadlock recovery triggered");
+    
+    // Reset timers
+    lastSuccessfulOperation = millis();
+    lastActivityTime = millis();
+    lastReadyPrint = millis();
+  }
+  
+  // Final yield to ensure smooth operation
+  yield();
+}
+
+// Add function to reset session state
+void resetSessionState() {
+  // Reset all session-related flags and data
+  classSessionActive = false;
+  studentVerificationActive = false;
+  waitingForInstructorEnd = false;
+  tapOutPhase = false;
+  
+  // Clear student data
+  studentAssignedSensors.clear();
+  studentWeights.clear();
+  awaitingWeight = false;
+  
+  // Reset relay and session variables
+  // NOTE: We preserve lastInstructorUID to maintain reference to the instructor for PZEM data
+  // lastInstructorUID = ""; // Commented out to preserve PZEM data reference
+  assignedRoomId = "";
+  lastPZEMLogTime = 0;
+  presentCount = 0;
+  
+  // Update timers to prevent watchdog resets
+  lastActivityTime = millis();
+  lastReadyPrint = millis();
+  
+  Serial.println("Session state reset completed - PZEM data preserved");
+}
+
+// Move the smoothTransitionToReady function definition here, outside of any other function
+void smoothTransitionToReady() {
+  // Check if we're already in the ready state to avoid unnecessary transitions
+  static unsigned long lastTransitionTime = 0;
+  
+  // Don't allow transitions too close together (minimum 3 seconds between transitions)
+  if (millis() - lastTransitionTime < 3000) {
+    Serial.println("Skipping redundant transition (too soon)");
+    // Still update timers to prevent watchdog resets
+    lastActivityTime = millis();
+    lastReadyPrint = millis();
+    return;
+  }
+  
+  lastTransitionTime = millis();
+  
+  // Clear any pending operations
+  yield();
+  
+  // Log memory state before cleanup
+  uint32_t freeHeapBefore = ESP.getFreeHeap();
+  
+  // If heap memory is critically low, attempt recovery
+  if (freeHeapBefore < 10000) {
+    Serial.println("CRITICAL: Very low memory during transition, performing emergency cleanup");
+    
+    // Reset all non-essential state variables
+    pendingStudentTaps.clear();
+    uidDetailsPrinted.clear();
+    
+    // Force a yield to allow memory operations
+    yield();
+  }
+  
+  // Save important data before reset
+  String preservedInstructorUID = lastInstructorUID; // Preserve instructor UID
+  
+  // Reset system state flags in a controlled manner
+  tapOutPhase = false;
+  studentVerificationActive = false;
+  classSessionActive = false;
+  waitingForInstructorEnd = false;
+  adminAccessActive = false;
+  relayActive = false;
+  
+  yield(); // Yield after flag resets
+  
+  // Reset the sensor assignments and weight data
+  studentAssignedSensors.clear();
+  studentWeights.clear();
+  awaitingWeight = false;
+  
+  yield(); // Yield after clearing maps
+  
+  // Reset session-specific variables but preserve instructor reference
+  // This is critical for maintaining the relationship to PZEM data
+  assignedRoomId = "";
+  lastPZEMLogTime = 0;
+  presentCount = 0;
+  
+  // Show transition messages with progressive delays for smoother experience
+  displayMessage("Session Ended", "Cleaning up...", 0);
+  
+  // Non-blocking delay with multiple yields for stability
+  unsigned long startTime = millis();
+  while (millis() - startTime < 1500) {
+    yield(); // Non-blocking delay with yield
+    // Feed watchdog during delay
+    lastReadyPrint = millis();
+    
+    // Every 250ms during the delay, check for critical operations
+    if ((millis() - startTime) % 250 == 0) {
+      // Update activity timer to prevent timeouts
+      lastActivityTime = millis();
+    }
+  }
+  
+  // Add intermediate transition messages for smoother experience
+  displayMessage("Preparing system", "for next session", 0);
+  
+  startTime = millis();
+  while (millis() - startTime < 1200) {
+    yield();
+    lastReadyPrint = millis();
+    lastActivityTime = millis();
+  }
+  
+  displayMessage("System ready", "for next session", 0);
+  
+  startTime = millis();
+  while (millis() - startTime < 1000) {
+    yield();
+    lastReadyPrint = millis();
+    lastActivityTime = millis();
+  }
+  
+  // Perform garbage collection
+  ESP.getMinFreeHeap(); // Force memory compaction on ESP32
+  yield(); // Yield after memory operation
+  
+  uint32_t freeHeapAfter = ESP.getFreeHeap();
+  Serial.println("Memory cleanup: " + String(freeHeapBefore) + " -> " + String(freeHeapAfter) + " bytes");
+  
+  // Make sure tamper alert is resolved
+  tamperActive = false;
+  
+  yield(); // Additional yield for stability
+  
+  // Check Firebase connection after session end
+  if (isConnected && !Firebase.ready()) {
+    Serial.println("Firebase connection lost during session. Attempting to reconnect...");
+    
+    // Try to reinitialize Firebase up to 3 times
+    bool firebaseReconnected = false;
+    for (int attempt = 0; attempt < 3 && !firebaseReconnected; attempt++) {
+      Serial.println("Firebase reconnection attempt " + String(attempt + 1));
+      
+      // Update timers before potential delays
+      lastActivityTime = millis();
+      lastReadyPrint = millis();
+      
+      // Ensure WiFi is connected
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi disconnected. Reconnecting...");
+        WiFi.disconnect();
+        delay(500);
+        yield(); // Add yield after delay
+        connectWiFi();
+        yield(); // Add yield after WiFi connection attempt
+      }
+      
+      // Reset Firebase and reconnect
+      Firebase.reset(&config);
+      delay(500);
+      yield(); // Add yield after delay
+      
+      Firebase.reconnectWiFi(true);
+      delay(500);
+      yield(); // Add yield after WiFi reconnection
+      
+      initFirebase();
+      yield(); // Add yield after Firebase initialization
+      
+      // Check if reconnected successfully
+      if (Firebase.ready() && Firebase.authenticated()) {
+        firebaseReconnected = true;
+        Serial.println("Firebase successfully reconnected after session end");
+        displayMessage("Firebase", "Reconnected", 1500);
+        sdMode = false; // Exit SD mode if it was active
+      } else {
+        Serial.println("Firebase reconnection attempt failed");
+        delay(1000); // Wait before next attempt
+        yield(); // Add yield after delay
+      }
+      
+      yield(); // Prevent watchdog reset during reconnection attempts
+    }
+    
+    // If all reconnection attempts failed, switch to SD mode
+    if (!firebaseReconnected) {
+      Serial.println("All Firebase reconnection attempts failed. Switching to SD mode.");
+      sdMode = true;
+      storeLogToSD("FirebaseReconnectFailed:Timestamp:" + getFormattedTime());
+      displayMessage("Firebase Error", "Using SD Card", 2000);
+    }
+  }
+  
+  yield(); // Final yield before display update
+  
+  // Add one final transition effect with a slight fade effect (simulated with a delay)
+  displayMessage("", "", 300); // Brief blank screen for visual effect
+  
+  // Final ready message
+  displayMessage("Ready. Tap your", "RFID Card!", 0);
+  
+  // Update timers to prevent watchdog resets
+  firstActionOccurred = true;
+  lastActivityTime = millis();
+  lastReadyPrint = millis();
+  
+  // Ensure LEDs are in neutral state
+  showNeutral();
+  
+  // Reset any error counters
+  I2C_ERROR_COUNTER = 0;
+  
+  // Now we can safely clear the instructor reference after all operations
+  lastInstructorUID = "";
+  
+  // Log the transition
+  logSystemEvent("System Ready - Transition Complete");
+  
+  // Final yield to ensure system stability
+  yield();
 }
 
 // Global FirebaseJson objects to reduce stack usage
@@ -1837,6 +2463,30 @@ static FirebaseJson accessJson;
 static FirebaseJson classStatusJson;
 static FirebaseJson pzemJson;
 static FirebaseJson matchingSchedule;
+
+#ifndef RELAY_SAFE_DELAY
+#define RELAY_SAFE_DELAY 500  // 500ms safe delay for relay operations
+#endif
+
+// Add this function to ensure relays are in a safe state
+void ensureRelaySafeState() {
+  // Make sure relays are properly initialized and in a safe state
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+  pinMode(RELAY3, OUTPUT);
+  pinMode(RELAY4, OUTPUT);
+  
+  // Ensure relays are inactive (HIGH)
+  digitalWrite(RELAY1, HIGH);
+  digitalWrite(RELAY2, HIGH);
+  digitalWrite(RELAY3, HIGH);
+  digitalWrite(RELAY4, HIGH);
+  relayActive = false;
+  relayTransitionInProgress = false;
+  relayOperationPending = false;
+  pendingRelayActivation = false;
+  relayPendingDeactivation = false;
+}
 
 void logInstructor(String uid, String timestamp, String action) {
   // Log to SD
@@ -1857,10 +2507,10 @@ void logInstructor(String uid, String timestamp, String action) {
                  ", Threshold: " + String(voltageThreshold) + "V");
 
   // Extract time
-  String currentTime = timestamp.substring(11, 13) + ":" + timestamp.substring(13, 15); // HH:MM
+  String currentTime = timestamp.substring(11, 13) + ":" + timestamp.substring(14, 16); // HH:MM
 
   // Schedule check
-  static ScheduleInfo currentSchedule = {false, "", "", "", "", "", "", ""};
+  ScheduleInfo currentSchedule;
   if (action == "Access") {
     // If we're waiting for instructor to finalize the session, don't start a new session
     if (waitingForInstructorEnd && uid == lastInstructorUID) {
@@ -1869,11 +2519,19 @@ void logInstructor(String uid, String timestamp, String action) {
       return;
     }
     
-    currentSchedule = isWithinSchedule(uid, timestamp);
+    String day = getDayFromTimestamp(timestamp);
+    String time = timestamp.substring(11, 16);
+    int hour = time.substring(0, 2).toInt();
+    int minute = time.substring(3, 5).toInt();
+    currentSchedule = checkSchedule(uid, day, hour, minute);
     lastInstructorUID = uid;
   } else if (action == "EndSession" && lastInstructorUID == uid) {
     // Always try to revalidate schedule for EndSession, whether or not it's already valid
-    currentSchedule = isWithinSchedule(uid, timestamp);
+    String day = getDayFromTimestamp(timestamp);
+    String time = timestamp.substring(11, 16);
+    int hour = time.substring(0, 2).toInt();
+    int minute = time.substring(3, 5).toInt();
+    currentSchedule = checkSchedule(uid, day, hour, minute);
     
     if (currentSchedule.isValid) {
       Serial.println("Schedule valid for EndSession: " + currentSchedule.day + " " + 
@@ -1903,20 +2561,137 @@ void logInstructor(String uid, String timestamp, String action) {
   if (!role.equalsIgnoreCase("instructor")) role = "instructor";
 
   // Schedule endTime check
-  static bool pzemLoggedForSession = false;
   if (relayActive && !tapOutPhase && currentSchedule.isValid && action != "EndSession") {
-    if (currentTime >= currentSchedule.endTime) {
-      digitalWrite(RELAY2, HIGH);
-      digitalWrite(RELAY3, HIGH);
-      digitalWrite(RELAY4, HIGH);
-      relayActive = false;
-      classSessionActive = false;
-      tapOutPhase = true;
-      tapOutStartTime = millis();
-      pzemLoggedForSession = false;
-      tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
-      displayMessage("Class Ended", "Tap to Confirm", 3000);
-      Serial.println("Schedule endTime " + currentSchedule.endTime + " reached at " + currentTime + ". Transition to tap-out phase.");
+    if (currentSchedule.endTime.length() == 5 && currentTime.length() == 5) {
+      // Convert times to minutes for easier comparison
+      int currentHour = currentTime.substring(0, 2).toInt();
+      int currentMinute = currentTime.substring(3, 5).toInt();
+      int currentTotalMinutes = currentHour * 60 + currentMinute;
+      
+      int endHour = currentSchedule.endTime.substring(0, 2).toInt();
+      int endMinute = currentSchedule.endTime.substring(3, 5).toInt();
+      int endTotalMinutes = endHour * 60 + endMinute;
+      
+      // Get start time in minutes for span detection
+      int startHour = 0;
+      int startMinute = 0;
+      if (currentSchedule.startTime.length() == 5) {
+        startHour = currentSchedule.startTime.substring(0, 2).toInt();
+        startMinute = currentSchedule.startTime.substring(3, 5).toInt();
+      }
+      int startTotalMinutes = startHour * 60 + startMinute;
+      
+      // Check for class spanning across midnight (endTime < startTime)
+      bool spansMidnight = endTotalMinutes < startTotalMinutes;
+      
+      // Adjust comparison for classes that span midnight
+      bool endTimeReached = false;
+      if (spansMidnight) {
+        // If class spans midnight and current time is less than start time, 
+        // it means we're after midnight, so adjust comparison
+        if (currentTotalMinutes < startTotalMinutes) {
+          endTimeReached = (currentTotalMinutes >= endTotalMinutes);
+        } else {
+          // Current time is after start time but before midnight
+          endTimeReached = false;
+        }
+      } else {
+        // Normal comparison for classes that don't span midnight
+        endTimeReached = (currentTotalMinutes >= endTotalMinutes);
+      }
+      
+      Serial.println("Time in minutes - Current: " + String(currentTotalMinutes) + 
+                     ", Start: " + String(startTotalMinutes) + 
+                     ", End: " + String(endTotalMinutes) + 
+                     ", Spans midnight: " + String(spansMidnight));
+      
+      if (endTimeReached) {
+        Serial.println("End time reached (" + currentTime + " >= " + currentSchedule.endTime + "). Transitioning to tap-out phase.");
+        digitalWrite(RELAY2, HIGH);
+        digitalWrite(RELAY3, HIGH);
+        digitalWrite(RELAY4, HIGH);
+        relayActive = false;
+        classSessionActive = false;
+        tapOutPhase = true;
+        tapOutStartTime = millis();
+        tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
+        
+        // Store PZEM data and update ClassStatus to "Class Ended"
+        if (!sdMode && isConnected && Firebase.ready() && currentSchedule.roomName.length() > 0) {
+          float voltage = pzem.voltage();
+          float current = pzem.current();
+          float power = pzem.power();
+          float energy = pzem.energy();
+          float frequency = pzem.frequency();
+          float powerFactor = pzem.pf();
+          
+          if (isnan(voltage) || voltage < 0) voltage = 0.0;
+          if (isnan(current) || current < 0) current = 0.0;
+          if (isnan(power) || power < 0) power = 0.0;
+          if (isnan(energy) || energy < 0) energy = 0.0;
+          if (isnan(frequency) || frequency < 0) frequency = 0.0;
+          if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
+          
+          String instructorPath = "/Instructors/" + lastInstructorUID;
+          FirebaseJson classStatusJson;
+          classStatusJson.set("Status", "Class Ended");
+          classStatusJson.set("dateTime", timestamp);
+          
+          FirebaseJson scheduleJson;
+          scheduleJson.set("day", currentSchedule.day.length() > 0 ? currentSchedule.day : "Unknown");
+          scheduleJson.set("startTime", currentSchedule.startTime.length() > 0 ? currentSchedule.startTime : "Unknown");
+          scheduleJson.set("endTime", currentSchedule.endTime.length() > 0 ? currentSchedule.endTime : "Unknown");
+          scheduleJson.set("subject", currentSchedule.subject.length() > 0 ? currentSchedule.subject : "Unknown");
+          scheduleJson.set("subjectCode", currentSchedule.subjectCode.length() > 0 ? currentSchedule.subjectCode : "Unknown");
+          scheduleJson.set("section", currentSchedule.section.length() > 0 ? currentSchedule.section : "Unknown");
+          
+          FirebaseJson roomNameJson;
+          roomNameJson.set("name", currentSchedule.roomName.length() > 0 ? currentSchedule.roomName : "Unknown");
+          
+          // Create PZEM JSON data
+          FirebaseJson pzemJson;
+          pzemJson.set("voltage", String(voltage, 1));
+          pzemJson.set("current", String(current, 2));
+          pzemJson.set("power", String(power, 1));
+          pzemJson.set("energy", String(energy, 2));
+          pzemJson.set("frequency", String(frequency, 1));
+          pzemJson.set("powerFactor", String(powerFactor, 2));
+          pzemJson.set("timestamp", timestamp);
+          roomNameJson.set("pzem", pzemJson);
+          
+          scheduleJson.set("roomName", roomNameJson);
+          classStatusJson.set("schedule", scheduleJson);
+          
+          String statusPath = instructorPath + "/ClassStatus";
+          // Use setJSON instead of updateNode to ensure proper data structure
+          if (Firebase.RTDB.setJSON(&fbdo, statusPath, &classStatusJson)) {
+            Serial.println("Class status updated to 'Class Ended' with PZEM data preserved");
+            
+            // Create a permanent archive of the session data
+            String archivePath = instructorPath + "/ClassHistory/" + timestamp.substring(0, 10) + "_" + timestamp.substring(11, 13) + timestamp.substring(14, 16);
+            if (Firebase.RTDB.setJSON(&fbdo, archivePath, &classStatusJson)) {
+              Serial.println("Class data archived for permanent storage");
+            }
+          } else {
+            String errorLog = "FirebaseError:Path:" + statusPath + " Reason:" + fbdo.errorReason();
+            storeLogToSD(errorLog);
+            Serial.println("Failed to update class status with PZEM data: " + fbdo.errorReason());
+          }
+        }
+        
+        // Mark students who didn't complete attendance verification as absent
+        for (const auto& pendingUid : pendingStudentTaps) {
+          // Only mark students who tapped in but didn't complete weight verification
+          if (studentWeights.find(pendingUid) == studentWeights.end() || studentWeights[pendingUid] < 15) {
+            String timestamp = getFormattedTime();
+            logStudentToRTDB(pendingUid, timestamp, 0.0, -1, "false", "");
+            Serial.println("Student " + pendingUid + " marked absent (incomplete attendance)");
+          }
+        }
+        
+        displayMessage("Class Ended", "Tap to Confirm", 3000);
+        Serial.println("Schedule endTime " + currentSchedule.endTime + " reached at " + currentTime + ". Transition to tap-out phase.");
+      }
     }
   }
 
@@ -1962,7 +2737,7 @@ void logInstructor(String uid, String timestamp, String action) {
     // PZEM data for EndSession on first tap
     if (action == "EndSession" && uid == lastInstructorUID) {
       // Check if ending early
-      String currentTime = timestamp.substring(11, 13) + ":" + timestamp.substring(13, 15); // HH:MM
+      String currentTime = timestamp.substring(11, 13) + ":" + timestamp.substring(14, 16); // HH:MM
       if (currentSchedule.isValid && currentTime < currentSchedule.endTime) {
         Serial.println("Instructor UID " + uid + " ended session early before endTime " + currentSchedule.endTime + ".");
       }
@@ -1981,11 +2756,50 @@ void logInstructor(String uid, String timestamp, String action) {
       if (isnan(frequency) || frequency < 0) frequency = 0.0;
       if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
 
+      // Calculate energy consumption using E = P*(t/1000)
+      // Get the session duration in hours
+      float sessionDurationHours = 0.0;
+      if (currentSchedule.startTime.length() > 0 && currentSchedule.endTime.length() > 0) {
+        // Extract hours and minutes from startTime (format HH:MM)
+        int startHour = currentSchedule.startTime.substring(0, 2).toInt();
+        int startMinute = currentSchedule.startTime.substring(3, 5).toInt();
+        
+        // Extract hours and minutes from endTime (format HH:MM)
+        int endHour = currentSchedule.endTime.substring(0, 2).toInt();
+        int endMinute = currentSchedule.endTime.substring(3, 5).toInt();
+        
+        // Calculate total minutes
+        int startTotalMinutes = startHour * 60 + startMinute;
+        int endTotalMinutes = endHour * 60 + endMinute;
+        
+        // Handle cases where the end time is on the next day
+        if (endTotalMinutes < startTotalMinutes) {
+          endTotalMinutes += 24 * 60; // Add 24 hours in minutes
+        }
+        
+        // Calculate the duration in hours
+        sessionDurationHours = (endTotalMinutes - startTotalMinutes) / 60.0;
+      }
+      
+      // Calculate energy consumption (kWh) using E = P*(t/1000)
+      // Power is in watts, time is in hours, result is in kWh
+      float calculatedEnergy = power * sessionDurationHours / 1000.0;
+      
+      // Use the calculated energy if the measured energy is zero or invalid
+      if (energy <= 0.01) {
+        energy = calculatedEnergy;
+      }
+      
+      Serial.println("Session duration: " + String(sessionDurationHours) + " hours");
+      Serial.println("Calculated energy: " + String(calculatedEnergy) + " kWh");
+
       FirebaseJson pzemJson;
       pzemJson.set("voltage", String(voltage, 1));
       pzemJson.set("current", String(current, 2));
       pzemJson.set("power", String(power, 1));
       pzemJson.set("energy", String(energy, 2));
+      pzemJson.set("calculatedEnergy", String(calculatedEnergy, 2));
+      pzemJson.set("sessionDuration", String(sessionDurationHours, 2));
       pzemJson.set("frequency", String(frequency, 1));
       pzemJson.set("powerFactor", String(powerFactor, 2));
       pzemJson.set("timestamp", timestamp);
@@ -1994,33 +2808,24 @@ void logInstructor(String uid, String timestamp, String action) {
       pzemLoggedForSession = true;
       Serial.println("PZEM logged at session end: Voltage=" + String(voltage, 1) + ", Energy=" + String(energy, 2));
 
-      // Store PZEM data under Rooms node
+      // Remove the old separate Rooms node storage
+      // Instead, modify ClassStatus to include all necessary information
       if (currentSchedule.roomName.length() > 0) {
-        String roomPath = "/Instructors/" + uid + "/Rooms/" + currentSchedule.roomName;
-        FirebaseJson roomPzemJson;
-        roomPzemJson.set("voltage", String(voltage, 1));
-        roomPzemJson.set("current", String(current, 2));
-        roomPzemJson.set("power", String(power, 1));
-        roomPzemJson.set("energy", String(energy, 2));
-        roomPzemJson.set("frequency", String(frequency, 1));
-        roomPzemJson.set("powerFactor", String(powerFactor, 2));
-        roomPzemJson.set("timestamp", timestamp);
-        roomPzemJson.set("sessionId", currentSessionId);
-        roomPzemJson.set("subject", currentSchedule.subject);
-        roomPzemJson.set("subjectCode", currentSchedule.subjectCode);
-        roomPzemJson.set("section", currentSchedule.section);
-        roomPzemJson.set("sessionStart", currentSchedule.startTime);
-        roomPzemJson.set("sessionEnd", currentSchedule.endTime);
-        roomPzemJson.set("date", timestamp.substring(0, 10));
-
-        Serial.print("Storing PZEM data under room: " + roomPath + "... ");
-        if (Firebase.RTDB.setJSON(&fbdo, roomPath, &roomPzemJson)) {
-          Serial.println("Success");
-          Serial.println("PZEM data logged under room " + currentSchedule.roomName);
-        } else {
-          Serial.println("Failed: " + fbdo.errorReason());
-          storeLogToSD("RoomPZEMLogFailed:UID:" + uid + " Room:" + currentSchedule.roomName + " Time:" + timestamp + " Error:" + fbdo.errorReason());
-        }
+        // Instead of creating a separate path, we'll log this information to the classStatusJson
+        FirebaseJson classDetailsJson;
+        classDetailsJson.set("roomName", currentSchedule.roomName);
+        classDetailsJson.set("subject", currentSchedule.subject);
+        classDetailsJson.set("subjectCode", currentSchedule.subjectCode);
+        classDetailsJson.set("section", currentSchedule.section);
+        classDetailsJson.set("sessionStart", currentSchedule.startTime);
+        classDetailsJson.set("sessionEnd", currentSchedule.endTime);
+        classDetailsJson.set("date", timestamp.substring(0, 10));
+        classDetailsJson.set("sessionId", currentSessionId);
+        
+        // Add this class details to the ClassStatus node
+        classStatusJson.set("roomDetails", classDetailsJson);
+        
+        Serial.println("Class details included in ClassStatus");
       }
     }
 
@@ -2118,7 +2923,11 @@ void logInstructor(String uid, String timestamp, String action) {
         fetchFirestoreRooms();
         
         // Check schedule again with freshly fetched data
-        currentSchedule = isWithinSchedule(uid, timestamp);
+        String day = getDayFromTimestamp(timestamp);
+        String time = timestamp.substring(11, 16);
+        int hour = time.substring(0, 2).toInt();
+        int minute = time.substring(3, 5).toInt();
+        currentSchedule = checkSchedule(uid, day, hour, minute);
         
         if (currentSchedule.isValid) {
           Serial.println("Updated schedule found after refresh! Room: " + currentSchedule.roomName);
@@ -2151,7 +2960,37 @@ void logInstructor(String uid, String timestamp, String action) {
           classStatusJson.set("schedule/section", currentSchedule.section);
           classStatusJson.set("schedule/roomName/name", currentSchedule.roomName);
           
-          if (Firebase.RTDB.updateNode(&fbdo, classStatusPath, &classStatusJson)) {
+          // Check if there's existing PZEM data we need to preserve
+          if (Firebase.RTDB.get(&fbdo, classStatusPath + "/schedule/roomName/pzem")) {
+            if (fbdo.dataType() == "json") {
+              FirebaseJson pzemData;
+              pzemData.setJsonData(fbdo.jsonString());
+              
+              // Extract values from existing PZEM data
+              FirebaseJsonData voltage, current, power, energy, frequency, powerFactor, pzemTimestamp;
+              pzemData.get(voltage, "voltage");
+              pzemData.get(current, "current");
+              pzemData.get(power, "power");
+              pzemData.get(energy, "energy");
+              pzemData.get(frequency, "frequency");
+              pzemData.get(powerFactor, "powerFactor");
+              pzemData.get(pzemTimestamp, "timestamp");
+              
+              // Add PZEM data to avoid overwriting it
+              if (voltage.success) classStatusJson.set("schedule/roomName/pzem/voltage", voltage.stringValue);
+              if (current.success) classStatusJson.set("schedule/roomName/pzem/current", current.stringValue);
+              if (power.success) classStatusJson.set("schedule/roomName/pzem/power", power.stringValue);
+              if (energy.success) classStatusJson.set("schedule/roomName/pzem/energy", energy.stringValue);
+              if (frequency.success) classStatusJson.set("schedule/roomName/pzem/frequency", frequency.stringValue);
+              if (powerFactor.success) classStatusJson.set("schedule/roomName/pzem/powerFactor", powerFactor.stringValue);
+              if (pzemTimestamp.success) classStatusJson.set("schedule/roomName/pzem/timestamp", pzemTimestamp.stringValue);
+              
+              Serial.println("Existing PZEM data preserved in ClassStatus update");
+            }
+          }
+          
+          // Use setJSON instead of updateNode to ensure consistency
+          if (Firebase.RTDB.setJSON(&fbdo, classStatusPath, &classStatusJson)) {
             Serial.println("Class status updated to 'In Session' after schedule refresh");
           } else {
             Serial.println("Failed to update class status: " + fbdo.errorReason());
@@ -2233,6 +3072,8 @@ void logInstructor(String uid, String timestamp, String action) {
       classSessionActive = false;
       tapOutPhase = true;
       tapOutStartTime = millis();
+      pzemLoggedForSession = false; // Reset the global variable
+      tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
       displayMessage("Class Ended", "Tap to Confirm", 3000);
       Serial.println("Instructor UID " + uid + " ended session early before endTime " + currentSchedule.endTime + ".");
     }
@@ -2244,7 +3085,82 @@ void logInstructor(String uid, String timestamp, String action) {
     classSessionActive = false;
     tapOutPhase = true;
     tapOutStartTime = millis();
+    pzemLoggedForSession = false; // Reset the global variable
     tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
+    
+    // Store PZEM data and update ClassStatus to "Class Ended"
+    if (!sdMode && isConnected && Firebase.ready() && currentSchedule.roomName.length() > 0) {
+      float voltage = pzem.voltage();
+      float current = pzem.current();
+      float power = pzem.power();
+      float energy = pzem.energy();
+      float frequency = pzem.frequency();
+      float powerFactor = pzem.pf();
+      
+      if (isnan(voltage) || voltage < 0) voltage = 0.0;
+      if (isnan(current) || current < 0) current = 0.0;
+      if (isnan(power) || power < 0) power = 0.0;
+      if (isnan(energy) || energy < 0) energy = 0.0;
+      if (isnan(frequency) || frequency < 0) frequency = 0.0;
+      if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
+      
+      String instructorPath = "/Instructors/" + uid;
+      FirebaseJson classStatusJson;
+      classStatusJson.set("Status", "Class Ended");
+      classStatusJson.set("dateTime", timestamp);
+      
+      FirebaseJson scheduleJson;
+      scheduleJson.set("day", currentSchedule.day.length() > 0 ? currentSchedule.day : "Unknown");
+      scheduleJson.set("startTime", currentSchedule.startTime.length() > 0 ? currentSchedule.startTime : "Unknown");
+      scheduleJson.set("endTime", currentSchedule.endTime.length() > 0 ? currentSchedule.endTime : "Unknown");
+      scheduleJson.set("subject", currentSchedule.subject.length() > 0 ? currentSchedule.subject : "Unknown");
+      scheduleJson.set("subjectCode", currentSchedule.subjectCode.length() > 0 ? currentSchedule.subjectCode : "Unknown");
+      scheduleJson.set("section", currentSchedule.section.length() > 0 ? currentSchedule.section : "Unknown");
+      
+      FirebaseJson roomNameJson;
+      roomNameJson.set("name", currentSchedule.roomName.length() > 0 ? currentSchedule.roomName : "Unknown");
+      
+      // Create PZEM JSON data
+      FirebaseJson pzemJson;
+      pzemJson.set("voltage", String(voltage, 1));
+      pzemJson.set("current", String(current, 2));
+      pzemJson.set("power", String(power, 1));
+      pzemJson.set("energy", String(energy, 2));
+      pzemJson.set("frequency", String(frequency, 1));
+      pzemJson.set("powerFactor", String(powerFactor, 2));
+      pzemJson.set("timestamp", timestamp);
+      roomNameJson.set("pzem", pzemJson);
+      
+      scheduleJson.set("roomName", roomNameJson);
+      classStatusJson.set("schedule", scheduleJson);
+      
+      String statusPath = instructorPath + "/ClassStatus";
+      // Use setJSON instead of updateNode to ensure proper data structure
+      if (Firebase.RTDB.setJSON(&fbdo, statusPath, &classStatusJson)) {
+        Serial.println("Class status updated to 'Class Ended' with PZEM data preserved");
+        
+        // Create a permanent archive of the session data
+        String archivePath = instructorPath + "/ClassHistory/" + timestamp.substring(0, 10) + "_" + timestamp.substring(11, 13) + timestamp.substring(14, 16);
+        if (Firebase.RTDB.setJSON(&fbdo, archivePath, &classStatusJson)) {
+          Serial.println("Class data archived for permanent storage");
+        }
+      } else {
+        String errorLog = "FirebaseError:Path:" + statusPath + " Reason:" + fbdo.errorReason();
+        storeLogToSD(errorLog);
+        Serial.println("Failed to update class status with PZEM data: " + fbdo.errorReason());
+      }
+    }
+    
+    // Mark students who didn't complete attendance verification as absent
+    for (const auto& pendingUid : pendingStudentTaps) {
+      // Only mark students who tapped in but didn't complete weight verification
+      if (studentWeights.find(pendingUid) == studentWeights.end() || studentWeights[pendingUid] < 15) {
+        String timestamp = getFormattedTime();
+        logStudentToRTDB(pendingUid, timestamp, 0.0, -1, "false", "");
+        Serial.println("Student " + pendingUid + " marked absent (incomplete attendance)");
+      }
+    }
+    
     displayMessage("Class Ended", "Tap to Confirm", 3000);
     Serial.println("Instructor UID " + uid + " explicitly ended session early with EndSession action.");
   } else if (action == "EndSession" && tapOutPhase && uid == lastInstructorUID) {
@@ -2268,6 +3184,20 @@ void logInstructor(String uid, String timestamp, String action) {
       
       FirebaseJson roomNameJson;
       roomNameJson.set("name", currentSchedule.roomName.length() > 0 ? currentSchedule.roomName : "Unknown");
+      
+      // Check if there's existing PZEM data to preserve
+      if (Firebase.RTDB.get(&fbdo, classStatusPath + "/schedule/roomName/pzem")) {
+        if (fbdo.dataType() == "json") {
+          // Get the existing PZEM data
+          FirebaseJson pzemData;
+          pzemData.setJsonData(fbdo.jsonString());
+          
+          // Set it in the roomName object
+          roomNameJson.set("pzem", pzemData);
+          Serial.println("Preserved existing PZEM data during AttendanceSummary generation");
+        }
+      }
+      
       scheduleJson.set("roomName", roomNameJson);
       classStatusUpdate.set("schedule", scheduleJson);
 
@@ -2275,7 +3205,13 @@ void logInstructor(String uid, String timestamp, String action) {
         Serial.println("Failed to update ClassStatus: " + fbdo.errorReason());
         storeLogToSD("ClassStatusFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
       } else {
-        Serial.println("ClassStatus updated at " + classStatusPath);
+        Serial.println("ClassStatus updated at " + classStatusPath + " with PZEM data preserved");
+        
+        // Archive the final session data for history
+        String archivePath = "/Instructors/" + uid + "/ClassHistory/" + timestamp.substring(0, 10) + "_" + timestamp.substring(11, 13) + timestamp.substring(14, 16) + "_final";
+        if (Firebase.RTDB.setJSON(&fbdo, archivePath, &classStatusUpdate)) {
+          Serial.println("Final class data archived for permanent storage");
+        }
       }
     }
 
@@ -2443,35 +3379,49 @@ void logInstructor(String uid, String timestamp, String action) {
     Serial.println("Session fully ended. All relays off, system reset.");
     displayMessage("Ready. Tap your", "RFID Card!", 0);
     readyMessageShown = true;
+
+    // Reset watchdog timer at session end
+    lastReadyPrint = millis();
+    Serial.println("Watchdog timer reset at session end");
+
+    // New function for smooth transition to ready state
+    smoothTransitionToReady();
+
+    // Clear finalization tracking for next session
+    uidWeightFinalized.clear();
+    sensorAssignedUid.clear();
   }
 }
 
 void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensorIndex, String weightConfirmed, String timeOut) {
   Serial.println("logStudentToRTDB called for UID: " + rfidUid + " at " + timestamp);
-  yield();
+  yield(); // Initial yield to prevent stack overflow
 
   // Check and create student profile in RTDB if needed
   if (!sdMode && isConnected && Firebase.ready()) {
-    yield();
+    // Reset watchdog timer before lengthy operation
+    lastReadyPrint = millis();
+    
+    yield(); // Yield before Firebase path operation
     String profilePath = "/Students/" + rfidUid + "/Profile";
     bool createProfile = true;
 
     if (Firebase.RTDB.get(&fbdo, profilePath)) {
       createProfile = false;
-      yield();
+      yield(); // Yield after Firebase operation
     }
 
     if (createProfile) {
-      yield();
+      yield(); // Yield before fetch operation
       if (firestoreStudents.find(rfidUid) == firestoreStudents.end()) {
         Serial.println("Refreshing Firestore data for new student...");
-        yield();
+        yield(); // Yield before Firestore fetch
         fetchFirestoreStudents();
-        yield();
+        yield(); // Yield after Firestore fetch
       }
 
       if (firestoreStudents.find(rfidUid) != firestoreStudents.end()) {
-        yield();
+        yield(); // Yield before data extraction
         FirebaseJson profileJson;
         auto& studentData = firestoreStudents[rfidUid];
 
@@ -2488,20 +3438,25 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
         profileJson.set("lastUpdated", timestamp);
 
         if (studentData["schedules"].length() > 0) {
-          yield();
+          yield(); // Yield before schedule processing
           FirebaseJson schedulesJson;
           schedulesJson.setJsonData(studentData["schedules"]);
           profileJson.set("schedules", schedulesJson);
-          yield();
+          yield(); // Yield after schedule processing
         }
 
-        yield();
+        yield(); // Yield before RTDB update
         if (Firebase.RTDB.setJSON(&fbdo, profilePath, &profileJson)) {
           Serial.println("Created new student profile in RTDB for " + rfidUid);
         } else {
           Serial.println("Failed to create student profile: " + fbdo.errorReason());
+          if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+              fbdo.errorReason().indexOf("connection") >= 0 || 
+              fbdo.errorReason().indexOf("SSL") >= 0) {
+            handleFirebaseSSLError();
+          }
         }
-        yield();
+        yield(); // Yield after RTDB update
       }
     }
   }
@@ -2514,8 +3469,15 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
   String schedulesJsonStr = "[]";
   String sectionId = "";
   bool sensorConfirmed = (weightConfirmed == "true");
-  float sensorWeight = sensorConfirmed ? weight : 0.0;
+  
+  // For absent students (sensorIndex == -3), ensure weight is 0.0
+  float sensorWeight = (sensorIndex == -3) ? 0.0 : weight;
+  
+  // Update sensorType to include specific sensor number
   String sensorType = "Weight Sensor";
+  if (sensorIndex >= 0 && sensorIndex < NUM_SENSORS) {
+    sensorType = "Weight Sensor " + String(sensorIndex + 1);
+  }
 
   yield(); // Yield before cache check
 
@@ -2535,18 +3497,31 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
   yield(); // Yield before status determination
 
   // Determine status and action
-  String finalStatus = sensorConfirmed ? "Present" : "Pending";
-  String action = sensorConfirmed ? "Confirmed Weight" : "Initial Tap";
+  String finalStatus = "Pending"; // Default to Pending until weight is confirmed
+  String action = "Initial Tap";
   
-  if (sensorIndex == -2) {
+  // Only set to Present if weight is sufficient AND it's confirmed by the sensor
+  if (weight >= WEIGHT_MINIMUM_THRESHOLD && sensorConfirmed) {
+    finalStatus = "Present";
+    action = "Weight Confirmed";
+  } else if (sensorIndex == -2) {
     finalStatus = "Pending Recovery";
     action = "Wrong Sensor - Recovery Needed";
     sensorConfirmed = false;
   } else if (sensorIndex == -3) {
     finalStatus = "Absent";
-    action = "Wrong Sensor - No Recovery";
+    action = "No Weight Detected";
+    sensorConfirmed = false;
+    sensorWeight = 0.0; // Ensure weight is 0.0 for absent students
+  } else if (weight < WEIGHT_MINIMUM_THRESHOLD && sensorIndex >= 0) {
+    // If weight is too low but we have a valid sensor reading
+    finalStatus = "Pending";
+    action = "Weight Too Low";
     sensorConfirmed = false;
   }
+  
+  // For initial tap with no weight reading yet
+  bool isInitialTap = (sensorIndex == -1 && weight < 1.0 && !sensorConfirmed);
 
   String sensorStr = (sensorIndex >= 0) ? "Sensor " + String(sensorIndex + 1) + " (" + sensorType + ")" : "Not Assigned";
 
@@ -2559,6 +3534,7 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
                    " Action:" + action +
                    " Status:" + finalStatus +
                    " Sensor:" + sensorStr +
+                   " Weight:" + String(sensorWeight) +  // Use sanitized weight value
                    " assignedSensorId:" + String(sensorIndex >= 0 ? sensorIndex : -1) +
                    (timeOut != "" ? " TimeOut:" + timeOut : "");
     yield(); // Yield before SD write
@@ -2599,11 +3575,20 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
               if (scheduleObj.get(fieldData, "startTime")) newScheduleObj.set("startTime", fieldData.stringValue);
               if (scheduleObj.get(fieldData, "endTime")) newScheduleObj.set("endTime", fieldData.stringValue);
               yield();
-              if (scheduleObj.get(fieldData, "roomName")) newScheduleObj.set("roomName", fieldData.stringValue);
-              if (scheduleObj.get(fieldData, "subjectCode")) newScheduleObj.set("subjectCode", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "roomName")) {
+                newScheduleObj.set("roomName", fieldData.stringValue);
+                roomName = fieldData.stringValue;
+              }
+              if (scheduleObj.get(fieldData, "subjectCode")) {
+                newScheduleObj.set("subjectCode", fieldData.stringValue);
+                subjectCode = fieldData.stringValue;
+              }
               if (scheduleObj.get(fieldData, "subject")) newScheduleObj.set("subject", fieldData.stringValue);
               yield();
-              if (scheduleObj.get(fieldData, "section")) newScheduleObj.set("section", fieldData.stringValue);
+              if (scheduleObj.get(fieldData, "section")) {
+                newScheduleObj.set("section", fieldData.stringValue);
+                sectionName = fieldData.stringValue;
+              }
               if (scheduleObj.get(fieldData, "instructorName")) newScheduleObj.set("instructorName", fieldData.stringValue);
               if (scheduleObj.get(fieldData, "sectionId")) {
                 newScheduleObj.set("sectionId", fieldData.stringValue);
@@ -2619,90 +3604,109 @@ void logStudentToRTDB(String rfidUid, String timestamp, float weight, int sensor
                 if (scheduleObj.get(fieldData, "startTime")) startTime = fieldData.stringValue;
                 if (scheduleObj.get(fieldData, "endTime")) endTime = fieldData.stringValue;
                 if (isTimeInRange(currentTime, startTime, endTime)) {
-                  if (scheduleObj.get(fieldData, "subjectCode")) subjectCode = fieldData.stringValue;
-                  if (scheduleObj.get(fieldData, "roomName")) roomName = fieldData.stringValue;
-                  if (scheduleObj.get(fieldData, "section")) sectionName = fieldData.stringValue;
                   matchedSchedule = newScheduleObj;
+                  yield(); // Yield after match
+                  break;
                 }
               }
-              yield(); // Yield after schedule processing
             }
           }
         }
       }
     }
 
-    yield(); // Yield before final JSON updates
-    
-    // Construct the session ID for this attendance record
-    // Format: YYYY_MM_DD_SubjectCode_Section_Room
-    String sessionId = date + "_" + subjectCode + "_" + sectionName + "_" + roomName;
-    
-    // Path for the new attendance record
-    String path = "/Students/" + rfidUid + "/Attendance/" + sessionId;
-    
-    yield(); // Yield before attendance JSON creation
-    
-    // Create the attendance info JSON object
-    FirebaseJson attendanceInfoJson;
-    attendanceInfoJson.set("action", action);
-    yield();
-    attendanceInfoJson.set("assignedSensorId", sensorIndex >= 0 ? sensorIndex : -1);
-    attendanceInfoJson.set("date", date);
-    attendanceInfoJson.set("sensor", sensorStr);
-    yield();
-    attendanceInfoJson.set("sensorConfirmed", sensorConfirmed);
-    attendanceInfoJson.set("sessionId", sessionId);
-    attendanceInfoJson.set("status", finalStatus);
-    yield();
-    attendanceInfoJson.set("timeIn", timestamp);
-    attendanceInfoJson.set("timeOut", timeOut);
-    attendanceInfoJson.set("timestamp", timestamp);
-    yield();
-    attendanceInfoJson.set("weight", sensorWeight);
-    attendanceInfoJson.set("weightUnit", "kg");
-    
-    // Create the personal info JSON object
-    FirebaseJson personalInfoJson;
-    personalInfoJson.set("department", department);
-    personalInfoJson.set("email", email);
-    personalInfoJson.set("fullName", studentName);
-    personalInfoJson.set("idNumber", idNumber);
-    personalInfoJson.set("mobileNumber", mobileNumber);
-    personalInfoJson.set("role", role);
-    
-    // Create the main JSON object for this attendance record
-    FirebaseJson attendanceJson;
-    attendanceJson.set("allSchedules", allSchedulesArray);
-    attendanceJson.set("attendanceInfo", attendanceInfoJson);
-    attendanceJson.set("personalInfo", personalInfoJson);
-    
-    yield(); // Yield before RTDB update
-    
-    // Update RTDB with the attendance record
-    if (Firebase.RTDB.setJSON(&fbdo, path, &attendanceJson)) {
-      Serial.println("Student attendance logged successfully for " + rfidUid);
+    yield(); // Yield before session ID check
+
+    // Get the last session ID
+    String lastSessionId = "";
+    if (currentSessionId != "") {
+      lastSessionId = currentSessionId;
+    } else {
+      String lastSessionPath = "/Students/" + rfidUid + "/lastSession";
+      if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+        lastSessionId = fbdo.stringData();
+      }
+    }
+
+    if (lastSessionId != "") {
+      yield(); // Yield before attendance path check
+      // Check if this is a continued attendance record or new one
+      String attendancePath = "/Students/" + rfidUid + "/Attendance/" + lastSessionId;
+      FirebaseJson attendanceInfoJson;
       
-      // Update the lastSession field and sectionId field at student root level
-      FirebaseJson updateJson;
-      updateJson.set("lastSession", sessionId);
-      if (sectionId.length() > 0) {
-        updateJson.set("sectionId", sectionId);
+      // Set base attendance info
+      attendanceInfoJson.set("status", finalStatus);
+      attendanceInfoJson.set("timeIn", timestamp);
+      attendanceInfoJson.set("action", action);
+      attendanceInfoJson.set("sensorType", sensorType);
+      attendanceInfoJson.set("rfidAuthenticated", true);
+      attendanceInfoJson.set("assignedSensorId", sensorIndex >= 0 ? sensorIndex : -1);
+      attendanceInfoJson.set("sensorConfirmed", sensorConfirmed);
+      
+      // Only set weight if we have an actual reading (not for initial tap or absent)
+      if (!isInitialTap && weight > 0.1) {
+        attendanceInfoJson.set("weight", sensorWeight);
+        attendanceInfoJson.set("weightUnit", "kg");
       }
       
-      if (Firebase.RTDB.updateNode(&fbdo, "/Students/" + rfidUid, &updateJson)) {
-        Serial.println("Updated lastSession for student " + rfidUid);
+      if (timeOut != "") {
+        attendanceInfoJson.set("timeOut", timeOut);
+      }
+
+      // Add session info
+      FirebaseJson sessionInfoJson;
+      sessionInfoJson.set("sessionStartTime", timestamp);
+      sessionInfoJson.set("subjectCode", subjectCode);
+      sessionInfoJson.set("roomName", roomName);
+      sessionInfoJson.set("section", sectionName);
+
+      // Update the RTDB with attendance info
+      yield(); // Yield before Firebase update
+      String attendanceInfoPath = attendancePath + "/attendanceInfo";
+      if (Firebase.RTDB.updateNode(&fbdo, attendanceInfoPath, &attendanceInfoJson)) {
+        Serial.println("Updated attendance info for " + rfidUid + " session " + lastSessionId + ": " + finalStatus);
       } else {
-        Serial.println("Failed to update lastSession: " + fbdo.errorReason());
+        Serial.println("Failed to update attendance: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
+      }
+      
+      // Update session info if not already set
+      yield(); // Yield before session info update
+      String sessionInfoPath = attendancePath + "/sessionInfo";
+      if (Firebase.RTDB.updateNode(&fbdo, sessionInfoPath, &sessionInfoJson)) {
+        Serial.println("Updated session info for " + rfidUid);
+      } else {
+        Serial.println("Failed to update session info: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
+      }
+
+      // Set the last session for this student
+      yield(); // Yield before last session update
+      String lastSessionPath = "/Students/" + rfidUid + "/lastSession";
+      if (Firebase.RTDB.setString(&fbdo, lastSessionPath, lastSessionId)) {
+        Serial.println("Updated last session for " + rfidUid + " to " + lastSessionId);
+      } else {
+        Serial.println("Failed to update last session: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
       }
     } else {
-      Serial.println("Failed to log attendance: " + fbdo.errorReason());
-      storeLogToSD("AttendanceLogFailed:UID:" + rfidUid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
+      Serial.println("No session ID available for " + rfidUid);
     }
   }
-
+  
   yield(); // Final yield before updating timers
-
   firstActionOccurred = true;
   lastActivityTime = millis();
   lastReadyPrint = millis();
@@ -2797,6 +3801,11 @@ void logUnregisteredUID(String uid, String timestamp) {
       }
     } else {
       Serial.println("Failed to retrieve Firestore students: " + firestoreFbdo.errorReason());
+      if (firestoreFbdo.errorReason().indexOf("ssl") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("connection") >= 0 || 
+          firestoreFbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
     
     // If we reach here, the UID is not in Firestore, so log it as unregistered
@@ -2806,6 +3815,11 @@ void logUnregisteredUID(String uid, String timestamp) {
       Serial.println("Failed to log unregistered UID to RTDB: " + fbdo.errorReason());
       String entry = "Unregistered:UID:" + uid + " Time:" + timestamp;
       storeLogToSD(entry);
+      if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+          fbdo.errorReason().indexOf("connection") >= 0 || 
+          fbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
     }
   } else {
     // Offline mode - log to SD
@@ -2848,185 +3862,30 @@ void logAdminAccess(String uid, String timestamp) {
   sanitizedTimestamp.replace(":", "");
   sanitizedTimestamp.replace("/", "_");
 
-  // Determine action
-  bool isEntry = !adminAccessActive;
+  // Determine action based on current state and UID
+  bool isEntry;
+  if (!adminAccessActive) {
+    // No active session, this is an entry
+    isEntry = true;
+  } else if (uid == lastAdminUID) {
+    // Same admin tapping again, this is an exit
+    isEntry = false;
+  } else {
+    // Different admin trying to access while session is active
+    entry = "Admin:UID:" + uid + " Time:" + timestamp + " Action:Denied_DifferentUID";
+    storeLogToSD(entry);
+    deniedFeedback();
+    Serial.println("Different admin UID detected: " + uid);
+    displayMessage("Session Active", "Use Same UID", 2000);
+    displayMessage("Admin Mode", "Active", 0);
+    return;
+  }
+
   String action = isEntry ? "entry" : "exit";
 
   // Assign room before creating the AccessLogs entry
   if (isEntry) {
     assignedRoomId = assignRoomToAdmin(uid);
-  }
-
-  // Log PZEM data on exit for SD
-  if (!isEntry) {
-    float voltage = max(pzem.voltage(), 0.0f);
-    float current = max(pzem.current(), 0.0f);
-    float power = max(pzem.power(), 0.0f);
-    float energy = max(pzem.energy(), 0.0f);
-    float frequency = max(pzem.frequency(), 0.0f);
-    float powerFactor = max(pzem.pf(), 0.0f);
-    entry += " Action:Exit Voltage:" + String(voltage, 2) + "V Current:" + String(current, 2) + "A Power:" + String(power, 2) +
-             "W Energy:" + String(energy, 3) + "kWh Frequency:" + String(frequency, 2) + "Hz PowerFactor:" + String(powerFactor, 2);
-  } else {
-    entry += " Action:Entry";
-  }
-  storeLogToSD(entry);
-
-  // Firebase logging (/AccessLogs and /AdminPZEM)
-  if (!sdMode && isConnected && Firebase.ready()) {
-    // /AccessLogs
-    String accessPath = "/AccessLogs/" + uid + "/" + sanitizedTimestamp;
-    FirebaseJson accessJson;
-    accessJson.set("action", action);
-    accessJson.set("timestamp", timestamp);
-    accessJson.set("fullName", fullName);
-    accessJson.set("role", role);
-
-    // For entry, add room details to AccessLogs
-    if (isEntry) {
-      // Using assignedRoomId set before Firebase operations
-      if (assignedRoomId != "" && firestoreRooms.find(assignedRoomId) != firestoreRooms.end()) {
-        const auto& roomData = firestoreRooms[assignedRoomId];
-        FirebaseJson roomDetails;
-
-        // Use at() for const map access and proper error handling
-        try {
-          roomDetails.set("building", roomData.count("building") ? roomData.at("building") : "Unknown");
-          roomDetails.set("floor", roomData.count("floor") ? roomData.at("floor") : "Unknown");
-          roomDetails.set("name", roomData.count("name") ? roomData.at("name") : "Unknown");
-          roomDetails.set("status", "maintenance");  // Always set to maintenance for admin inspections
-          roomDetails.set("type", roomData.count("type") ? roomData.at("type") : "Unknown");
-          accessJson.set("roomDetails", roomDetails);
-
-          // Also update the room status in Firestore
-          String roomPath = "rooms/" + assignedRoomId;
-          FirebaseJson contentJson;
-          contentJson.set("fields/status/stringValue", "maintenance");
-          
-          if (Firebase.Firestore.patchDocument(&firestoreFbdo, FIRESTORE_PROJECT_ID, "", roomPath.c_str(), contentJson.raw(), "status")) {
-            Serial.println("Room status updated to 'maintenance' in Firestore: " + assignedRoomId);
-          } else {
-            Serial.println("Failed to update room status in Firestore: " + firestoreFbdo.errorReason());
-          }
-        } catch (const std::out_of_range& e) {
-          Serial.println("Error accessing room data: " + String(e.what()));
-          roomDetails.set("building", "Unknown");
-          roomDetails.set("floor", "Unknown");
-          roomDetails.set("name", "Unknown");
-          roomDetails.set("status", "maintenance");
-          roomDetails.set("type", "Unknown");
-          accessJson.set("roomDetails", roomDetails);
-        }
-      }
-    }
-
-    // For exit, add PZEM data to AccessLogs
-    if (!isEntry && isVoltageSufficient) {
-      // Get the entry timestamp to find the entry record
-      String entryTimestamp = "";
-      if (Firebase.RTDB.getJSON(&fbdo, "/AccessLogs/" + uid)) {
-        FirebaseJson json;
-        json.setJsonData(fbdo.to<FirebaseJson>().raw());
-        
-        // Find the most recent "entry" action using Firebase iterators correctly
-        size_t count = json.iteratorBegin();
-        String latestEntryKey = "";
-        
-        for (size_t i = 0; i < count; i++) {
-          int type = 0;
-          String key, value;
-          json.iteratorGet(i, type, key, value);
-          
-          if (type == FirebaseJson::JSON_OBJECT) {
-            // This is an entry, check if it has 'action' = 'entry'
-            FirebaseJson entryJson;
-            FirebaseJsonData actionData;
-            
-            // Create a new JSON with just this item and check it
-            String jsonStr = "{\"" + key + "\":" + value + "}";
-            FirebaseJson keyJson;
-            keyJson.setJsonData(jsonStr);
-            
-            // Get action from this entry
-            if (keyJson.get(actionData, key + "/action") && 
-                actionData.stringValue == "entry") {
-              // Found an entry action, check if it's newer
-              if (latestEntryKey == "" || key.compareTo(latestEntryKey) > 0) {
-                latestEntryKey = key;
-              }
-            }
-          }
-        }
-        
-        json.iteratorEnd();
-        
-        if (latestEntryKey != "") {
-          entryTimestamp = latestEntryKey;
-          Serial.println("Found latest entry record timestamp: " + entryTimestamp);
-          
-          // Update room status back to "available" when admin exits
-          FirebaseJson statusUpdate;
-          statusUpdate.set("status", "available");
-          
-          if (Firebase.RTDB.updateNode(&fbdo, "/AccessLogs/" + uid + "/" + entryTimestamp + "/roomDetails", &statusUpdate)) {
-            Serial.println("Room status updated to 'available' in entry record: " + entryTimestamp);
-          } else {
-            Serial.println("Failed to update room status: " + fbdo.errorReason());
-          }
-        }
-      }
-      
-      // No need to update the roomDetails/exit data since we have a separate exit record
-      // We'll only keep the PZEM data in the separate exit record
-      
-      // Add PZEM data to the current exit record
-      FirebaseJson pzemData;
-      pzemData.set("voltage", lastVoltage);
-      pzemData.set("current", lastCurrent);
-      pzemData.set("power", lastPower);
-      pzemData.set("energy", lastEnergy);
-      pzemData.set("frequency", lastFrequency);
-      pzemData.set("powerFactor", lastPowerFactor);
-      accessJson.set("pzemData", pzemData);
-    }
-
-    Serial.print("Pushing to RTDB: " + accessPath + "... ");
-    if (Firebase.RTDB.setJSON(&fbdo, accessPath, &accessJson)) {
-      Serial.println("Success");
-      Serial.println("Admin " + fullName + " access logged: " + action);
-    } else {
-      Serial.println("Failed: " + fbdo.errorReason());
-      storeLogToSD("AccessLogFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
-    }
-
-    // We no longer log to AdminPZEM, using AccessLogs instead
-    yield();
-
-    // Update /Admin/<uid>
-    if (!userData.empty()) {
-      String adminPath = "/Admin/" + uid;
-      FirebaseJson adminJson;
-      adminJson.set("fullName", userData["fullName"]);
-      adminJson.set("role", userData["role"]);
-      adminJson.set("createdAt", userData.count("createdAt") ? userData["createdAt"] : "2025-01-01T00:00:00.000Z");
-      adminJson.set("email", userData.count("email") ? userData["email"] : "unknown@gmail.com");
-      adminJson.set("idNumber", userData.count("idNumber") ? userData["idNumber"] : "N/A");
-      adminJson.set("rfidUid", uid);
-      // Only update lastTamperStop if previously set (avoid overwriting tamper resolution)
-      if (userData.count("lastTamperStop")) {
-        adminJson.set("lastTamperStop", userData["lastTamperStop"]);
-      }
-
-      Serial.print("Updating RTDB: " + adminPath + "... ");
-      if (Firebase.RTDB.setJSON(&fbdo, adminPath, &adminJson)) {
-        Serial.println("Success");
-        Serial.println("Admin details updated in RTDB at " + adminPath);
-      } else {
-        Serial.println("Failed: " + fbdo.errorReason());
-        storeLogToSD("AdminUpdateFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
-      }
-    yield();
-    }
   }
 
   // Handle entry
@@ -3050,7 +3909,7 @@ void logAdminAccess(String uid, String timestamp) {
     displayMessage("Admin Mode", "Active", 0);
 
   // Handle exit
-  } else if (uid == lastAdminUID) {
+  } else {
     deactivateRelays();
     adminAccessActive = false;
     lastAdminUID = "";
@@ -3077,15 +3936,6 @@ void logAdminAccess(String uid, String timestamp) {
     displayMessage("Admin Access", "Ended", 2000);
     displayMessage("Door Locked", "", 2000);
     displayMessage("Ready. Tap your", "RFID Card!", 0);
-
-  // Handle different UID
-  } else {
-    entry = "Admin:UID:" + uid + " Time:" + timestamp + " Action:Denied_DifferentUID";
-    storeLogToSD(entry);
-    deniedFeedback();
-    Serial.println("Different admin UID detected: " + uid);
-    displayMessage("Session Active", "Use Same UID", 2000);
-    displayMessage("Admin Mode", "Active", 0);
   }
 
   // Update timers
@@ -3097,88 +3947,191 @@ void logAdminAccess(String uid, String timestamp) {
   Serial.println("Heap after logAdminAccess: " + String(ESP.getFreeHeap()) + " bytes");
 }
 
-void logAdminTamperStop(String uid, String timestamp) {
-  String entry = "Admin:" + uid + " TamperStopped:" + timestamp;
+void logAdminAccess(String uid, String timestamp) {
+  // Heap check to prevent crashes
+  uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 15000) {
+    Serial.println("Warning: Low heap (" + String(freeHeap) + " bytes). Skipping Firebase operations.");
+    storeLogToSD("LowHeapWarning:UID:" + uid + " Time:" + timestamp);
+    deniedFeedback();
+    displayMessage("System Busy", "Try Again", 2000);
+    return;
+  }
+
+  // SD log entry (basic)
+  String entry = "Admin:UID:" + uid + " Time:" + timestamp;
+
+  // Validate admin UID
+  if (!isAdminUID(uid)) {
+    entry += " Action:Denied_NotAdmin";
+    storeLogToSD(entry);
+    deniedFeedback();
+    displayMessage("Not Admin", "Access Denied", 2000);
+    return;
+  }
+
+  // Fetch user details
+  std::map<String, String> userData = fetchUserDetails(uid);
+  String fullName = userData.empty() ? "Unknown" : userData["fullName"];
+  String role = userData.empty() ? "admin" : userData["role"];
+
+  // Sanitize timestamp for Firebase paths
+  String sanitizedTimestamp = timestamp;
+  sanitizedTimestamp.replace(" ", "_");
+  sanitizedTimestamp.replace(":", "");
+  sanitizedTimestamp.replace("/", "_");
+
+  // Determine action based on current state and UID
+  bool isEntry;
+  if (!adminAccessActive) {
+    // No active session, this is an entry
+    isEntry = true;
+  } else if (uid == lastAdminUID) {
+    // Same admin tapping again, this is an exit
+    isEntry = false;
+  } else {
+    // Different admin trying to access while session is active
+    entry = "Admin:UID:" + uid + " Time:" + timestamp + " Action:Denied_DifferentUID";
+    storeLogToSD(entry);
+    deniedFeedback();
+    Serial.println("Different admin UID detected: " + uid);
+    displayMessage("Session Active", "Use Same UID", 2000);
+    displayMessage("Admin Mode", "Active", 0);
+    return;
+  }
+
+  String action = isEntry ? "entry" : "exit";
+
+  // Update SD log entry with action
+  entry += " Action:" + action;
   storeLogToSD(entry);
 
-  // Update tamper event in Alerts/Tamper node
+  // Update Firebase RTDB
   if (!sdMode && isConnected && Firebase.ready()) {
-    // Use currentTamperAlertId if available, fallback to tamperStartTime
-    String alertId = currentTamperAlertId.length() > 0 ? currentTamperAlertId : tamperStartTime;
-    String tamperPath = "/Alerts/Tamper/" + alertId;
-    
-    // Fetch user details for resolvedByFullName
-    std::map<String, String> userData = fetchUserDetails(uid);
-    String fullName = userData.empty() ? "Unknown Admin" : userData["fullName"];
-    String role = userData.empty() ? "admin" : userData["role"];
-    
-    FirebaseJson tamperJson;
-    tamperJson.set("endTime", timestamp);
-    tamperJson.set("status", "resolved");
-    tamperJson.set("resolvedBy", uid);
-    tamperJson.set("resolverName", fullName);
-    tamperJson.set("resolverRole", role);
-    tamperJson.set("resolutionTime", timestamp);
+    String adminPath = "/Admin/" + uid;
+    FirebaseJson adminJson;
+    adminJson.set("fullName", fullName);
+    adminJson.set("role", role);
+    adminJson.set("lastAccess", timestamp);
+    adminJson.set("lastAction", action);
+    adminJson.set("email", userData["email"].length() > 0 ? userData["email"] : "unknown@gmail.com");
+    adminJson.set("idNumber", userData["idNumber"].length() > 0 ? userData["idNumber"] : "N/A");
+    adminJson.set("createdAt", userData.count("createdAt") > 0 ? userData["createdAt"] : "2025-01-01T00:00:00.000Z");
+    adminJson.set("rfidUid", uid);
 
-    Serial.print("Logging tamper resolution: " + tamperPath + "... ");
-    if (Firebase.RTDB.updateNode(&fbdo, tamperPath, &tamperJson)) {
+    Serial.print("Updating RTDB: " + adminPath + "... ");
+    if (Firebase.RTDB.updateNode(&fbdo, adminPath, &adminJson)) {
       Serial.println("Success");
-      Serial.println("Tamper event resolved at " + tamperPath + " by UID " + uid);
+      Serial.println("Admin node updated at " + adminPath);
     } else {
       Serial.println("Failed: " + fbdo.errorReason());
-      storeLogToSD("TamperStopFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
-    }
-
-    // Update /Admin/<uid> with original fields and tamper resolution info
-    if (!userData.empty()) {
-      String adminPath = "/Admin/" + uid;
-      FirebaseJson adminJson;
-      adminJson.set("fullName", userData["fullName"]);
-      adminJson.set("role", userData["role"]);
-      adminJson.set("lastTamperStop", timestamp);
-      adminJson.set("lastTamperAlertId", alertId);
-      // Restore original fields
-      adminJson.set("email", userData["email"].length() > 0 ? userData["email"] : "unknown@gmail.com");
-      adminJson.set("idNumber", userData["idNumber"].length() > 0 ? userData["idNumber"] : "N/A");
-      adminJson.set("createdAt", userData["createdAt"].length() > 0 ? userData["createdAt"] : "2025-01-01T00:00:00.000Z");
-      adminJson.set("rfidUid", uid);
-
-      Serial.print("Updating RTDB: " + adminPath + "... ");
-      if (Firebase.RTDB.updateNode(&fbdo, adminPath, &adminJson)) {
-        Serial.println("Success");
-        Serial.println("Admin node updated for tamper resolution at " + adminPath);
-      } else {
-        Serial.println("Failed: " + fbdo.errorReason());
-        storeLogToSD("AdminUpdateFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
-      }
-    } else {
-      Serial.println("No Firestore data for UID " + uid + "; logging minimal /Admin update.");
-      String adminPath = "/Admin/" + uid;
-      FirebaseJson adminJson;
-      adminJson.set("fullName", "Unknown Admin");
-      adminJson.set("role", "admin");
-      adminJson.set("lastTamperStop", timestamp);
-      adminJson.set("lastTamperAlertId", alertId);
-      adminJson.set("email", "unknown@gmail.com");
-      adminJson.set("idNumber", "N/A");
-      adminJson.set("createdAt", "2025-01-01T00:00:00.000Z");
-      adminJson.set("rfidUid", uid);
-
-      if (Firebase.RTDB.updateNode(&fbdo, adminPath, &adminJson)) {
-        Serial.println("Minimal admin node updated at " + adminPath);
-      } else {
-        Serial.println("Minimal admin update failed: " + fbdo.errorReason());
+      storeLogToSD("AdminUpdateFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
+      if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+          fbdo.errorReason().indexOf("connection") >= 0 || 
+          fbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
       }
     }
   } else {
-    Serial.println("Firebase unavailable; tamper stop logged to SD.");
-    std::map<String, String> userData = fetchUserDetails(uid);
-    String fullName = userData.empty() ? "Unknown Admin" : userData["fullName"];
-    String detailedEntry = "Admin:" + uid + " TamperStopped:" + timestamp + 
-                          " ResolvedByUID:" + uid + " ResolvedByFullName:" + fullName;
-    storeLogToSD(detailedEntry);
+    Serial.println("Firebase unavailable; admin access logged to SD.");
   }
 
+  // Update Firebase Firestore
+  if (!sdMode && isConnected && Firebase.ready()) {
+    String docPath = "smartecolock/users/" + uid;
+    FirebaseJson docJson;
+    docJson.set("fields/fullName/stringValue", fullName);
+    docJson.set("fields/role/stringValue", role);
+    docJson.set("fields/lastAccess/timestampValue", timestamp);
+    docJson.set("fields/lastAction/stringValue", action);
+    docJson.set("fields/email/stringValue", userData["email"].length() > 0 ? userData["email"] : "unknown@gmail.com");
+    docJson.set("fields/idNumber/stringValue", userData["idNumber"].length() > 0 ? userData["idNumber"] : "N/A");
+    docJson.set("fields/createdAt/timestampValue", userData.count("createdAt") > 0 ? userData["createdAt"] : "2025-01-01T00:00:00.000Z");
+    docJson.set("fields/rfidUid/stringValue", uid);
+
+    Serial.print("Updating Firestore: " + docPath + "... ");
+    if (Firebase.Firestore.patchDocument(&fbdo, "smartecolock", "", docPath, &docJson)) {
+      Serial.println("Success");
+      Serial.println("Firestore document updated at " + docPath);
+    } else {
+      Serial.println("Failed: " + fbdo.errorReason());
+      storeLogToSD("FirestoreUpdateFailed:UID:" + uid + " Time:" + timestamp + " Error:" + fbdo.errorReason());
+      if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+          fbdo.errorReason().indexOf("connection") >= 0 || 
+          fbdo.errorReason().indexOf("SSL") >= 0) {
+        handleFirebaseSSLError();
+      }
+    }
+  } else {
+    Serial.println("Firebase unavailable; admin access logged to SD.");
+  }
+
+  // Update adminAccessActive and lastAdminUID
+  adminAccessActive = isEntry;
+  if (isEntry) {
+    lastAdminUID = uid;
+    lastAdminAccessTime = millis();
+    adminAccessStartTime = millis();
+    adminAccessStartTimestamp = timestamp;
+    adminAccessStarted = true;
+    adminAccessEnded = false;
+    adminAccessDuration = 0;
+    adminAccessEntryCount++;
+    adminAccessExitCount = 0;
+    adminAccessEntryTimestamp = timestamp;
+    adminAccessExitTimestamp = "";
+    adminAccessEntryUID = uid;
+    adminAccessExitUID = "";
+    adminAccessEntryFullName = fullName;
+    adminAccessExitFullName = "";
+    adminAccessEntryRole = role;
+    adminAccessExitRole = "";
+    adminAccessEntryEmail = userData["email"].length() > 0 ? userData["email"] : "unknown@gmail.com";
+    adminAccessExitEmail = "";
+    adminAccessEntryIdNumber = userData["idNumber"].length() > 0 ? userData["idNumber"] : "N/A";
+    adminAccessExitIdNumber = "";
+    adminAccessEntryCreatedAt = userData.count("createdAt") > 0 ? userData["createdAt"] : "2025-01-01T00:00:00.000Z";
+    adminAccessExitCreatedAt = "";
+    adminAccessEntryRfidUid = uid;
+    adminAccessExitRfidUid = "";
+  } else {
+    lastAdminUID = "";
+    lastAdminAccessTime = millis();
+    adminAccessStartTime = 0;
+    adminAccessStartTimestamp = "";
+    adminAccessStarted = false;
+    adminAccessEnded = true;
+    adminAccessDuration = millis() - adminAccessStartTime;
+    adminAccessEntryCount = 0;
+    adminAccessExitCount++;
+    adminAccessEntryTimestamp = "";
+    adminAccessExitTimestamp = timestamp;
+    adminAccessEntryUID = "";
+    adminAccessExitUID = uid;
+    adminAccessEntryFullName = "";
+    adminAccessExitFullName = fullName;
+    adminAccessEntryRole = "";
+    adminAccessExitRole = role;
+    adminAccessEntryEmail = "";
+    adminAccessExitEmail = userData["email"].length() > 0 ? userData["email"] : "unknown@gmail.com";
+    adminAccessEntryIdNumber = "";
+    adminAccessExitIdNumber = userData["idNumber"].length() > 0 ? userData["idNumber"] : "N/A";
+    adminAccessEntryCreatedAt = "";
+    adminAccessExitCreatedAt = userData.count("createdAt") > 0 ? userData["createdAt"] : "2025-01-01T00:00:00.000Z";
+    adminAccessEntryRfidUid = "";
+    adminAccessExitRfidUid = uid;
+  }
+
+  // Update LCD display
+  if (isEntry) {
+    displayMessage("Admin Mode", "Active", 0);
+    Serial.println("Admin UID " + uid + " entered admin mode.");
+  } else {
+    displayMessage("Admin Mode", "Exited", 2000);
+    Serial.println("Admin UID " + uid + " exited admin mode.");
+  }
+
+  // Update activity timers
   firstActionOccurred = true;
   lastActivityTime = millis();
   lastReadyPrint = millis();
@@ -3196,11 +4149,46 @@ void logSystemEvent(String event) {
 }
 
 void watchdogCheck() {
-  if ((millis() - lastReadyPrint > 300000) && !adminAccessActive && !tamperActive) {
+  // Only trigger watchdog if there's no active operation that could legitimately take a long time
+  if ((millis() - lastReadyPrint > 300000) && 
+      !adminAccessActive && 
+      !tamperActive && 
+      !classSessionActive && 
+      !studentVerificationActive && 
+      !relayActive && 
+      !tapOutPhase) {
     Serial.println("Watchdog timeout. Restarting system.");
     logSystemEvent("Watchdog Reset");
     ESP.restart();
   }
+}
+
+// Add the feedWatchdog function implementation
+void feedWatchdog() {
+  // ESP32 Arduino core doesn't have ESP.wdtFeed(), use alternatives
+  yield();
+  delay(1); // Tiny delay to ensure background processes can run
+}
+
+// Helper function for safe Firebase operations with watchdog handling
+void safeFirebaseOperation() {
+  static unsigned long operationStartTime = 0;
+  
+  // First Firebase operation call
+  if (operationStartTime == 0) {
+    operationStartTime = millis();
+    return;
+  }
+  
+  // Reset watchdog during long-running Firebase operations
+  if (millis() - operationStartTime > 5000) {
+    Serial.println("Long-running Firebase operation, resetting watchdog");
+    lastReadyPrint = millis();
+    operationStartTime = millis();
+  }
+  
+  // Always yield during Firebase operations
+  yield();
 }
 
 bool checkResetButton() {
@@ -3275,43 +4263,115 @@ unsigned long displayDuration = 0;
 bool displayingMessage = false;
 
 void displayMessage(String line1, String line2, unsigned long duration = 3000) {
+  // Fix variable names to match existing code
+  static String currentLine1 = "";
+  static String currentLine2 = "";
+  static unsigned long displayStartTime = 0;
+  static bool transitionInProgress = false;
+  static int transitionStep = 0;
+  static unsigned long lastTransitionStep = 0;
+  
+  // Check heap memory
   if (ESP.getFreeHeap() < 5000) {
     Serial.println("Low heap memory: " + String(ESP.getFreeHeap()));
     recoverI2C();
     return;
   }
-
-  int retryCount = 0;
-  const int maxRetries = 3;
-  while (retryCount < maxRetries) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(line1.substring(0, 16));
-    lcd.setCursor(0, 1);
-    lcd.print(line2.substring(0, 16));
-
-    Wire.beginTransmission(0x27);
-    if (Wire.endTransmission() == 0) break;
-    Serial.println("I2C communication failed, retrying... Attempt " + String(retryCount + 1));
-    recoverI2C();
-    delay(10); // Short blocking delay, safe for I2C recovery
-    yield();
-    retryCount++;
+  
+  // Truncate messages to 16 chars
+  line1 = line1.substring(0, 16);
+  line2 = line2.substring(0, 16);
+  
+  // If same message is already displayed, just update the duration timer
+  if (line1 == currentLine1 && line2 == currentLine2 && !transitionInProgress) {
+    displayStartTime = millis();
+    displayDuration = duration;
+    displayingMessage = (duration > 0);
+    return;
   }
-  if (retryCount >= maxRetries) {
-    Serial.println("I2C recovery failed after " + String(maxRetries) + " attempts!");
-    lcd.noBacklight();
-  } else {
-    lcd.backlight();
+  
+  // Start transition if not already in progress
+  if (!transitionInProgress) {
+    transitionInProgress = true;
+    transitionStep = 0;
+    lastTransitionStep = millis();
   }
-
-  // Set state for non-blocking display
-  currentLine1 = line1.substring(0, 16);
-  currentLine2 = line2.substring(0, 16);
-  displayStartTime = millis();
-  displayDuration = duration;
-  displayingMessage = (duration > 0);
-
+  
+  // Handle transitions
+  if (transitionInProgress) {
+    if (millis() - lastTransitionStep >= 10) { // 10ms between transition steps
+      lastTransitionStep = millis();
+      
+      switch (transitionStep) {
+        case 0: {
+          // Fade out
+          int retryCount = 0;
+          const int maxRetries = 3;
+          while (retryCount < maxRetries) {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(currentLine1);
+            lcd.setCursor(0, 1);
+            lcd.print(currentLine2);
+            
+            Wire.beginTransmission(0x27);
+            if (Wire.endTransmission() == 0) break;
+            Serial.println("I2C communication failed, retrying... Attempt " + String(retryCount + 1));
+            recoverI2C();
+            delay(10); // Short blocking delay, safe for I2C recovery
+            yield();
+            retryCount++;
+          }
+          
+          // Prepare for fade-in
+          transitionStep = 1;
+          yield(); // Allow system to process during transition
+          break;
+        }
+        
+        case 1: {
+          // Fade in
+          int retryCount = 0;
+          const int maxRetries = 3;
+          while (retryCount < maxRetries) {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(line1);
+            lcd.setCursor(0, 1);
+            lcd.print(line2);
+            
+            Wire.beginTransmission(0x27);
+            if (Wire.endTransmission() == 0) break;
+            Serial.println("I2C communication failed, retrying... Attempt " + String(retryCount + 1));
+            recoverI2C();
+            delay(10); // Short blocking delay, safe for I2C recovery
+            yield();
+            retryCount++;
+          }
+          
+          // Update current displayed message
+          currentLine1 = line1;
+          currentLine2 = line2;
+          displayStartTime = millis();
+          displayDuration = duration;
+          displayingMessage = (duration > 0);
+          transitionInProgress = false;
+          
+          // For backlight control
+          if (retryCount >= maxRetries) {
+            lcd.noBacklight();
+          } else {
+            lcd.backlight();
+          }
+          
+          yield(); // Allow system to process during transition
+          break;
+        }
+      }
+    }
+  }
+  
+  // Update activity timers
   lastActivityTime = millis();
   lastReadyPrint = millis();
 }
@@ -3319,58 +4379,82 @@ void displayMessage(String line1, String line2, unsigned long duration = 3000) {
 void updateDisplay() {
   if (displayingMessage && millis() - displayStartTime >= displayDuration) {
     displayingMessage = false;
-    // Optionally clear or update LCD here if needed
-    // lcd.clear();
-    // lcd.setCursor(0, 0);
-    // lcd.print("Ready. Tap your");
-    // lcd.setCursor(0, 1);
-    // lcd.print("RFID Card!");
+    
+    // Handle different states for display
+    if (tapOutPhase && presentCount > 0) {
+      // During tap-out phase, periodically show the remaining count
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Students Remaining:");
+      lcd.setCursor(0, 1);
+      lcd.print(String(presentCount));
+    } else if (!displayingMessage) {
+      // Default ready message when no special message is being shown
+      // Uncomment if you want to show default message
+      // lcd.clear();
+      // lcd.setCursor(0, 0);
+      // lcd.print("Ready. Tap your");
+      // lcd.setCursor(0, 1);
+      // lcd.print("RFID Card!");
+    }
+  }
+  
+  // Periodically refresh the remaining count if we're in tap-out phase
+  static unsigned long lastCountRefresh = 0;
+  if (tapOutPhase && !displayingMessage && millis() - lastCountRefresh > 3000) {
+    lastCountRefresh = millis();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Students Remaining:");
+    lcd.setCursor(0, 1);
+    lcd.print(String(presentCount));
   }
 }
 
+// Updated recoverI2C with yield()
 void recoverI2C() {
   Serial.println("I2C bus error detected. Attempting recovery...");
 
-  // Reset I2C pins
   pinMode(I2C_SDA, OUTPUT);
   pinMode(I2C_SCL, OUTPUT);
   digitalWrite(I2C_SDA, HIGH);
   digitalWrite(I2C_SCL, HIGH);
-  delay(10);
+  unsigned long startTime = millis();
+  while (millis() - startTime < 10) yield(); // Non-blocking delay
 
-  // Generate clock pulses to clear stuck SDA (up to 9 pulses)
   for (int i = 0; i < 9; i++) {
     digitalWrite(I2C_SCL, LOW);
     delayMicroseconds(10);
     digitalWrite(I2C_SCL, HIGH);
     delayMicroseconds(10);
+    yield(); // Yield during clock pulses
   }
 
-  // Send a STOP condition
   digitalWrite(I2C_SDA, LOW);
   delayMicroseconds(10);
   digitalWrite(I2C_SCL, HIGH);
   delayMicroseconds(10);
   digitalWrite(I2C_SDA, HIGH);
   delayMicroseconds(10);
+  yield(); // Yield after STOP condition
 
-  // Reinitialize I2C
-  Wire.end(); // Fully stop the I2C driver
+  Wire.end();
   Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(100000); // Set to 100kHz (standard speed, adjust if needed)
+  Wire.setClock(100000);
+  yield(); // Yield after I2C reinitialization
   
-  // Test the bus again
   Wire.beginTransmission(0x27);
   int error = Wire.endTransmission();
   if (error == 0) {
     Serial.println("I2C bus recovered successfully.");
-    lcd.begin(16, 2); // Reinitialize LCD
+    lcd.begin(16, 2);
     lcd.backlight();
   } else {
     Serial.println("I2C recovery failed. Error code: " + String(error));
   }
 
   lastI2cRecovery = millis();
+  yield(); // Yield after recovery
 }
 
 void streamCallback(FirebaseStream data) {
@@ -3430,7 +4514,9 @@ void exitPowerSavingMode() {
   // Re-enable LCD
   lcd.backlight();
   displayMessage("Waking Up", "", 1000);
-  displayMessage("Ready. Tap your", "RFID Card!", 0);
+  
+  // Use smooth transition instead of direct ready message
+  smoothTransitionToReady();
   
   // Reconnect to WiFi
   WiFi.reconnect();
@@ -3547,7 +4633,7 @@ void checkAndSyncSDData() {
   }
 
   // Sync the data to Firebase
-  if (syncOfflineLogsToRTDB()) {
+  if (syncOfflineLogs()) {
     displayMessage("Data Pushed to", "Database", 2000);
     Serial.println("Offline data successfully pushed to Firebase.");
 
@@ -3732,6 +4818,122 @@ bool syncOfflineLogsToRTDB() {
       } else {
         Serial.println("Failed to sync Tamper log: " + logEntry + " - " + fbdo.errorReason());
         syncSuccess = false;
+      }
+    }
+    // Check if this is a SessionEnd log (automatic end time detection)
+    else if (logEntry.startsWith("SessionEnd:")) {
+      int uidIndex = logEntry.indexOf("UID:") + 4;
+      int timeIndex = logEntry.indexOf("Time:");
+      int statusIndex = logEntry.indexOf("Status:");
+      int dayIndex = logEntry.indexOf("Day:");
+      int startTimeIndex = logEntry.indexOf("StartTime:");
+      int endTimeIndex = logEntry.indexOf("EndTime:");
+      int subjectIndex = logEntry.indexOf("Subject:");
+      int subjectCodeIndex = logEntry.indexOf("SubjectCode:");
+      int sectionIndex = logEntry.indexOf("Section:");
+      int roomIndex = logEntry.indexOf("Room:");
+      int voltageIndex = logEntry.indexOf("Voltage:");
+      int currentIndex = logEntry.indexOf("Current:");
+      int powerIndex = logEntry.indexOf("Power:");
+      int energyIndex = logEntry.indexOf("Energy:");
+      int frequencyIndex = logEntry.indexOf("Frequency:");
+      int pfIndex = logEntry.indexOf("PowerFactor:");
+      int autoEndIndex = logEntry.indexOf("AutoEnd:");
+
+      // Verify all required fields are present
+      if (uidIndex == -1 || timeIndex == -1 || statusIndex == -1 || dayIndex == -1 || 
+          startTimeIndex == -1 || endTimeIndex == -1 || subjectIndex == -1 || 
+          subjectCodeIndex == -1 || sectionIndex == -1 || roomIndex == -1 || 
+          voltageIndex == -1 || currentIndex == -1 || powerIndex == -1 || 
+          energyIndex == -1 || frequencyIndex == -1 || pfIndex == -1) {
+        Serial.println("Invalid SessionEnd log entry format: " + logEntry);
+        continue;
+      }
+
+      // Extract session data
+      String uid = logEntry.substring(uidIndex, timeIndex - 1);
+      String timestamp = logEntry.substring(timeIndex + 5, statusIndex - 1);
+      String status = logEntry.substring(statusIndex + 7, dayIndex - 1);
+      String day = logEntry.substring(dayIndex + 4, startTimeIndex - 1);
+      String startTime = logEntry.substring(startTimeIndex + 10, endTimeIndex - 1);
+      String endTime = logEntry.substring(endTimeIndex + 8, subjectIndex - 1);
+      String subject = logEntry.substring(subjectIndex + 8, subjectCodeIndex - 1);
+      String subjectCode = logEntry.substring(subjectCodeIndex + 12, sectionIndex - 1);
+      String section = logEntry.substring(sectionIndex + 8, roomIndex - 1);
+      String roomName = logEntry.substring(roomIndex + 5, voltageIndex - 1);
+      
+      // Extract PZEM data
+      String voltageStr = logEntry.substring(voltageIndex + 8, logEntry.indexOf(" Current:"));
+      String currentStr = logEntry.substring(currentIndex + 8, logEntry.indexOf(" Power:"));
+      String powerStr = logEntry.substring(powerIndex + 6, logEntry.indexOf(" Energy:"));
+      String energyStr = logEntry.substring(energyIndex + 7, logEntry.indexOf(" Frequency:"));
+      String frequencyStr = logEntry.substring(frequencyIndex + 10, logEntry.indexOf(" PowerFactor:"));
+      String pfStr = pfIndex != -1 ? logEntry.substring(pfIndex + 12, autoEndIndex - 1) : "0.0";
+
+      // Prepare data for Firebase
+      String instructorPath = "/Instructors/" + uid;
+      FirebaseJson classStatusJson;
+      classStatusJson.set("Status", status);
+      classStatusJson.set("dateTime", timestamp);
+      
+      FirebaseJson scheduleJson;
+      scheduleJson.set("day", day.length() > 0 ? day : "Unknown");
+      scheduleJson.set("startTime", startTime.length() > 0 ? startTime : "Unknown");
+      scheduleJson.set("endTime", endTime.length() > 0 ? endTime : "Unknown");
+      scheduleJson.set("subject", subject.length() > 0 ? subject : "Unknown");
+      scheduleJson.set("subjectCode", subjectCode.length() > 0 ? subjectCode : "Unknown");
+      scheduleJson.set("section", section.length() > 0 ? section : "Unknown");
+      
+      FirebaseJson roomNameJson;
+      roomNameJson.set("name", roomName.length() > 0 ? roomName : "Unknown");
+      
+      // Create PZEM JSON data
+      FirebaseJson pzemJson;
+      pzemJson.set("voltage", voltageStr);
+      pzemJson.set("current", currentStr);
+      pzemJson.set("power", powerStr);
+      pzemJson.set("energy", energyStr);
+      pzemJson.set("frequency", frequencyStr);
+      pzemJson.set("powerFactor", pfStr);
+      pzemJson.set("timestamp", timestamp);
+      roomNameJson.set("pzem", pzemJson);
+      
+      scheduleJson.set("roomName", roomNameJson);
+      classStatusJson.set("schedule", scheduleJson);
+      
+      String statusPath = instructorPath + "/ClassStatus";
+      if (Firebase.RTDB.updateNode(&fbdo, statusPath, &classStatusJson)) {
+        Serial.println("Class status updated to 'Class Ended' with PZEM data");
+      } else {
+        String errorLog = "FirebaseError:Path:" + statusPath + " Reason:" + fbdo.errorReason();
+        storeLogToSD(errorLog);
+        Serial.println("Failed to update class status with PZEM data: " + fbdo.errorReason());
+      }
+      
+      // Also record this in the OfflineDataLogging node for historical purposes
+      String safeTimestamp = timestamp;
+      safeTimestamp.replace(" ", "_");
+      safeTimestamp.replace(":", "-");
+      String offlinePath = "/OfflineDataLogging/AutoEnd_" + uid + "_" + safeTimestamp;
+      
+      FirebaseJson offlineJson;
+      offlineJson.set("uid", uid);
+      offlineJson.set("timestamp", timestamp);
+      offlineJson.set("action", "AutoEndSession");
+      offlineJson.set("status", status);
+      offlineJson.set("subject", subject);
+      offlineJson.set("subjectCode", subjectCode);
+      offlineJson.set("section", section);
+      offlineJson.set("roomName", roomName);
+      offlineJson.set("voltage", voltageStr);
+      offlineJson.set("current", currentStr);
+      offlineJson.set("power", powerStr);
+      offlineJson.set("energy", energyStr);
+      
+      if (Firebase.RTDB.setJSON(&fbdo, offlinePath, &offlineJson)) {
+        Serial.println("Added SessionEnd to offline logging history");
+      } else {
+        Serial.println("Failed to add to offline logging history: " + fbdo.errorReason());
       }
     }
     // Handle other log entries (e.g., SuperAdminAccess, Door Opened, etc.)
@@ -4289,6 +5491,14 @@ void customLoopTask(void *pvParameters) {
 }
 
 void setup() {
+  // Startup stability delay to ensure power levels are stable
+  delay(100);  // Add a small delay to stabilize power during boot
+  
+  // Call our safe relay state function to ensure relays are properly initialized
+  ensureRelaySafeState();
+  Serial.println("Relays initialized to inactive state");
+  
+  // Now continue with the rest of initialization
   Serial.begin(115200);
   while (!Serial && millis() < 5000);
   Serial.println("Starting setup...");
@@ -4300,36 +5510,6 @@ void setup() {
   systemStartTime = millis();
   Serial.println("System start time: " + String(systemStartTime) + " ms");
   Serial.println("Free heap memory: " + String(ESP.getFreeHeap()) + " bytes");
-
-  // Initialize relay pins first to prevent unintended triggering
-  pinMode(RELAY1, OUTPUT);
-  pinMode(RELAY2, OUTPUT);
-  pinMode(RELAY3, OUTPUT);
-  pinMode(RELAY4, OUTPUT);
-  
-  // Small delay before setting the initial state
-  delay(20);
-  
-  // Set initial relay states to HIGH (inactive/unlocked)
-  // For these relay modules:
-  // HIGH = Relay OFF/Inactive = Door unlocked
-  // LOW = Relay ON/Active = Door locked
-  digitalWrite(RELAY1, HIGH);  // Initially unlocked
-  digitalWrite(RELAY2, HIGH);
-  digitalWrite(RELAY3, HIGH);
-  digitalWrite(RELAY4, HIGH);
-  relayActive = false;
-  Serial.println("Relays initialized to inactive state (HIGH)");
-  
-  // Initialize other pins
-  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(LED_R_PIN, OUTPUT);
-  pinMode(LED_G_PIN, OUTPUT);
-  pinMode(LED_B_PIN, OUTPUT);
-  pinMode(TAMPER_PIN, INPUT_PULLUP);
-  pinMode(MFRC522_IRQ, INPUT_PULLUP);
-  pinMode(REED_PIN, INPUT_PULLUP);
 
   // Begin all sensors
   LoadCell1.begin();
@@ -4354,6 +5534,16 @@ void setup() {
   LoadCell1.setCalFactor(999.0);
   LoadCell2.setCalFactor(999.0);
   LoadCell3.setCalFactor(999.0);
+  
+  // Initialize remaining pins
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_R_PIN, OUTPUT);
+  pinMode(LED_G_PIN, OUTPUT);
+  pinMode(LED_B_PIN, OUTPUT);
+  pinMode(TAMPER_PIN, INPUT_PULLUP);
+  pinMode(MFRC522_IRQ, INPUT_PULLUP);
+  pinMode(REED_PIN, INPUT_PULLUP);
 
   // Debug reset button state
   Serial.println("Reset button initial state: " + String(digitalRead(RESET_BUTTON_PIN)));
@@ -4730,53 +5920,162 @@ bool validateWeightSensor(int index) {
 }
 
 void setupWeightSensors() {
-  Serial.println("Initializing HX711 Load Cells...");
-  const unsigned long stabilizingTime = 1000; // Define the stabilizing time constant (in ms)
+  Serial.println("\nInitializing HX711 Load Cells...");
+  const unsigned long stabilizingTime = 2000; // Increased stabilizing time (in ms)
 
+  // First initialize all weight sensors
   for (int i = 0; i < NUM_SENSORS; i++) {
     Serial.printf("Setting up Load Cell %d...\n", i + 1);
     loadCells[i]->begin();
-    delay(10);
+    yield(); // Allow other processes during initialization
+    delay(100); // Brief delay between sensor initializations
+  }
+  
+  // Then perform the tare and calibration on each
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    // Power up sequence with proper stabilization
+    Serial.printf("Starting Load Cell %d stabilization...\n", i + 1);
     loadCells[i]->start(stabilizingTime, true);
+    yield(); // Allow other processes during stabilization
     
+    // Check tare success
     if (loadCells[i]->getTareTimeoutFlag()) {
-      Serial.printf("❌ Tare failed for LoadCell%d\n", i + 1);
+      Serial.printf("❌ Tare failed for LoadCell%d - Retrying...\n", i + 1);
+      // Retry tare operation
+      loadCells[i]->tareNoDelay();
+      delay(500);
+      loadCells[i]->update(); // Process tare
+      
+      if (loadCells[i]->getTareTimeoutFlag()) {
+        Serial.printf("❌ Second tare attempt failed for LoadCell%d\n", i + 1);
+      } else {
+        Serial.printf("✅ LoadCell%d tared successfully on retry.\n", i + 1);
+      }
     } else {
       Serial.printf("✅ LoadCell%d tared successfully.\n", i + 1);
     }
 
+    // Set calibration factors
     loadCells[i]->setCalFactor(calibrationFactors[i]);
     Serial.printf("Calibration factor for LoadCell%d: %.1f\n", i + 1, calibrationFactors[i]);
+    
+    // Take multiple readings to check noise levels
+    float readings[5] = {0};
+    float avgReading = 0;
+    
+    Serial.printf("Testing noise levels for LoadCell%d...\n", i + 1);
+    for (int j = 0; j < 5; j++) {
+      delay(100);
+      loadCells[i]->update();
+      readings[j] = loadCells[i]->getData();
+      avgReading += readings[j];
+      yield();
+    }
+    avgReading /= 5;
+    
+    // Calculate noise range
+    float maxNoise = 0;
+    for (int j = 0; j < 5; j++) {
+      float deviation = abs(readings[j] - avgReading);
+      if (deviation > maxNoise) maxNoise = deviation;
+    }
+    
+    Serial.printf("LoadCell%d noise level: %.2f kg\n", i + 1, maxNoise);
+    
+    // If empty reading is not close to zero, perform additional tare
+    if (abs(avgReading) > WEIGHT_NOISE_THRESHOLD * 2) {
+      Serial.printf("LoadCell%d baseline reading (%.2f) is above noise threshold, performing additional tare\n", 
+                    i + 1, avgReading);
+      loadCells[i]->tareNoDelay();
+      delay(500);
+      loadCells[i]->update();
+    }
+    
+    yield(); // Allow other processes after configuration
   }
 
-  Serial.println("All load cells initialized.\n");
+  Serial.println("All load cells initialized and calibrated.\n");
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Weight Sensors");
   lcd.setCursor(0, 1);
   lcd.print("Calibrated");
+  yield(); // Final yield before returning
 }
 
 void resetWeightSensors() {
+  Serial.println("Resetting weight sensors...");
+  
+  // First read current values to determine which sensors need resetting
   for (int i = 0; i < NUM_SENSORS; i++) {
-    Serial.println("Reset weight sensor " + String(i + 1));
-    // Use tareNoDelay instead of tare to avoid blocking
-    loadCells[i]->tareNoDelay();
-    Serial.println("Sensor " + String(i + 1) + " tare initiated.");
+    loadCells[i]->update();
+    float currentReading = loadCells[i]->getData();
+    
+    // Only reset if the reading is outside the noise threshold
+    if (abs(currentReading) > WEIGHT_NOISE_THRESHOLD) {
+      Serial.println("Resetting sensor " + String(i + 1) + " from " + String(currentReading) + "kg to zero");
+      // Use tareNoDelay to avoid blocking
+      loadCells[i]->tareNoDelay();
+    } else {
+      Serial.println("Sensor " + String(i + 1) + " already at zero level (" + String(currentReading) + "kg)");
+    }
   }
   
-  // Give some time for tare operations to take effect but don't wait indefinitely
+  // Give some time for tare operations to take effect
   unsigned long startTime = millis();
   const unsigned long TARE_TIMEOUT = 3000; // 3 seconds timeout
   
+  // Process tare operations and check results
   while (millis() - startTime < TARE_TIMEOUT) {
+    bool allSettled = true;
+    
     for (int i = 0; i < NUM_SENSORS; i++) {
       loadCells[i]->update();
+      float reading = loadCells[i]->getData();
+      
+      // If any sensor is still not close to zero, we need to continue waiting
+      if (abs(reading) > WEIGHT_NOISE_THRESHOLD) {
+        allSettled = false;
+      }
     }
+    
+    // If all sensors are at zero level, we can exit early
+    if (allSettled) {
+      Serial.println("All weight sensors successfully zeroed");
+      break;
+    }
+    
     delay(100);
+    yield(); // Allow other processes during wait
   }
   
-  Serial.println("Weight sensor reset complete.");
+  // Final check to verify reset success
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    loadCells[i]->update();
+    float finalReading = loadCells[i]->getData();
+    
+    if (abs(finalReading) > WEIGHT_NOISE_THRESHOLD) {
+      Serial.println("WARNING: Sensor " + String(i + 1) + " still showing " + 
+                    String(finalReading) + "kg after reset attempt");
+    } else {
+      Serial.println("Sensor " + String(i + 1) + " reset complete: " + String(finalReading) + "kg");
+    }
+  }
+  
+  // Reset the sensor tracking variables
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    sensorInUse[i] = false;
+    readingCounter[i] = 0;
+    stableReadingStartTime[i] = 0;
+    lastReadings[i] = 0;
+    
+    // Clear weight history
+    for (int j = 0; j < WEIGHT_STABILITY_READINGS; j++) {
+      weightHistory[i][j] = 0;
+    }
+  }
+  
+  Serial.println("Weight sensor reset process completed");
 }
 
 void updatePZEM() {
@@ -4829,6 +6128,11 @@ void handleOfflineSync() {
         Serial.println("Offline tamper log pushed to RTDB: " + path);
       } else {
         Serial.println("Failed to push offline tamper log: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
       }
     } else if (line.indexOf("System:") == 0) {
       // Handle system logs (e.g., WiFiLost)
@@ -4843,6 +6147,11 @@ void handleOfflineSync() {
         Serial.println("Offline system log pushed to RTDB: " + path);
       } else {
         Serial.println("Failed to push offline system log: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
       }
     } else if (line.indexOf("Student:") == 0) {
       // Handle student logs
@@ -4940,6 +6249,11 @@ void handleOfflineSync() {
         Serial.println("Offline student log pushed to RTDB: " + path);
       } else {
         Serial.println("Failed to push offline student log: " + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
       }
     } else if (line.indexOf("UID:") == 0) {
       // Handle other UID-based logs (e.g., Super Admin, Instructor)
@@ -4978,6 +6292,11 @@ void handleOfflineSync() {
           Serial.println("Offline Super Admin log pushed to RTDB: " + path);
         } else {
           Serial.println("Failed to push offline Super Admin log: " + fbdo.errorReason());
+          if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+              fbdo.errorReason().indexOf("connection") >= 0 || 
+              fbdo.errorReason().indexOf("SSL") >= 0) {
+            handleFirebaseSSLError();
+          }
         }
       } else if (firestoreTeachers.find(uid) != firestoreTeachers.end()) {
         json.set("uid", uid);
@@ -5006,6 +6325,11 @@ void handleOfflineSync() {
           Serial.println("Offline instructor log pushed to RTDB: " + path);
         } else {
           Serial.println("Failed to push offline instructor log: " + fbdo.errorReason());
+          if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+              fbdo.errorReason().indexOf("connection") >= 0 || 
+              fbdo.errorReason().indexOf("SSL") >= 0) {
+            handleFirebaseSSLError();
+          }
         }
       } else {
         json.set("uid", uid);
@@ -5017,6 +6341,11 @@ void handleOfflineSync() {
           Serial.println("Offline unknown log pushed to RTDB: " + path);
         } else {
           Serial.println("Failed to push offline unknown log: " + fbdo.errorReason());
+          if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+              fbdo.errorReason().indexOf("connection") >= 0 || 
+              fbdo.errorReason().indexOf("SSL") >= 0) {
+            handleFirebaseSSLError();
+          }
         }
       }
     }
@@ -5054,57 +6383,541 @@ void updateAbsentStudents() {
           storeLogToSD("Student:UID:" + rfidUid + " UpdatedToAbsent Time:" + timestamp);
         } else {
           Serial.println("Failed to update student " + rfidUid + " to Absent: " + fbdo.errorReason());
+          if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+              fbdo.errorReason().indexOf("connection") >= 0 || 
+              fbdo.errorReason().indexOf("SSL") >= 0) {
+            handleFirebaseSSLError();
+          }
         }
       }
     }
   }
 }
 
-// Global map to persist assignedSensorId across sessions for same class
-std::map<String, int> persistentSensorAssignments; // Key: uid + sessionId, Value: sensorIndex
-
-void loop() {
-  checkPendingRelayOperations();
-  watchdogCheck(); // Feed WDT
-
-  if (checkResetButton()) return; // Early reset check
+void handleFirebaseSSLError() {
+  static unsigned long lastSSLErrorTime = 0;
+  static int sslErrorRetryCount = 0;
   
+  // If it's been more than 5 minutes since last error, reset counter
+  if (millis() - lastSSLErrorTime > 300000) {
+    sslErrorRetryCount = 0;
+  }
+  
+  lastSSLErrorTime = millis();
+  sslErrorRetryCount++;
+  Serial.println("SSL Error Retry Count: " + String(sslErrorRetryCount));
+  
+  // Log the error
+  storeLogToSD("SSLError:Timestamp:" + getFormattedTime() + ":Retry:" + String(sslErrorRetryCount));
+  
+  // Progressive response based on retry count
+  if (sslErrorRetryCount <= 3) {
+    // Initial retries: Just reconnect Firebase
+    Serial.println("Attempting Firebase reconnection (soft retry)");
+    Firebase.reconnectWiFi(true);
+    
+    // Reset Firebase completely to clear any corrupted state
+    Firebase.reset(&config);
+    delay(500);
+    
+    // Small delay for connection to stabilize
+    for (int i = 0; i < 5; i++) {
+      feedWatchdog();
+      delay(100);
+    }
+    
+    // Verify Firebase is ready
+    if (ensureFirebaseAuthenticated()) {
+      Serial.println("Firebase reconnected successfully after SSL error");
+      sslErrorRetryCount = 0; // Reset counter on success
+      digitalWrite(LED_G_PIN, HIGH);
+      digitalWrite(LED_R_PIN, LOW);
+      digitalWrite(LED_B_PIN, LOW);
+      tone(BUZZER_PIN, 1000, 50);
+      delay(50);
+      displayMessage("Firebase", "Reconnected", 1000);
+      displayMessage("Ready. Tap your", "RFID Card!", 0);
+      return;
+    }
+  } else if (sslErrorRetryCount <= 5) {
+    // Moderate retry: Reinitialize Firebase
+    Serial.println("Attempting Firebase reinitialization (moderate retry)");
+    logSystemEvent("Firebase SSL Error - Reinitializing");
+    
+    // Signal the user about the error
+    digitalWrite(LED_R_PIN, HIGH);
+    digitalWrite(LED_G_PIN, LOW);
+  
+    tone(BUZZER_PIN, 500, 100);
+    
+    // Check if WiFi is still connected
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi disconnected. Reconnecting...");
+      WiFi.disconnect();
+      delay(500);
+      connectWiFi();
+    }
+    
+    // Reinitialize Firebase
+    Firebase.reset(&config);
+    delay(500);
+    initFirebase();
+    
+    // Check if reconnection was successful
+    if (Firebase.ready() && Firebase.authenticated()) {
+      Serial.println("Firebase reinitialized successfully after SSL error");
+      sslErrorRetryCount = 0; // Reset counter on success
+      digitalWrite(LED_G_PIN, HIGH);
+      digitalWrite(LED_R_PIN, LOW);
+      digitalWrite(LED_B_PIN, LOW);
+      tone(BUZZER_PIN, 1000, 100);
+      displayMessage("Firebase", "Reinitialized", 1000);
+      displayMessage("Ready. Tap your", "RFID Card!", 0);
+      return;
+    }
+  } else {
+    // Severe retry: Switch to SD mode temporarily and attempt WiFi reconnection
+    Serial.println("Multiple SSL errors detected. Switching to SD mode temporarily");
+    logSystemEvent("Persistent SSL Errors - Switched to SD Mode");
+    
+    // Set to SD mode to ensure operations continue
+    sdMode = true;
+    
+    // Signal the user about the error
+    digitalWrite(LED_R_PIN, HIGH);
+    digitalWrite(LED_G_PIN, LOW);
+    digitalWrite(LED_B_PIN, LOW);
+    tone(BUZZER_PIN, 500, 100);
+    delay(100);
+    tone(BUZZER_PIN, 300, 100);
+    
+    // Reset RFID reader to ensure it continues working
+    digitalWrite(MFRC522_RST, LOW);
+    delay(10);
+    digitalWrite(MFRC522_RST, HIGH);
+    delay(50);
+    
+    rfid.PCD_Init();
+    delay(50);
+    rfid.PCD_SetAntennaGain(rfid.RxGain_max);
+    
+    // Try a more aggressive WiFi reconnection approach
+    Serial.println("Performing aggressive WiFi reset and reconnection");
+    WiFi.disconnect(true);
+    delay(1000);
+    WiFi.mode(WIFI_OFF);
+    delay(1000);
+    WiFi.mode(WIFI_STA);
+    delay(1000);
+    connectWiFi();
+    
+    // If WiFi reconnected, try Firebase one more time
+    if (WiFi.status() == WL_CONNECTED) {
+      delay(1000);
+      Firebase.reset(&config);
+      delay(1000);
+      initFirebase();
+      
+      if (Firebase.ready() && Firebase.authenticated()) {
+        Serial.println("Firebase reconnected after aggressive WiFi reset");
+        sdMode = false;
+        sslErrorRetryCount = 0;
+        displayMessage("Firebase", "Reconnected", 2000);
+        displayMessage("Ready. Tap your", "RFID Card!", 0);
+        return;
+      }
+    }
+    
+    // Schedule an automatic retry after 5 minutes (reduced from 10)
+    sdModeRetryTime = millis() + 300000; // 5 minutes
+    
+    digitalWrite(LED_R_PIN, LOW);
+    feedWatchdog();
+    
+    displayMessage("Firebase Error", "Switched to SD", 2000);
+    displayMessage("Ready. Tap your", "RFID Card!", 0);
+    
+    // Reset retry count if it gets too high
+    if (sslErrorRetryCount > 10) {
+      sslErrorRetryCount = 6; // Keep at the severe retry level but prevent overflow
+    }
+  }
+}
+
+// Modify loop function to include admin door auto-lock check
+void loop() {
+  watchdogCheck(); // Feed WDT
+  if (checkResetButton()) return; // Early reset check
   yield(); // Prevent watchdog reset at start of loop
+
+  // Check for admin door auto-lock timeout
+  checkAdminDoorAutoLock();
+  
+  // Update lastReadyPrint during active operations to prevent watchdog timeouts
+  if (classSessionActive || studentVerificationActive || relayActive || tapOutPhase) {
+    if (millis() - lastReadyPrint > 60000) { // Update every minute during active operations
+      lastReadyPrint = millis();
+      Serial.println("Watchdog timer extended for active operation");
+    }
+  }
+
+  // Check if a class session should be ended due to reaching the end time
+  static unsigned long lastEndTimeCheck = 0;
+  if (classSessionActive && !tapOutPhase && millis() - lastEndTimeCheck >= 30000) { // Check every 30 seconds
+    String currentTime;
+    
+    if (sdMode) {
+      // In offline mode, use RTC to get current time
+      RtcDateTime now = Rtc.GetDateTime();
+      if (now.IsValid()) {
+        char timeBuffer[6];
+        sprintf(timeBuffer, "%02u:%02u", now.Hour(), now.Minute());
+        currentTime = String(timeBuffer);
+        Serial.println("Using RTC time for end time check: " + currentTime);
+      } else {
+        Serial.println("RTC time invalid, skipping end time check");
+        lastEndTimeCheck = millis();
+        return;
+      }
+    } else {
+      // In online mode, use NTP-based time
+      String fullTimestamp = getFormattedTime();
+      Serial.println("DEBUG: Full timestamp from getFormattedTime(): " + fullTimestamp);
+      
+      if (fullTimestamp.length() >= 16) {
+        // Extract hours and minutes properly from timestamp format YYYY_MM_DD_HHMMSS
+        // The time portion starts at position 11 and format is HHMMSS (without colons)
+        String hourStr = fullTimestamp.substring(11, 13);
+        String minuteStr = fullTimestamp.substring(13, 15);
+        currentTime = hourStr + ":" + minuteStr; // Format as HH:MM with colon
+        Serial.println("DEBUG: Extracted time portion: " + currentTime);
+      } else {
+        Serial.println("Invalid timestamp format: " + fullTimestamp + " (length: " + fullTimestamp.length() + ")");
+        lastEndTimeCheck = millis();
+        return;
+      }
+    }
+    
+    // Make sure we have valid end time format before comparison
+    Serial.println("Checking end time: Current time is " + currentTime + ", scheduled end time is " + currentSchedule.endTime);
+    Serial.println("DEBUG: End time validation - currentSchedule.isValid=" + String(currentSchedule.isValid) + 
+                   ", endTime.length=" + String(currentSchedule.endTime.length()) + 
+                   ", currentTime.length=" + String(currentTime.length()));
+    
+    // Compare times in HH:MM format for schedule end time check
+    if (currentSchedule.isValid && currentSchedule.endTime.length() == 5 && currentTime.length() == 5) {
+      // Convert times to minutes for easier comparison
+      int currentHour = currentTime.substring(0, 2).toInt();
+      int currentMinute = currentTime.substring(3, 5).toInt();
+      int currentTotalMinutes = currentHour * 60 + currentMinute;
+      
+      int endHour = currentSchedule.endTime.substring(0, 2).toInt();
+      int endMinute = currentSchedule.endTime.substring(3, 5).toInt();
+      int endTotalMinutes = endHour * 60 + endMinute;
+      
+      // Get start time in minutes for span detection
+      int startHour = 0;
+      int startMinute = 0;
+      if (currentSchedule.startTime.length() == 5) {
+        startHour = currentSchedule.startTime.substring(0, 2).toInt();
+        startMinute = currentSchedule.startTime.substring(3, 5).toInt();
+      }
+      int startTotalMinutes = startHour * 60 + startMinute;
+      
+      // Check for class spanning across midnight (endTime < startTime)
+      bool spansMidnight = endTotalMinutes < startTotalMinutes;
+      
+      // Adjust comparison for classes that span midnight
+      bool endTimeReached = false;
+      if (spansMidnight) {
+        // If class spans midnight and current time is less than start time, 
+        // it means we're after midnight, so adjust comparison
+        if (currentTotalMinutes < startTotalMinutes) {
+          endTimeReached = (currentTotalMinutes >= endTotalMinutes);
+        } else {
+          // Current time is after start time but before midnight
+          endTimeReached = false;
+        }
+      } else {
+        // Normal comparison for classes that don't span midnight
+        endTimeReached = (currentTotalMinutes >= endTotalMinutes);
+      }
+      
+      Serial.println("Time in minutes - Current: " + String(currentTotalMinutes) + 
+                     ", Start: " + String(startTotalMinutes) + 
+                     ", End: " + String(endTotalMinutes) + 
+                     ", Spans midnight: " + String(spansMidnight));
+      
+      if (endTimeReached) {
+        Serial.println("End time reached (" + currentTime + " >= " + currentSchedule.endTime + "). Transitioning to tap-out phase.");
+        
+        digitalWrite(RELAY2, HIGH);
+        delay(20); // Small delay for relay
+        yield(); // Allow system to process
+        
+        digitalWrite(RELAY3, HIGH);
+        delay(20); // Small delay for relay
+        yield(); // Allow system to process
+        
+        digitalWrite(RELAY4, HIGH);
+        delay(20); // Small delay for relay
+        yield(); // Allow system to process
+        
+        relayActive = false;
+        classSessionActive = false;
+        tapOutPhase = true;
+        tapOutStartTime = millis();
+        pzemLoggedForSession = false;
+        tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
+        
+        String timestamp = getFormattedTime();
+        
+        // Store PZEM data and update ClassStatus to "Class Ended"
+        if (!sdMode && isConnected && Firebase.ready() && currentSchedule.roomName.length() > 0) {
+          float voltage = pzem.voltage();
+          float current = pzem.current();
+          float power = pzem.power();
+          float energy = pzem.energy();
+          float frequency = pzem.frequency();
+          float powerFactor = pzem.pf();
+          
+          if (isnan(voltage) || voltage < 0) voltage = 0.0;
+          if (isnan(current) || current < 0) current = 0.0;
+          if (isnan(power) || power < 0) power = 0.0;
+          if (isnan(energy) || energy < 0) energy = 0.0;
+          if (isnan(frequency) || frequency < 0) frequency = 0.0;
+          if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
+          
+          String instructorPath = "/Instructors/" + lastInstructorUID;
+          FirebaseJson classStatusJson;
+          classStatusJson.set("Status", "Class Ended");
+          classStatusJson.set("dateTime", timestamp);
+          
+          FirebaseJson scheduleJson;
+          scheduleJson.set("day", currentSchedule.day.length() > 0 ? currentSchedule.day : "Unknown");
+          scheduleJson.set("startTime", currentSchedule.startTime.length() > 0 ? currentSchedule.startTime : "Unknown");
+          scheduleJson.set("endTime", currentSchedule.endTime.length() > 0 ? currentSchedule.endTime : "Unknown");
+          scheduleJson.set("subject", currentSchedule.subject.length() > 0 ? currentSchedule.subject : "Unknown");
+          scheduleJson.set("subjectCode", currentSchedule.subjectCode.length() > 0 ? currentSchedule.subjectCode : "Unknown");
+          scheduleJson.set("section", currentSchedule.section.length() > 0 ? currentSchedule.section : "Unknown");
+          
+          FirebaseJson roomNameJson;
+          roomNameJson.set("name", currentSchedule.roomName.length() > 0 ? currentSchedule.roomName : "Unknown");
+          
+          // Check if there's existing PZEM data to preserve
+          if (Firebase.RTDB.get(&fbdo, instructorPath + "/ClassStatus/schedule/roomName/pzem")) {
+            if (fbdo.dataType() == "json") {
+              // Get the existing PZEM data
+              FirebaseJson pzemData;
+              pzemData.setJsonData(fbdo.jsonString());
+              
+              // Set it in the roomName object
+              roomNameJson.set("pzem", pzemData);
+              Serial.println("Preserved existing PZEM data during session end");
+            }
+          }
+          
+          // Calculate energy consumption using E = P*(t/1000)
+          // Get the session duration in hours
+          float sessionDurationHours = 0.0;
+          if (currentSchedule.startTime.length() > 0 && currentSchedule.endTime.length() > 0) {
+            // Extract hours and minutes from startTime (format HH:MM)
+            int startHour = currentSchedule.startTime.substring(0, 2).toInt();
+            int startMinute = currentSchedule.startTime.substring(3, 5).toInt();
+            
+            // Extract hours and minutes from endTime (format HH:MM)
+            int endHour = currentSchedule.endTime.substring(0, 2).toInt();
+            int endMinute = currentSchedule.endTime.substring(3, 5).toInt();
+            
+            // Calculate total minutes
+            int startTotalMinutes = startHour * 60 + startMinute;
+            int endTotalMinutes = endHour * 60 + endMinute;
+            
+            // Handle cases where the end time is on the next day
+            if (endTotalMinutes < startTotalMinutes) {
+              endTotalMinutes += 24 * 60; // Add 24 hours in minutes
+            }
+            
+            // Calculate the duration in hours
+            sessionDurationHours = (endTotalMinutes - startTotalMinutes) / 60.0;
+          }
+          
+          // Calculate energy consumption (kWh) using E = P*(t/1000)
+          // Power is in watts, time is in hours, result is in kWh
+          float calculatedEnergy = power * sessionDurationHours / 1000.0;
+          
+          // Use the calculated energy if the measured energy is zero or invalid
+          if (energy <= 0.01) {
+            energy = calculatedEnergy;
+          }
+          
+          Serial.println("Session duration: " + String(sessionDurationHours) + " hours");
+          Serial.println("Calculated energy: " + String(calculatedEnergy) + " kWh");
+
+          FirebaseJson pzemJson;
+          pzemJson.set("voltage", String(voltage, 1));
+          pzemJson.set("current", String(current, 2));
+          pzemJson.set("power", String(power, 1));
+          pzemJson.set("energy", String(energy, 2));
+          pzemJson.set("calculatedEnergy", String(calculatedEnergy, 2));
+          pzemJson.set("sessionDuration", String(sessionDurationHours, 2));
+          pzemJson.set("frequency", String(frequency, 1));
+          pzemJson.set("powerFactor", String(powerFactor, 2));
+          pzemJson.set("timestamp", timestamp);
+          pzemJson.set("action", "end");
+          roomNameJson.set("pzem", pzemJson);
+          pzemLoggedForSession = true;
+          Serial.println("PZEM logged at session end: Voltage=" + String(voltage, 1) + ", Energy=" + String(energy, 2));
+
+          // Remove the old separate Rooms node storage
+          // Instead, modify ClassStatus to include all necessary information
+          if (currentSchedule.roomName.length() > 0) {
+            // Instead of creating a separate path, we'll log this information to the classStatusJson
+            FirebaseJson classDetailsJson;
+            classDetailsJson.set("roomName", currentSchedule.roomName);
+            classDetailsJson.set("subject", currentSchedule.subject);
+            classDetailsJson.set("subjectCode", currentSchedule.subjectCode);
+            classDetailsJson.set("section", currentSchedule.section);
+            classDetailsJson.set("sessionStart", currentSchedule.startTime);
+            classDetailsJson.set("sessionEnd", currentSchedule.endTime);
+            classDetailsJson.set("date", timestamp.substring(0, 10));
+            classDetailsJson.set("sessionId", currentSessionId);
+            
+            // Add this class details to the ClassStatus node
+            classStatusJson.set("roomDetails", classDetailsJson);
+            
+            Serial.println("Class details included in ClassStatus");
+          }
+          
+          scheduleJson.set("roomName", roomNameJson);
+          classStatusJson.set("schedule", scheduleJson);
+          
+          String statusPath = instructorPath + "/ClassStatus";
+          if (Firebase.RTDB.updateNode(&fbdo, statusPath, &classStatusJson)) {
+            Serial.println("Class status updated to 'Class Ended' with PZEM data");
+          } else {
+            String errorLog = "FirebaseError:Path:" + statusPath + " Reason:" + fbdo.errorReason();
+            storeLogToSD(errorLog);
+            Serial.println("Failed to update class status with PZEM data: " + fbdo.errorReason());
+          }
+        } else {
+          // In offline mode, store session end information to SD card for later syncing
+          float voltage = pzem.voltage();
+          float current = pzem.current();
+          float power = pzem.power();
+          float energy = pzem.energy();
+          float frequency = pzem.frequency();
+          float powerFactor = pzem.pf();
+          
+          if (isnan(voltage) || voltage < 0) voltage = 0.0;
+          if (isnan(current) || current < 0) current = 0.0;
+          if (isnan(power) || power < 0) power = 0.0;
+          if (isnan(energy) || energy < 0) energy = 0.0;
+          if (isnan(frequency) || frequency < 0) frequency = 0.0;
+          if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
+          
+          String offlineSessionLog = "SessionEnd:UID:" + lastInstructorUID + 
+                                    " Time:" + timestamp + 
+                                    " Status:Class Ended" +
+                                    " Day:" + currentSchedule.day +
+                                    " StartTime:" + currentSchedule.startTime +
+                                    " EndTime:" + currentSchedule.endTime +
+                                    " Subject:" + currentSchedule.subject +
+                                    " SubjectCode:" + currentSchedule.subjectCode +
+                                    " Section:" + currentSchedule.section +
+                                    " Room:" + currentSchedule.roomName +
+                                    " Voltage:" + String(voltage, 1) +
+                                    " Current:" + String(current, 2) +
+                                    " Power:" + String(power, 1) +
+                                    " Energy:" + String(energy, 2) +
+                                    " Frequency:" + String(frequency, 1) +
+                                    " PowerFactor:" + String(powerFactor, 2) +
+                                    " AutoEnd:true";
+          
+          storeLogToSD(offlineSessionLog);
+          Serial.println("Offline session end data logged to SD card");
+        }
+        
+        // Mark students who didn't complete attendance verification as absent
+        for (const auto& pendingUid : pendingStudentTaps) {
+          // Only mark students who tapped in but didn't complete weight verification
+          if (studentWeights.find(pendingUid) == studentWeights.end() || studentWeights[pendingUid] < 15) {
+            String timestamp = getFormattedTime();
+            logStudentToRTDB(pendingUid, timestamp, 0.0, -1, "false", "");
+            Serial.println("Student " + pendingUid + " marked absent (incomplete attendance)");
+          }
+        }
+        
+        smoothTransitionToReady();
+      }
+    }
+    
+    lastEndTimeCheck = millis();
+  }
+
+  checkPendingRelayOperations();
+  yield(); // Yield after relay operations
 
   // Periodic updates
   static unsigned long lastPeriodicUpdate = 0;
   if (millis() - lastPeriodicUpdate >= 100) {
     updatePZEM();
+    yield(); // Yield after PZEM update
     updateDisplay();
+    yield(); // Yield after display update
     lastPeriodicUpdate = millis();
-    yield(); // Prevent watchdog reset after updates
   }
 
-  // Heap monitoring
+  // More frequent display updates during tap-out phase
+  static unsigned long lastTapOutDisplayUpdate = 0;
+  if (tapOutPhase && millis() - lastTapOutDisplayUpdate >= 1000) { // Update every second during tap-out
+    updateDisplay(); // Extra call for tap-out phase
+    lastTapOutDisplayUpdate = millis();
+    yield(); // Yield after display update
+  }
+
+  // Heap monitoring (more frequent)
   static unsigned long lastHeapCheck = 0;
-  if (millis() - lastHeapCheck >= 30000) {
+  if (millis() - lastHeapCheck >= 10000) { // Changed from 30000 to 10000
+    Serial.println("Free heap: " + String(ESP.getFreeHeap()) + " bytes");
     if (ESP.getFreeHeap() < 10000) {
       logSystemEvent("Low Memory Reset");
       ESP.restart();
     }
     lastHeapCheck = millis();
+    yield(); // Yield after heap check
+  }
+
+  // Log heap trends to SD (for debugging memory leaks)
+  static unsigned long lastHeapLog = 0;
+  if (millis() - lastHeapLog >= 60000) { // Every minute
+    String heapLog = "Heap:Free:" + String(ESP.getFreeHeap()) + " Timestamp:" + getFormattedTime();
+    storeLogToSD(heapLog);
+    lastHeapLog = millis();
+    yield(); // Yield after logging
   }
 
   isConnected = (WiFi.status() == WL_CONNECTED);
+  yield(); // Yield after WiFi status check
 
   // SD initialization message
   static bool sdInitializedMessageShown = false;
   static unsigned long sdMessageStart = 0;
   if (sdInitialized && !sdInitializedMessageShown) {
     if (sdMessageStart == 0) {
-      displayMessage("Backup Logs", "Activated", 2000);
+      // Enhanced message display with more visibility
+      displayMessage("Backup Logs", "Activated", 2500);
       Serial.println("SD card initialized. Backup logs activated.");
       sdMessageStart = millis();
       lastActivityTime = millis();
       lastReadyPrint = millis();
-    } else if (millis() - sdMessageStart >= 2000) {
+      // Add a small delay to ensure message is displayed properly
+      unsigned long startTime = millis();
+      while (millis() - startTime < 200) yield(); // Small non-blocking delay
+    } else if (millis() - sdMessageStart >= 2500) {
+      // Ensure smooth transition
       displayMessage("Ready. Tap your", "RFID Card!", 0);
-      Serial.println("Transitioned to Ready state.");
+      Serial.println("Transitioned to Ready state after backup logs activated.");
       sdInitializedMessageShown = true;
       readyMessageShown = true;
       lastReadyPrint = millis();
@@ -5113,13 +6926,12 @@ void loop() {
     return;
   }
 
-  yield(); // Prevent watchdog reset before stack monitoring
-
-  // Periodic stack monitoring
+  // Periodic stack monitoring (more frequent)
   static unsigned long lastPrint = 0;
-  if (millis() - lastPrint >= 15000) {
+  if (millis() - lastPrint >= 5000) { // Changed from 15000 to 5000
     Serial.println("Stack remaining: " + String(uxTaskGetStackHighWaterMark(NULL)) + " bytes");
     lastPrint = millis();
+    yield(); // Yield after stack check
   }
 
   // Firestore refresh
@@ -5128,12 +6940,27 @@ void loop() {
   if (!sdMode && isConnected && millis() - lastFirestoreRefresh >= 300000) {
     yield(); // Prevent watchdog reset before Firestore operations
     switch (firestoreState) {
-      case FS_IDLE: firestoreState = FS_TEACHERS; break;
-      case FS_TEACHERS: fetchFirestoreTeachers(); firestoreState = FS_STUDENTS; break;
-      case FS_STUDENTS: fetchFirestoreStudents(); firestoreState = FS_ROOMS; break;
-      case FS_ROOMS: fetchFirestoreRooms(); firestoreState = FS_USERS; break;
+      case FS_IDLE: 
+        firestoreState = FS_TEACHERS; 
+        break;
+      case FS_TEACHERS: 
+        fetchFirestoreTeachers(); 
+        yield(); // Yield after fetch
+        firestoreState = FS_STUDENTS; 
+        break;
+      case FS_STUDENTS: 
+        fetchFirestoreStudents(); 
+        yield(); // Yield after fetch
+        firestoreState = FS_ROOMS; 
+        break;
+      case FS_ROOMS: 
+        fetchFirestoreRooms(); 
+        yield(); // Yield after fetch
+        firestoreState = FS_USERS; 
+        break;
       case FS_USERS:
-        fetchFirestoreUsers();
+        fetchFirestoreUsers(); 
+        yield(); // Yield after fetch
         Serial.println("Firestore refreshed: Teachers=" + String(firestoreTeachers.size()) +
                        ", Students=" + String(firestoreStudents.size()) +
                        ", Users=" + String(firestoreUsers.size()));
@@ -5141,7 +6968,7 @@ void loop() {
         lastFirestoreRefresh = millis();
         break;
     }
-    yield();
+    yield(); // Prevent watchdog reset after Firestore operations
   }
 
   // Schedule sync
@@ -5150,30 +6977,34 @@ void loop() {
     yield(); // Prevent watchdog reset before sync
     if (syncSchedulesToSD()) {
       displayMessage("Schedules", "Synced to SD", 1500);
+      yield(); // Yield after SD write
     } else {
       displayMessage("Sync Failed", "Check SD", 1500);
+      yield(); // Yield after SD failure
     }
     lastScheduleSync = millis();
     yield(); // Prevent watchdog reset after sync
   }
-
-  yield(); // Prevent watchdog reset before Firebase and WiFi checks
 
   // Firebase health
   static unsigned long lastFirebaseCheck = 0;
   if (isConnected && !sdMode && millis() - lastFirebaseCheck > 60000) {
     if (WiFi.RSSI() < -80) {
       Serial.println("Weak WiFi signal (" + String(WiFi.RSSI()) + " dBm).");
+      yield(); // Yield after RSSI check
     } else if (!Firebase.ready()) {
       Firebase.reconnectWiFi(true);
       yield(); // Prevent watchdog reset during reconnect
       initFirebase();
+      yield(); // Yield after Firebase init
       if (!Firebase.ready()) {
         logSystemEvent("Firebase Failure Reset");
+        storeLogToSD("FirebaseFailure:Timestamp:" + getFormattedTime());
         ESP.restart();
       }
     }
     lastFirebaseCheck = millis();
+    yield(); // Yield after Firebase check
   }
 
   // WiFi reconnect
@@ -5183,19 +7014,39 @@ void loop() {
     lastWiFiCheck = millis();
     yield(); // Prevent watchdog reset after WiFi reconnect
   }
-
+  
+  // Auto recover from SD mode after SSL error
+  if (sdMode && isConnected && sdModeRetryTime > 0 && millis() > sdModeRetryTime) {
+    Serial.println("Attempting to recover from SD mode after SSL error timeout");
+    sdModeRetryTime = 0; // Reset timer
+    
+    // Try to reconnect to Firebase
+    if (WiFi.status() == WL_CONNECTED) {
+      Firebase.reconnectWiFi(true);
+      initFirebase();
+      
+      if (Firebase.ready() && Firebase.authenticated()) {
+        Serial.println("Successfully recovered from SSL error");
+        sdMode = false;
+        logSystemEvent("Recovered from SSL Error");
+        displayMessage("Firebase", "Reconnected", 2000);
+        displayMessage("Ready. Tap your", "RFID Card!", 0);
+      }
+    }
+  }
+  
   // I2C health
   if (millis() - lastI2cRecovery > 30000) {
     Wire.beginTransmission(0x27);
     if (Wire.endTransmission() != 0) {
       recoverI2C();
+      yield(); // Yield after recovery
       Wire.beginTransmission(0x27);
       if (Wire.endTransmission() == 0) displayMessage("I2C Recovered", "System OK", 2000);
     }
     lastI2cRecovery = millis();
+    yield(); // Yield after I2C check
   }
-
-  yield(); // Prevent watchdog reset before WiFi state handling
 
   // WiFi state handling
   if (isConnected && !wasConnected && firstActionOccurred) {
@@ -5216,29 +7067,26 @@ void loop() {
     }
     yield(); // Prevent watchdog reset before Firebase operations
     bool firebaseReady = false;
-    for (int retry = 0; retry < 3 && !firebaseReady; retry++) {
+    for (int retry = 0; retry < 2 && !firebaseReady; retry++) { // Reduced from 3 to 2
       initFirebase();
+      yield(); // Yield during Firebase init
       if (Firebase.ready()) firebaseReady = true;
       else Firebase.reconnectWiFi(true);
-      yield();
+      yield(); // Yield during WiFi reconnect
     }
     if (firebaseReady) {
-      fetchFirestoreTeachers();
-      yield(); // Prevent watchdog reset between fetches
-      fetchFirestoreStudents();
-      yield(); // Prevent watchdog reset between fetches
-      fetchFirestoreRooms();
-      yield(); // Prevent watchdog reset between fetches
-      fetchFirestoreUsers();
-      yield(); // Prevent watchdog reset between operations
-      syncSchedulesToSD();
-      yield(); // Prevent watchdog reset between operations
-      handleOfflineSync();
+      fetchFirestoreTeachers(); yield();
+      fetchFirestoreStudents(); yield();
+      fetchFirestoreRooms(); yield();
+      fetchFirestoreUsers(); yield();
+      syncSchedulesToSD(); yield();
+      handleOfflineSync(); yield();
     } else {
       sdMode = true;
     }
     lastActivityTime = millis();
     readyMessageShown = false;
+    yield(); // Yield after WiFi state handling
   } else if (!isConnected && wasConnected) {
     displayMessage("WiFi Lost", "Check Network", 2000);
     displayMessage("Backup Logs", "Activated", 2000);
@@ -5248,9 +7096,8 @@ void loop() {
     storeLogToSD(entry);
     lastActivityTime = millis();
     readyMessageShown = false;
+    yield(); // Yield after WiFi loss handling
   }
-
-  yield(); // Prevent watchdog reset before voltage monitoring
 
   // Voltage monitoring
   static bool voltageLost = false;
@@ -5279,42 +7126,61 @@ void loop() {
   } else if (isVoltageSufficient) {
     voltageLossStart = 0;
   }
+  yield(); // Yield after voltage monitoring
 
   // Reed switch
   int sensorState = digitalRead(REED_PIN);
+  
+  // Debug output every 5 seconds
+  static unsigned long lastReedDebugTime = 0;
+  if (millis() - lastReedDebugTime > 5000) {
+    Serial.println("Reed sensor state: " + String(sensorState == LOW ? "CLOSED (LOW)" : "OPEN (HIGH)") + 
+                   ", reedState: " + String(reedState) + 
+                   ", tamperActive: " + String(tamperActive) + 
+                   ", tamperResolved: " + String(tamperResolved));
+    lastReedDebugTime = millis();
+  }
+  
   if (sensorState == LOW && !reedState) {
     reedState = true;
     tamperResolved = false;
     lastActivityTime = millis();
+    Serial.println("Reed sensor CLOSED - Door/Window closed");
   } else if (sensorState == HIGH && reedState) {
     reedState = false;
     lastActivityTime = millis();
+    Serial.println("Reed sensor OPEN - Door/Window open! This should trigger tamper alert");
   }
+  yield(); // Yield after reed switch check
 
   // Power-saving mode
   if (!powerSavingMode && !tamperActive && !adminAccessActive && !classSessionActive &&
       !waitingForInstructorEnd && !studentVerificationActive && !tapOutPhase &&
       millis() - lastActivityTime >= INACTIVITY_TIMEOUT) {
     enterPowerSavingMode();
+    yield(); // Yield after entering power-saving mode
   }
   if (powerSavingMode) {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
       String uidStr = getUIDString();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
-  if (!isConnected) {
+      yield(); // Yield after RFID read
+      if (!isConnected) {
         WiFi.reconnect();
         unsigned long wifiStartTime = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - wifiStartTime < 10000) yield();
+        while (WiFi.status() != WL_CONNECTED && millis() - wifiStartTime < 10000) {
+          yield(); // Yield during WiFi reconnect
+        }
         isConnected = (WiFi.status() == WL_CONNECTED);
         if (isConnected) {
-          initFirebase();
-          fetchRegisteredUIDs();
-          fetchFirestoreTeachers();
-          fetchFirestoreStudents();
-          fetchFirestoreRooms();
-          fetchFirestoreUsers();
-          syncSchedulesToSD();
+          initFirebase(); yield();
+          fetchRegisteredUIDs(); yield();
+          fetchFirestoreTeachers(); yield();
+          fetchFirestoreStudents(); yield();
+          fetchFirestoreRooms(); yield();
+          fetchFirestoreUsers(); yield();
+          syncSchedulesToSD(); yield();
           struct tm timeinfo;
           if (getLocalTime(&timeinfo)) {
             Rtc.SetDateTime(RtcDateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
@@ -5324,18 +7190,20 @@ void loop() {
       }
       if (isRegisteredUID(uidStr)) exitPowerSavingMode();
     }
+    yield(); // Yield in power-saving mode
     return;
   }
 
-  // Tamper detection
-  static bool tamperDetected = false;
-  static bool tamperMessageDisplayed = false;
-  static bool buzzerActive = false;
-  static unsigned long lastBuzzerToggle = 0;
-
+  // Tamper detection based on reed switch
   if (!reedState && !tamperActive && !relayActive && !tamperResolved) {
-    tamperDetected = tamperActive = tamperAlertTriggered = true;
-    tamperMessagePrinted = tamperMessageDisplayed = false;
+    // Reed switch is HIGH (open) -> trigger tamper alert
+    Serial.println("TAMPER DETECTED! Reed sensor is OPEN");
+    
+    tamperDetected = true;
+    tamperActive = true;
+    tamperAlertTriggered = true;
+    tamperMessagePrinted = false;
+    tamperMessageDisplayed = false;
     buzzerActive = true;
     tamperStartTime = getFormattedTime();
     
@@ -5346,6 +7214,7 @@ void loop() {
     
     String entry = "Tamper:Detected Timestamp:" + tamperStartTime + " Status:Active";
     storeLogToSD(entry);
+    yield(); // Yield after SD write
     
     if (!sdMode && isConnected && Firebase.ready()) {
       String tamperPath = "/Alerts/Tamper/" + currentTamperAlertId;
@@ -5363,57 +7232,100 @@ void loop() {
       if (Firebase.RTDB.setJSON(&fbdo, tamperPath, &tamperJson)) {
         Serial.println("Success");
       } else {
+        String errorLog = "FirebaseError:Path:" + tamperPath + " Reason:" + fbdo.errorReason();
+        storeLogToSD(errorLog);
         Serial.println("Failed: " + fbdo.errorReason());
-        storeLogToSD("TamperLogFailed:Time:" + tamperStartTime + " Error:" + fbdo.errorReason());
+        if (fbdo.errorReason().indexOf("ssl") >= 0 || 
+            fbdo.errorReason().indexOf("connection") >= 0 || 
+            fbdo.errorReason().indexOf("SSL") >= 0) {
+          handleFirebaseSSLError();
+        }
       }
+      yield(); // Yield after Firebase operation
     }
+    
+    // Force buzzer ON - continuous tone
     tone(BUZZER_PIN, 1000);
+    lastBuzzerToggle = millis();
+    
+    // Force LED to RED
     digitalWrite(LED_R_PIN, HIGH);
     digitalWrite(LED_G_PIN, LOW);
     digitalWrite(LED_B_PIN, LOW);
+    
     displayMessage("Tamper Detected", "Door Locked", 0);
     tamperMessageDisplayed = true;
     firstActionOccurred = true;
     lastActivityTime = millis();
+    
+    Serial.println("Tamper alert activated - buzzer and red LED turned ON");
   }
 
+  // Keep tamper alerts active if tamper is detected
   if (tamperActive) {
+    // Debug tamper state
+    static unsigned long lastTamperDebugTime = 0;
+    if (millis() - lastTamperDebugTime > 3000) {
+      Serial.println("Tamper state: Active=" + String(tamperActive) + 
+                    ", Buzzer=" + String(buzzerActive) + 
+                    ", LastToggle=" + String(millis() - lastBuzzerToggle) + "ms ago" +
+                    ", LED_R=" + String(digitalRead(LED_R_PIN)));
+      lastTamperDebugTime = millis();
+    }
+    
+    // Ensure red light is always on during tamper
     digitalWrite(LED_R_PIN, HIGH);
     digitalWrite(LED_G_PIN, LOW);
     digitalWrite(LED_B_PIN, LOW);
     
+    // Ensure buzzer is continuously sounding or pulsing
     if (!buzzerActive || millis() - lastBuzzerToggle > 500) {
       tone(BUZZER_PIN, 1000);
       buzzerActive = true;
       lastBuzzerToggle = millis();
+      // Every 2 seconds, print a message to confirm the buzzer is supposed to be active
+      if ((millis() / 1000) % 2 == 0) {
+        Serial.println("Buzzer should be ON right now");
+      }
     }
     
+    // Keep displaying tamper message
     if (!tamperMessageDisplayed) {
       displayMessage("Tamper Detected", sdMode ? "Super Admin Req." : "Admin Card Req.", 0);
       tamperMessageDisplayed = true;
     }
   }
+  yield(); // Yield after tamper detection
 
   // Tamper resolution
   if (tamperActive && millis() - lastRFIDTapTime >= RFID_DEBOUNCE_DELAY) {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      unsigned long startTime = millis();
+      while (millis() - startTime < 50) yield(); // Non-blocking delay
       String uidStr = getUIDString();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
       String timestamp = getFormattedTime();
       lastRFIDTapTime = lastActivityTime = millis();
+      yield(); // Yield after RFID read
       
+      // Check if the card is the Super Admin UID - works in both modes
       if (uidStr == SUPER_ADMIN_UID) {
-        String entry = "Tamper:Resolved Timestamp:" + timestamp + " Status:Resolved By:SuperAdmin:" + uidStr;
+        Serial.println("Super Admin card detected - resolving tamper");
+        
+        // Super Admin code
+        String entry = "Tamper:Resolved Timestamp:" + timestamp + " Status:Resolved By:" + uidStr;
         storeLogToSD(entry);
         
+        // Update Firebase if connected
         if (!sdMode && isConnected && Firebase.ready() && currentTamperAlertId.length() > 0) {
           String tamperPath = "/Alerts/Tamper/" + currentTamperAlertId;
           
-      FirebaseJson updateJson;
+          FirebaseJson updateJson;
           updateJson.set("status", "resolved");
           updateJson.set("resolvedBy", uidStr);
-          updateJson.set("resolverName", "CIT-U SUPER ADMIN");
+          updateJson.set("resolverName", "Super Admin");
+          updateJson.set("resolverRole", "Super Admin");
           updateJson.set("endTime", timestamp);
           updateJson.set("resolutionTime", timestamp);
           
@@ -5424,23 +7336,41 @@ void loop() {
           }
         }
         
+        // Reset tamper state
         tamperActive = tamperDetected = tamperAlertTriggered = false;
         tamperResolved = true;
         tamperMessageDisplayed = buzzerActive = false;
+        
+        // Turn off the buzzer immediately
         noTone(BUZZER_PIN);
+        Serial.println("Buzzer turned OFF");
+        
+        // Return LED to neutral state
         digitalWrite(LED_R_PIN, LOW);
+        showNeutral();
+        
         accessFeedback();
-        displayMessage("Tamper Resolved", "CIT-U (Super Admin)", 2000);
-        logSystemEvent("Tamper Resolved by Super Admin UID: " + uidStr);
-        displayMessage("Ready. Tap your", "RFID Card!", 0);
-        readyMessageShown = true;
-        currentTamperAlertId = "";
-      } 
+        displayMessage("Tamper Stopped", "Super Admin", 2000);
+        logSystemEvent("Tamper Resolved by Super Admin: " + uidStr);
+        
+        // Add delay for visibility of message
+        unsigned long startTime = millis();
+        while (millis() - startTime < 2000) yield(); // Non-blocking delay
+        
+        // Use smooth transition instead of direct ready message
+        smoothTransitionToReady();
+        currentTamperAlertId = ""; // Reset the alert ID
+      }
+      // Check for admin - only in online mode
       else if (!sdMode && isAdminUID(uidStr)) {
+        Serial.println("Admin card detected - resolving tamper");
+        
+        // Get admin details
         std::map<String, String> userData = fetchUserDetails(uidStr);
         String name = userData.empty() ? "Admin" : userData["fullName"];
         String role = userData.empty() ? "admin" : userData["role"];
         
+        // Update Tamper Alert in Firebase
         if (isConnected && Firebase.ready() && currentTamperAlertId.length() > 0) {
           String tamperPath = "/Alerts/Tamper/" + currentTamperAlertId;
           
@@ -5454,31 +7384,58 @@ void loop() {
           
           if (Firebase.RTDB.updateNode(&fbdo, tamperPath, &updateJson)) {
             Serial.println("Successfully updated tamper alert status");
-      } else {
+          } else {
             Serial.println("Failed to update tamper alert: " + fbdo.errorReason());
           }
         }
         
         logAdminTamperStop(uidStr, timestamp);
+        
+        // Reset tamper state
         tamperActive = tamperDetected = tamperAlertTriggered = false;
         tamperResolved = true;
         tamperMessageDisplayed = buzzerActive = false;
+        
+        // Turn off the buzzer immediately
         noTone(BUZZER_PIN);
+        Serial.println("Buzzer turned OFF");
+        
+        // Return LED to neutral state
         digitalWrite(LED_R_PIN, LOW);
         accessFeedback();
+        
         displayMessage("Tamper Stopped", name + " (" + role + ")", 2000);
         logSystemEvent("Tamper Resolved by Admin UID: " + uidStr);
-        displayMessage("Ready. Tap your", "RFID Card!", 0);
-        readyMessageShown = true;
-        currentTamperAlertId = "";
-    } else {
+        
+        // Add delay for visibility of message
+        unsigned long startTime = millis();
+        while (millis() - startTime < 2000) yield(); // Non-blocking delay
+        
+        // Use smooth transition instead of direct ready message
+        smoothTransitionToReady();
+        currentTamperAlertId = ""; // Reset the alert ID
+      } else {
         deniedFeedback();
         displayMessage("Tamper Detected", sdMode ? "Super Admin Req." : "Admin Card Req.", 2000);
-        if (!buzzerActive) tone(BUZZER_PIN, 1000);
+        
+        // Keep buzzer active
+        if (!buzzerActive) {
+          tone(BUZZER_PIN, 1000);
+          buzzerActive = true;
+        }
+        
+        // Keep red LED on
+        digitalWrite(LED_R_PIN, HIGH);
+        digitalWrite(LED_G_PIN, LOW);
+        digitalWrite(LED_B_PIN, LOW);
+        
         displayMessage("Tamper Detected", "Door Locked", 0);
         tamperMessageDisplayed = true;
+        
+        Serial.println("Unauthorized card - tamper alert remains active");
       }
     }
+    yield(); // Yield after tamper resolution
     return;
   }
 
@@ -5493,6 +7450,7 @@ void loop() {
   } else {
     readyMessageShown = false;
   }
+  yield(); // Yield after idle state
 
   // Admin PZEM logging
   if (adminAccessActive && millis() - lastPZEMLogTime >= 5000) {
@@ -5503,6 +7461,7 @@ void loop() {
     lastFrequency = max(pzem.frequency(), 0.0f);
     lastPowerFactor = max(pzem.pf(), 0.0f);
     lastPZEMLogTime = millis();
+    yield(); // Yield after PZEM logging
   }
 
   // Student verification
@@ -5521,7 +7480,8 @@ void loop() {
 
     if (millis() - lastRFIDTapTime >= RFID_DEBOUNCE_DELAY) {
       if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-        delay(50); yield();
+        unsigned long startTime = millis();
+        while (millis() - startTime < 50) yield(); // Non-blocking delay
         String uidStr = getUIDString();
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
@@ -5530,6 +7490,7 @@ void loop() {
         lastRFIDTapTime = millis();
         lastActivityTime = millis();
         Serial.println("Detected UID during student verification: " + uidStr);
+        yield(); // Yield after RFID read
 
         if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
           logStudentToRTDB(uidStr, timestamp, 0.0, -1, "false", ""); // Initial tap-in
@@ -5547,6 +7508,7 @@ void loop() {
                 assignedSensorId = jsonData.intValue;
               }
             }
+            yield(); // Yield after Firebase read
           }
 
           if (studentAssignedSensors.find(uidStr) == studentAssignedSensors.end()) {
@@ -5578,20 +7540,40 @@ void loop() {
       digitalWrite(RELAY1, HIGH);
       Serial.println("Class session started. Door locked (Relay 1 HIGH).");
       
-      // First show "Attendance Closed" message
+      // Explicitly reset the watchdog timer for class session start
+      lastReadyPrint = millis();
+      Serial.println("Watchdog timer reset for class session start");
+      
+      // Clear any existing "Awaiting Student Attendance" message
+      lcd.clear();
+      yield();
+      
       displayMessage("Attendance", "Closed", 2000);
+      unsigned long startTime = millis();
+      while (millis() - startTime < 2000) yield(); // Non-blocking delay
       
-      // After a short delay, show "Class Session Started" message
-      delay(2000);
+      // Display class session started message and ensure it's visible
+      lcd.clear();
+      yield();
       displayMessage("Class Session", "Started", 2000);
+      startTime = millis();
+      while (millis() - startTime < 2000) yield(); // Non-blocking delay
       
-      // Update class status in Firebase if connected
       if (!sdMode && isConnected && Firebase.ready()) {
         String statusPath = "/ClassStatus/" + currentSessionId;
         FirebaseJson statusJson;
         statusJson.set("Status", "In Session");
         statusJson.set("dateTime", getFormattedTime());
+        
+        // Reset watchdog timer before Firebase operation
+        safeFirebaseOperation();
+        
         Firebase.RTDB.updateNode(&fbdo, statusPath, &statusJson);
+        
+        // Reset watchdog timer after Firebase operation
+        safeFirebaseOperation();
+        
+        yield(); // Yield after Firebase update
       }
       
       lastActivityTime = millis();
@@ -5602,95 +7584,415 @@ void loop() {
     if (awaitingWeight && millis() - weightConfirmationStartTime >= WEIGHT_CONFIRMATION_TIMEOUT) {
       awaitingWeight = false;
       Serial.println("Weight confirmation timeout for pending students.");
+      
+      // Mark all pending students as absent
+      for (auto& student : studentAssignedSensors) {
+        String uidStr = student.first;
+        int assignedSensorId = student.second;
+        
+        // Only mark students who tapped in but didn't complete weight verification
+        if (assignedSensorId == -1) {
+          String timestamp = getFormattedTime();
+          
+          // Update the status in Firebase directly
+          if (!sdMode && isConnected && Firebase.ready()) {
+            String lastSessionPath = "/Students/" + uidStr + "/lastSession";
+            if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+              String sessionId = fbdo.stringData();
+              String attendancePath = "/Students/" + uidStr + "/Attendance/" + sessionId + "/attendanceInfo";
+              FirebaseJson statusJson;
+              statusJson.set("status", "Absent");
+              statusJson.set("sensorConfirmed", false);
+              statusJson.set("action", "Timeout - No Weight Detected");
+              statusJson.set("weight", 0.0);  // Explicitly set weight to 0.0 for absent students
+              statusJson.set("weightUnit", "kg");
+              if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &statusJson)) {
+                Serial.println("Student " + uidStr + " marked absent due to weight verification timeout");
+              } else {
+                Serial.println("Failed to update absent status: " + fbdo.errorReason());
+              }
+            }
+          }
+          
+          // Also log to the system for completeness
+          logStudentToRTDB(uidStr, timestamp, 0.0, -3, "false", "");
+          Serial.println("Student " + uidStr + " marked absent - timeout waiting for weight verification");
+        }
+      }
+      
+      // Clear the pending students
+      studentWeights.clear();
     } else if (awaitingWeight) {
       bool sensorConnected = false;
+      
+      // Check if any sensors are connected
       for (int i = 0; i < NUM_SENSORS; i++) {
         loadCells[i]->update();
+        yield(); // Yield after sensor update
         float testReading = loadCells[i]->getData();
-        if (testReading >= 0 && testReading < 500) {
+        yield(); // Yield after reading
+        if (testReading >= 0 && testReading < WEIGHT_MAXIMUM_THRESHOLD) {
           sensorConnected = true;
           break;
         }
       }
 
       if (sensorConnected) {
+        static unsigned long lastWeightCheckTime = 0;
+        static unsigned long lastWatchdogReset = 0;
+        
+        // Reset watchdog timer during weight sensor processing
+        if (millis() - lastWatchdogReset >= 30000) { // Every 30 seconds
+          lastReadyPrint = millis();
+          lastWatchdogReset = millis();
+        }
+        
+        // Update displays every 1 second for better user feedback
+        if (millis() - lastWeightCheckTime >= 1000) {
+          displayMessage("Waiting for", "Weight Sensor", 0);
+          lastWeightCheckTime = millis();
+        }
+        
         for (int i = 0; i < NUM_SENSORS; i++) {
-          // Take multiple readings to improve accuracy and use yield() to prevent WDT timeouts
+          // Update the sensor
           loadCells[i]->update();
-          yield();
+          yield(); // Yield after sensor update
           
-          // Get first reading
-          float firstWeight = loadCells[i]->getData();
-          yield();
+          // Get current weight reading
+          float currentWeight = loadCells[i]->getData();
+          yield(); // Yield after reading
           
-          // Check if the reading is within reasonable range before continuing
-          if (firstWeight >= 30.0 && firstWeight < 500) {
-            // Get a second reading for confirmation
-            loadCells[i]->update();
-            yield();
-            float finalWeight = loadCells[i]->getData();
+          // Apply noise filtering - set very small readings to zero
+          if (currentWeight < WEIGHT_NOISE_THRESHOLD) {
+            currentWeight = 0.0;
             
-            // Only proceed if both readings are close enough (stable weight)
-            if (abs(firstWeight - finalWeight) < 0.8) {
+            // If we were tracking weight and it drops below threshold, reset the sensor status
+            if (sensorInUse[i]) {
+              Serial.println("Weight dropped below noise threshold on sensor " + String(i+1) + ", resetting tracking");
+              sensorInUse[i] = false;
+              readingCounter[i] = 0;
+              stableReadingStartTime[i] = 0;
+              continue;
+            }
+          }
+          
+          // Check if we detected a significant weight (student stepping on)
+          if (currentWeight >= WEIGHT_MINIMUM_THRESHOLD && currentWeight <= WEIGHT_MAXIMUM_THRESHOLD) {
+            
+            // If this is the first reading above threshold, start tracking and immediately log
+            if (!sensorInUse[i]) {
+              sensorInUse[i] = true;
+              
+              // Initialize the history array with the current weight
+              for (int j = 0; j < WEIGHT_STABILITY_READINGS; j++) {
+                weightHistory[i][j] = currentWeight;
+              }
+              
+              lastReadings[i] = currentWeight;
+              stableReadingStartTime[i] = millis();
+              readingCounter[i] = 1;
+              
+              // Inform user that we detected weight
+              displayMessage("Weight Detected", "Sensor " + String(i+1), 0);
+              Serial.println("Initial weight detected on sensor " + String(i+1) + ": " + String(currentWeight) + "kg");
+              
+              // Immediately log the initial weight to RTDB and mark the student as present
               for (auto& student : studentAssignedSensors) {
                 String uidStr = student.first;
                 int assignedSensorId = student.second;
                 
-                // Skip students who already had a failed verification attempt
-                if (student.second == -2) {
-                  // Instead of skipping completely, check if they're now at the correct sensor
-                  // Get their originally assigned sensor ID from database or configuration
-                  int originalAssignedSensor = -1;
+                // Skip if this UID already has its weight finalized
+                if (uidWeightFinalized.find(uidStr) != uidWeightFinalized.end() && uidWeightFinalized[uidStr]) {
+                  Serial.println("Weight already finalized for UID " + uidStr + ". Ignoring new reading.");
+                  continue;
+                }
+                
+                if (assignedSensorId == -1 || assignedSensorId == i) {
+                  String timestamp = getFormattedTime();
+                  studentAssignedSensors[uidStr] = i;
+                  
+                  // Update Firebase with the initial weight and mark as present immediately
                   if (!sdMode && isConnected && Firebase.ready()) {
-                    String path = "/Students/" + uidStr;
-                    if (Firebase.RTDB.getJSON(&fbdo, path)) {
-                      FirebaseJson* json = fbdo.jsonObjectPtr();
-                      FirebaseJsonData jsonData;
-                      if (json->get(jsonData, "assignedSensorId") && jsonData.typeNum == FirebaseJson::JSON_INT) {
-                        originalAssignedSensor = jsonData.intValue;
+                    String lastSessionPath = "/Students/" + uidStr + "/lastSession";
+                    if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+                      String sessionId = fbdo.stringData();
+                      Serial.println("Found lastSession for initial weight update: " + sessionId);
+                      String weightPath = "/Students/" + uidStr + "/Attendance/" + sessionId + "/attendanceInfo";
+                      FirebaseJson weightJson;
+                      weightJson.set("weight", currentWeight);
+                      weightJson.set("weightUnit", "kg");
+                      weightJson.set("sensorConfirmed", true);
+                      weightJson.set("status", "Present");
+                      weightJson.set("action", "Weight Detected");
+                      
+                      // Include the specific sensor number in sensorType
+                      String specificSensorType = "Weight Sensor " + String(i + 1);
+                      weightJson.set("sensorType", specificSensorType);
+                      
+                      if (Firebase.RTDB.updateNode(&fbdo, weightPath, &weightJson)) {
+                        Serial.println("Initial weight logged in Firebase: " + String(currentWeight) + "kg on " + specificSensorType);
+                      } else {
+                        Serial.println("Failed to update initial weight: " + fbdo.errorReason());
                       }
                     }
                   }
                   
-                  // If they're now at their correct sensor, allow verification
-                  if (originalAssignedSensor == i) {
-                    String timestamp = getFormattedTime();
-                    studentAssignedSensors[uidStr] = i; // Assign to correct sensor
-                    logStudentToRTDB(uidStr, timestamp, finalWeight, i, "true", ""); // Weight confirmed, no timeout
-                    accessFeedback();
-                    Serial.println("Recovery: Student " + uidStr + " verified at correct Sensor " + String(i + 1) + " after previous failed attempt");
-                    displayMessage("Recovery OK", "Sensor " + String(i + 1), 2000);
-                    break;
-                  }
-                  continue; // Still at wrong sensor, skip
-                }
-
-                if (assignedSensorId == -1 || assignedSensorId == i) {
-                  String timestamp = getFormattedTime();
-                  studentAssignedSensors[uidStr] = i; // Assign or confirm sensor
-                  logStudentToRTDB(uidStr, timestamp, finalWeight, i, "true", ""); // Weight confirmed, no timeout
+                  // Log the initial weight to RTDB
+                  logStudentToRTDB(uidStr, timestamp, currentWeight, i, "true", "");
                   accessFeedback();
-                  Serial.println("Assigned/Verified Sensor " + String(i + 1) + " to UID: " + uidStr + " with weight: " + String(finalWeight, 2) + " kg");
-                  displayMessage("Weight Confirmed", "Sensor " + String(i + 1), 2000);
+                  Serial.println("Immediately assigned Sensor " + String(i + 1) + " to UID: " + uidStr + ", Initial Weight: " + String(currentWeight) + "kg");
+                  displayMessage("Weight Recorded", "Sensor " + String(i + 1), 2000);
+                  
+                  // Mark this UID as finalized and assign to this sensor
+                  uidWeightFinalized[uidStr] = true;
+                  sensorAssignedUid[i] = uidStr;
+                  
                   break;
-                } else if (i != assignedSensorId) {
-                  // Mark this student as temporarily failed verification - but can be recovered
-                  studentAssignedSensors[uidStr] = -2; // Special code for verification failed but recoverable
-                  String timestamp = getFormattedTime();
-                  // Log as pending due to wrong sensor
-                  logStudentToRTDB(uidStr, timestamp, 0.0, -2, "false", "");
-                  deniedFeedback();
-                  displayMessage("Wrong Sensor!", "Go to Sensor " + String(assignedSensorId + 1), 2000);
-                  Serial.println("UID " + uidStr + " on wrong sensor. Expected Sensor " + String(assignedSensorId + 1) + ". Can still recover.");
+                }
+              }
+              continue; // Continue to next reading
+            }
+            
+            // Update the weight history by shifting values and adding the new reading
+            for (int j = 0; j < WEIGHT_STABILITY_READINGS - 1; j++) {
+              weightHistory[i][j] = weightHistory[i][j + 1];
+            }
+            weightHistory[i][WEIGHT_STABILITY_READINGS - 1] = currentWeight;
+            
+            // Calculate the average of the recent readings to smooth out fluctuations
+            float avgWeight = 0;
+            for (int j = 0; j < WEIGHT_STABILITY_READINGS; j++) {
+              avgWeight += weightHistory[i][j];
+            }
+            avgWeight /= WEIGHT_STABILITY_READINGS;
+            
+            // Check if weight is stable by comparing against the average
+            bool isStable = true;
+            for (int j = 0; j < WEIGHT_STABILITY_READINGS; j++) {
+              if (abs(weightHistory[i][j] - avgWeight) > WEIGHT_STABILITY_THRESHOLD) {
+                isStable = false;
+                break;
+              }
+            }
+            
+            // If weight is stable and we've been tracking for sufficient time
+            if (isStable) {
+              readingCounter[i]++;
+              
+              // Display stability progress
+              if (readingCounter[i] % 3 == 0) {
+                displayMessage("Verifying Weight", String(readingCounter[i]/3) + "/5", 0);
+              }
+              
+              // Stable weight confirmed after sufficient readings and time
+              if (readingCounter[i] >= 15 && (millis() - stableReadingStartTime[i] >= WEIGHT_STABILITY_TIME)) {
+                // This is our final stable weight - use the average
+                float finalWeight = avgWeight;
+                
+                // Only proceed if the weight is above the minimum threshold
+                if (finalWeight >= WEIGHT_MINIMUM_THRESHOLD) {
+                  // Process this weight for any students waiting for verification
+                  for (auto& student : studentAssignedSensors) {
+                    String uidStr = student.first;
+                    int assignedSensorId = student.second;
+                    
+                    // Skip if this UID already has its weight finalized
+                    if (uidWeightFinalized.find(uidStr) != uidWeightFinalized.end() && uidWeightFinalized[uidStr]) {
+                      Serial.println("Weight already finalized for UID " + uidStr + ". Ignoring new reading.");
+                      continue;
+                    }
+                    
+                    if (student.second == -2) {
+                      int originalAssignedSensor = -1;
+                      if (!sdMode && isConnected && Firebase.ready()) {
+                        String path = "/Students/" + uidStr;
+                        if (Firebase.RTDB.getJSON(&fbdo, path)) {
+                          FirebaseJson* json = fbdo.jsonObjectPtr();
+                          FirebaseJsonData jsonData;
+                          if (json->get(jsonData, "assignedSensorId") && jsonData.typeNum == FirebaseJson::JSON_INT) {
+                            originalAssignedSensor = jsonData.intValue;
+                          }
+                        }
+                        yield(); // Yield after Firebase read
+                      }
+                      
+                      if (originalAssignedSensor == i) {
+                        String timestamp = getFormattedTime();
+                        studentAssignedSensors[uidStr] = i;
+                        logStudentToRTDB(uidStr, timestamp, finalWeight, i, "true", "");
+                        accessFeedback();
+                        Serial.println("Recovery: Student " + uidStr + " verified at correct Sensor " + String(i + 1) + " with weight " + String(finalWeight) + "kg");
+                        displayMessage("Recovery OK", "Sensor " + String(i + 1), 2000);
+                        
+                        // Mark this UID as finalized and assign to this sensor
+                        uidWeightFinalized[uidStr] = true;
+                        sensorAssignedUid[i] = uidStr;
+                        
+                        // Reset sensor tracking
+                        sensorInUse[i] = false;
+                        readingCounter[i] = 0;
+                        stableReadingStartTime[i] = 0;
+                        break;
+                      }
+                      continue;
+                    }
+
+                    if (assignedSensorId == -1 || assignedSensorId == i) {
+                      String timestamp = getFormattedTime();
+                      studentAssignedSensors[uidStr] = i;
+                      
+                      // Update Firebase with confirmed weight and mark as present only if weight is valid
+                      if (!sdMode && isConnected && Firebase.ready()) {
+                        String lastSessionPath = "/Students/" + uidStr + "/lastSession";
+                        if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+                          String sessionId = fbdo.stringData();
+                          Serial.println("Found lastSession for final weight update: " + sessionId);
+                          String weightPath = "/Students/" + uidStr + "/Attendance/" + sessionId + "/attendanceInfo";
+                          FirebaseJson weightJson;
+                          weightJson.set("weight", finalWeight);
+                          weightJson.set("weightUnit", "kg");
+                          weightJson.set("sensorConfirmed", true);
+                          weightJson.set("status", finalWeight >= WEIGHT_MINIMUM_THRESHOLD ? "Present" : "Pending");
+                          weightJson.set("action", finalWeight >= WEIGHT_MINIMUM_THRESHOLD ? "Weight Confirmed" : "Weight Too Low");
+                          if (Firebase.RTDB.updateNode(&fbdo, weightPath, &weightJson)) {
+                            Serial.println("Final weight confirmed in Firebase: " + String(finalWeight) + "kg");
+                          } else {
+                            Serial.println("Failed to update final weight: " + fbdo.errorReason());
+                          }
+                        }
+                      }
+                      
+                      // Now call logStudentToRTDB with the confirmed weight
+                      logStudentToRTDB(uidStr, timestamp, finalWeight, i, "true", "");
+                      accessFeedback();
+                      if (finalWeight >= WEIGHT_MINIMUM_THRESHOLD) {
+                        Serial.println("Assigned/Verified Sensor " + String(i + 1) + " to UID: " + uidStr + ", Weight: " + String(finalWeight) + "kg - Marked PRESENT");
+                        displayMessage("Weight Confirmed", "Sensor " + String(i + 1), 2000);
+                      } else {
+                        Serial.println("Assigned Sensor " + String(i + 1) + " to UID: " + uidStr + ", but weight is too low: " + String(finalWeight) + "kg - Marked PENDING");
+                        displayMessage("Weight Too Low", "Need " + String(WEIGHT_MINIMUM_THRESHOLD) + "kg+", 2000);
+                      }
+                      
+                      // Mark this UID as finalized and assign to this sensor
+                      uidWeightFinalized[uidStr] = true;
+                      sensorAssignedUid[i] = uidStr;
+                      
+                      // Reset sensor tracking
+                      sensorInUse[i] = false;
+                      readingCounter[i] = 0;
+                      stableReadingStartTime[i] = 0;
+                      break;
+                    }
+                  }
+                } else {
+                  // Weight is below the minimum threshold after stabilization
+                  for (auto& student : studentAssignedSensors) {
+                    if (student.second == -1 || student.second == i) {
+                      String uidStr = student.first;
+                      String timestamp = getFormattedTime();
+                      
+                      // Skip if this UID already has its weight finalized
+                      if (uidWeightFinalized.find(uidStr) != uidWeightFinalized.end() && uidWeightFinalized[uidStr]) {
+                        Serial.println("Weight already finalized for UID " + uidStr + ". Ignoring new reading.");
+                        continue;
+                      }
+                      
+                      // Update Firebase to show weight is too low
+                      if (!sdMode && isConnected && Firebase.ready()) {
+                        String lastSessionPath = "/Students/" + uidStr + "/lastSession";
+                        if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+                          String sessionId = fbdo.stringData();
+                          String weightPath = "/Students/" + uidStr + "/Attendance/" + sessionId + "/attendanceInfo";
+                          FirebaseJson weightJson;
+                          weightJson.set("weight", finalWeight);
+                          weightJson.set("weightUnit", "kg");
+                          weightJson.set("sensorConfirmed", false);
+                          weightJson.set("status", "Pending");
+                          weightJson.set("action", "Weight Too Low");
+                          Firebase.RTDB.updateNode(&fbdo, weightPath, &weightJson);
+                        }
+                      }
+                      
+                      // Log the low weight
+                      logStudentToRTDB(uidStr, timestamp, finalWeight, i, "false", "");
+                      deniedFeedback();
+                      displayMessage("Weight Too Low", "Need " + String(WEIGHT_MINIMUM_THRESHOLD) + "kg+", 2000);
+                      Serial.println("Weight too low for UID " + uidStr + ": " + String(finalWeight) + "kg - minimum required: " + String(WEIGHT_MINIMUM_THRESHOLD) + "kg");
+                      
+                      // Mark this UID as finalized and assign to this sensor (even though weight is too low)
+                      uidWeightFinalized[uidStr] = true;
+                      sensorAssignedUid[i] = uidStr;
+                      
+                      // Don't mark as present, keep as pending
+                      studentAssignedSensors[uidStr] = i; // Still assign the sensor but don't confirm
+                      
+                      // Reset sensor tracking
+                      sensorInUse[i] = false;
+                      readingCounter[i] = 0;
+                      stableReadingStartTime[i] = 0;
+                      break;
+                    }
+                  }
+                }
+              }
+            } else {
+              // Weight not stable, update the last reading and notify user
+              if (abs(currentWeight - lastReadings[i]) > WEIGHT_STABILITY_THRESHOLD) {
+                lastReadings[i] = currentWeight;
+                readingCounter[i] = 1; // Reset the reading counter
+                
+                // Log the unstable weight when it changes significantly
+                Serial.println("Weight unstable on sensor " + String(i+1) + ": " + String(lastReadings[i]) + " -> " + String(currentWeight));
+                displayMessage("Stand Still", "Recalibrating...", 0);
+                
+                // Update RTDB with the fluctuating weight only occasionally (to avoid flooding)
+                static unsigned long lastWeightUpdateTime = 0;
+                if (millis() - lastWeightUpdateTime >= 2000) { // Update every 2 seconds during unstable readings
+                  lastWeightUpdateTime = millis();
+                  for (auto& student : studentAssignedSensors) {
+                    String uidStr = student.first;
+                    int assignedSensorId = student.second;
+                    
+                    // Skip if this UID already has its weight finalized
+                    if (uidWeightFinalized.find(uidStr) != uidWeightFinalized.end() && uidWeightFinalized[uidStr]) {
+                      continue; // Skip logging fluctuating weights for already finalized UIDs
+                    }
+                    
+                    if (assignedSensorId == -1 || assignedSensorId == i) {
+                      Serial.println("Fluctuating weight detected for UID " + uidStr + ": " + String(currentWeight) + "kg");
+                      
+                      // Don't update Firebase with fluctuating weights - removed this code to prevent false readings
+                      // Only log locally for debugging purposes
+                    }
+                  }
                 }
               }
             }
+          } else if (sensorInUse[i] && currentWeight < WEIGHT_MINIMUM_THRESHOLD) {
+            // Weight dropped below minimum threshold - reset the sensor tracking
+            Serial.println("Weight dropped below minimum threshold on sensor " + String(i+1) + ": " + String(currentWeight) + "kg");
+            
+            // Check if this sensor had a UID assigned, and mark that we're ready for a new reading
+            if (sensorAssignedUid.find(i) != sensorAssignedUid.end()) {
+              String assignedUid = sensorAssignedUid[i];
+              Serial.println("Sensor " + String(i+1) + " is now free. Ready for new student.");
+              sensorAssignedUid.erase(i); // Remove sensor assignment
+            }
+            
+            sensorInUse[i] = false;
+            readingCounter[i] = 0;
+            stableReadingStartTime[i] = 0;
           }
         }
       } else {
-        Serial.println("No weight sensor connected. Awaiting weight.");
+        // No sensors connected
+        if (millis() - lastReadyPrint >= 10000) {
+          Serial.println("No weight sensors detected. Check connections.");
+          lastReadyPrint = millis();
+        }
       }
 
+      // Check if all students are verified
       bool allVerified = true;
       for (auto& student : studentAssignedSensors) {
         if (student.second == -1) {
@@ -5698,10 +8000,58 @@ void loop() {
           break;
         }
       }
+
+      // Auto-mark pending students as absent when attendance is closed
+      if (millis() - studentVerificationStartTime >= Student_VERIFICATION_WINDOW) {
+        if (!studentVerificationActive && classSessionActive && !attendanceFinalized) {
+          attendanceFinalized = true;
+          Serial.println("Finalizing attendance - marking pending students as absent");
+          
+          // Mark all pending students as absent
+          for (auto& student : studentAssignedSensors) {
+            String uidStr = student.first;
+            int assignedSensorId = student.second;
+            
+            // Only mark students who are still pending (never completed weight verification)
+            if (assignedSensorId == -1) {
+              String timestamp = getFormattedTime();
+              
+              // Update the status in Firebase directly
+              if (!sdMode && isConnected && Firebase.ready()) {
+                String lastSessionPath = "/Students/" + uidStr + "/lastSession";
+                if (Firebase.RTDB.getString(&fbdo, lastSessionPath)) {
+                  String sessionId = fbdo.stringData();
+                  String attendancePath = "/Students/" + uidStr + "/Attendance/" + sessionId + "/attendanceInfo";
+                  FirebaseJson statusJson;
+                  statusJson.set("status", "Absent");
+                  statusJson.set("sensorConfirmed", false);
+                  statusJson.set("action", "Attendance Closed - No Weight Detected");
+                  statusJson.set("weight", 0.0);  // Explicitly set weight to 0.0 for absent students
+                  statusJson.set("weightUnit", "kg");
+                  if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &statusJson)) {
+                    Serial.println("Student " + uidStr + " marked absent due to attendance closure");
+                  } else {
+                    Serial.println("Failed to update absent status: " + fbdo.errorReason());
+                  }
+                }
+              }
+              
+              // Also log to the system for completeness
+              logStudentToRTDB(uidStr, timestamp, 0.0, -3, "false", "");
+              Serial.println("Student " + uidStr + " marked absent - attendance closed without weight verification");
+            }
+          }
+          
+          // Clear the pending students
+          studentWeights.clear();
+        }
+      }
+
       if (allVerified) {
         awaitingWeight = false;
       }
     }
+    yield(); // Yield after student verification
     return;
   }
 
@@ -5714,115 +8064,209 @@ void loop() {
       if (classEndedStart == 0) {
         classEndedStart = millis();
         displayMessage("Class Ended", "", 4000);
+        yield(); // Ensure system responsiveness
       } else if (millis() - classEndedStart >= 4000) {
         classEndedShown = true;
-        if (!sdMode && isConnected && Firebase.ready()) {
-          String summaryPath = "/AttendanceSummary/" + currentSessionId + "/totalAttendees";
-          if (Firebase.RTDB.getInt(&fbdo, summaryPath)) {
-            presentCount = fbdo.intData();
+        // Initialize the presentCount properly based on verified students
+        presentCount = 0;
+        for (const auto& student : studentAssignedSensors) {
+          if (student.second >= 0) { // Only count verified students (not -1, -2, or -3)
+            presentCount++;
           }
         }
+        
+        // Initial display of count - more visible
+        displayMessage("Students Remaining:", String(presentCount), 2000);
+        yield(); // Add yield for responsiveness
+        
+        if (!sdMode && isConnected && Firebase.ready()) {
+          String summaryPath = "/AttendanceSummary/" + currentSessionId + "/totalAttendees";
+          FirebaseJson summaryJson;
+          summaryJson.set("totalAttendees", presentCount);
+          if (Firebase.RTDB.updateNode(&fbdo, summaryPath, &summaryJson)) {
+            Serial.println("Updated attendance summary with total attendees: " + String(presentCount));
+          } else {
+            Serial.println("Failed to update attendance summary: " + fbdo.errorReason());
+          }
+          yield(); // Yield after Firebase update
+        }
       }
+      yield(); // Yield during class ended display
       return;
     }
 
     static unsigned long lastAttendeeUpdate = 0;
     if (millis() - lastAttendeeUpdate >= 1000) {
-      displayMessage("Remaining:", String(presentCount), 0);
+      // More visible remaining count message
+      displayMessage("Students Remaining:", String(presentCount), 0);
       lastAttendeeUpdate = millis();
+      yield(); // Ensure system responsiveness
     }
 
     if (millis() - lastRFIDTapTime >= RFID_DEBOUNCE_DELAY && 
         rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      
       String uidStr = getUIDString();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
       String timestamp = getFormattedTime();
       lastRFIDTapTime = lastActivityTime = millis();
+      yield(); // Yield after RFID read
 
       if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
-        // Accept ALL student taps during tap-out phase, regardless of status
-        // Update student status in database
         String status = "Absent";
         int sensorId = -1;
+        bool wasPresent = false;
         
-        // If they were actually present (verified at correct sensor)
+        // Get student name before using it - moved up to be in scope for the whole block
+        String studentName = "Unknown";
+        try {
+          studentName = firestoreStudents.at(uidStr).at("fullName");
+          if (studentName.length() == 0) studentName = "Student";
+        } catch (...) {
+          studentName = "Student";
+        }
+        
         if (studentAssignedSensors.find(uidStr) != studentAssignedSensors.end() && 
             studentAssignedSensors[uidStr] >= 0) {
           status = "Present";
           sensorId = studentAssignedSensors[uidStr];
+          wasPresent = true;
         }
         
-        // Log the tap-out, regardless of verification status
         logStudentToRTDB(uidStr, timestamp, 0.0, sensorId, "true", timestamp);
+        yield(); // Yield after RTDB log
         
-        // Visual/audio feedback (green for all tap-outs during this phase)
         digitalWrite(LED_G_PIN, HIGH);
         tone(BUZZER_PIN, 1000, 200);
-        delay(200); yield();
+        unsigned long startTime = millis();
+        while (millis() - startTime < 200) yield(); // Non-blocking delay
         digitalWrite(LED_G_PIN, LOW);
         
-        // Decrease counter for all taps
-        presentCount--;
-        if (studentAssignedSensors.find(uidStr) != studentAssignedSensors.end()) {
-          studentAssignedSensors.erase(uidStr);
+        // Only decrease count if student was actually present
+        if (wasPresent) {
+          presentCount = max(0, presentCount - 1); // Ensure we don't go below zero
+          
+          if (studentAssignedSensors.find(uidStr) != studentAssignedSensors.end()) {
+            studentAssignedSensors.erase(uidStr);
+          }
+          
+          if (!sdMode && isConnected && Firebase.ready()) {
+            String summaryPath = "/AttendanceSummary/" + currentSessionId;
+            FirebaseJson summaryJson;
+            summaryJson.set("totalAttendees", presentCount);
+            if (Firebase.RTDB.updateNode(&fbdo, summaryPath, &summaryJson)) {
+              Serial.println("Updated remaining count: " + String(presentCount));
+              
+              // Force immediate display of the updated count
+              lcd.clear();
+              lcd.setCursor(0, 0);
+              lcd.print(studentName + " Tapped Out");
+              lcd.setCursor(0, 1);
+              lcd.print("Remaining: " + String(presentCount));
+              yield(); // Allow system to process display update
+            }
+            yield(); // Yield after Firebase update
+          }
         }
         
-        // Update totalAttendees in Firebase
-        if (!sdMode && isConnected && Firebase.ready()) {
-          String summaryPath = "/AttendanceSummary/" + currentSessionId;
-          FirebaseJson summaryJson;
-          summaryJson.set("totalAttendees", presentCount);
-          Firebase.RTDB.updateNode(&fbdo, summaryPath, &summaryJson);
-        }
+        // Show student name if available
+        displayMessage(studentName + " Tapped Out", "Remaining: " + String(presentCount), 2000);
+        // Small delay for message visibility
+        startTime = millis();
+        while (millis() - startTime < 300) yield(); // Short non-blocking delay
         
-        displayMessage("Tapped Out", "Remaining: " + String(presentCount), 2000);
-        
-        // If no more students remain, transition to instructor tap-out phase
         if (presentCount <= 0) {
-          // All students have tapped out, prompt instructor to end session
+          // Add additional delay when count reaches 0 to ensure the "Remaining: 0" message is clearly visible
+          // Display the "Remaining: 0" message again with longer duration
+          displayMessage(studentName + " Tapped Out", "Remaining: 0", 2500);
+          startTime = millis();
+          while (millis() - startTime < 1000) yield(); // Longer non-blocking delay for the zero count message
+          
           digitalWrite(LED_G_PIN, HIGH);
           tone(BUZZER_PIN, 1000, 500);
-          delay(500); yield();
+          startTime = millis();
+          while (millis() - startTime < 500) yield(); // Non-blocking delay
           digitalWrite(LED_G_PIN, LOW);
           
-          // Update class status in Firebase to indicate pending instructor confirmation
           if (!sdMode && isConnected && Firebase.ready()) {
             String statusPath = "/ClassStatus/" + currentSessionId;
             FirebaseJson statusJson;
-            statusJson.set("Status", "Pending Instructor");
+            statusJson.set("Status", "Officially Ended");
             statusJson.set("dateTime", getFormattedTime());
             Firebase.RTDB.updateNode(&fbdo, statusPath, &statusJson);
+            yield(); // Yield after Firebase update
           }
           
-          // Show message prompting for instructor (same UID) to tap to finalize
           displayMessage("All Students Out", "Instructor Tap Now", 3000);
-          waitingForInstructorEnd = true;
-          tapOutPhase = false;  // Exit tap-out phase properly
-        }
-      } else if (uidStr == lastInstructorUID) {
-        // Instructor is tapping to end the session
-        
-        // Before ending the session, mark any students with -2 status as absent
-        for (auto& student : studentAssignedSensors) {
-          // Mark all remaining students as absent regardless of status
-          String studentUid = student.first;
-          // Update status to permanently absent in database
-          logStudentToRTDB(studentUid, timestamp, 0.0, -3, "false", ""); // Special code -3 for permanent absence
-          Serial.println("Student " + studentUid + " marked absent - didn't tap out before instructor ended session");
-          yield(); // Add yield to prevent watchdog reset during iteration
-        }
-        
-        // Get PZEM data and store it in room node
-        if (tapOutSchedule.roomName.length() > 0) {
-          float voltage = pzem.voltage();
-          float current = pzem.current();
-          float power = pzem.power();
-          float energy = pzem.energy();
-          float frequency = pzem.frequency();
-          float powerFactor = pzem.pf();
+          // Add delay for visibility
+          startTime = millis();
+          while (millis() - startTime < 500) yield(); // Small non-blocking delay
           
-          yield(); // Add yield after PZEM readings
+          waitingForInstructorEnd = true;
+          tapOutPhase = false;
+        }
+      }
+      // Handle instructor tap during tap-out phase
+      else if (uidStr == lastInstructorUID) {
+        // Instructor tapping during tap-out phase should finalize even if students remain
+        String statusPath = "/ClassStatus/" + currentSessionId;
+        FirebaseJson statusJson;
+        statusJson.set("Status", "Officially Ended");
+        statusJson.set("dateTime", getFormattedTime());
+        if (Firebase.RTDB.updateNode(&fbdo, statusPath, &statusJson)) {
+          Serial.println("Class status updated to 'Officially Ended' by instructor override");
+        }
+        
+        displayMessage("Instructor Override", "Class Officially Ended", 3000);
+        unsigned long startTime = millis();
+        while (millis() - startTime < 600) yield(); // Short non-blocking delay
+        
+        waitingForInstructorEnd = true;
+        tapOutPhase = false;
+      }
+    }
+    yield(); // Yield after tap-out phase
+    return;
+  }
+
+  // Waiting for instructor final confirmation
+  if (waitingForInstructorEnd && !tapOutPhase) {
+    if (millis() - lastRFIDTapTime >= RFID_DEBOUNCE_DELAY && 
+        rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      
+      String uidStr = getUIDString();
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      String timestamp = getFormattedTime();
+      lastRFIDTapTime = lastActivityTime = millis();
+      yield(); // Yield after RFID read
+      
+      if (uidStr == lastInstructorUID) {
+        // Mark remaining students as absent
+        for (auto& student : studentAssignedSensors) {
+          String studentUid = student.first;
+          logStudentToRTDB(studentUid, timestamp, 0.0, -3, "false", "");
+          Serial.println("Student " + studentUid + " marked absent - didn't tap out");
+          yield(); // Yield during iteration
+        }
+        
+        // PZEM data logging
+        if (tapOutSchedule.roomName.length() > 0) {
+          // Gather PZEM readings with yields for stability
+          yield();
+          float voltage = pzem.voltage();
+          yield();
+          float current = pzem.current();
+          yield();
+          float power = pzem.power();
+          yield();
+          float energy = pzem.energy();
+          yield();
+          float frequency = pzem.frequency();
+          yield();
+          float powerFactor = pzem.pf();
+          yield(); // Yield after PZEM readings
         
           if (isnan(voltage) || voltage < 0) voltage = 0.0;
           if (isnan(current) || current < 0) current = 0.0;
@@ -5831,7 +8275,6 @@ void loop() {
           if (isnan(frequency) || frequency < 0) frequency = 0.0;
           if (isnan(powerFactor) || powerFactor < 0) powerFactor = 0.0;
           
-          // Store PZEM data under the room name
           String roomPath = "/Rooms/" + tapOutSchedule.roomName;
           FirebaseJson roomPzemJson;
           roomPzemJson.set("voltage", String(voltage, 1));
@@ -5843,6 +8286,8 @@ void loop() {
           roomPzemJson.set("timestamp", timestamp);
           roomPzemJson.set("sessionId", currentSessionId);
           roomPzemJson.set("instructorUID", uidStr);
+          yield(); // Yield after partial JSON preparation
+          
           roomPzemJson.set("instructorName", firestoreTeachers[uidStr]["fullName"]);
           roomPzemJson.set("subject", tapOutSchedule.subject);
           roomPzemJson.set("subjectCode", tapOutSchedule.subjectCode);
@@ -5850,105 +8295,120 @@ void loop() {
           roomPzemJson.set("sessionStart", tapOutSchedule.startTime);
           roomPzemJson.set("sessionEnd", tapOutSchedule.endTime);
           roomPzemJson.set("date", timestamp.substring(0, 10));
+          yield(); // Yield after JSON preparation
           
-          yield(); // Add yield after JSON preparation
-          
-          // Also store in instructor's rooms
           String instructorRoomPath = "/Instructors/" + uidStr + "/Rooms/" + tapOutSchedule.roomName;
           
           if (!sdMode && isConnected && Firebase.ready()) {
-            // Store under Rooms node
             Serial.println("Storing PZEM data under room path: " + roomPath);
             if (Firebase.RTDB.setJSON(&fbdo, roomPath, &roomPzemJson)) {
               Serial.println("PZEM data logged to room successfully");
             } else {
+              String errorLog = "FirebaseError:Path:" + roomPath + " Reason:" + fbdo.errorReason();
+              storeLogToSD(errorLog);
               Serial.println("Failed to log PZEM data to room: " + fbdo.errorReason());
-              storeLogToSD("RoomPZEMLogFailed:UID:" + uidStr + " Room:" + tapOutSchedule.roomName + " Time:" + timestamp + " Error:" + fbdo.errorReason());
             }
+            yield(); // Yield after Firebase operation
             
-            yield(); // Add yield between Firebase operations
-            
-            // Store under instructor's rooms
             Serial.println("Storing PZEM data under instructor's room path: " + instructorRoomPath);
             if (Firebase.RTDB.setJSON(&fbdo, instructorRoomPath, &roomPzemJson)) {
               Serial.println("PZEM data logged to instructor room successfully");
             } else {
+              String errorLog = "FirebaseError:Path:" + instructorRoomPath + " Reason:" + fbdo.errorReason();
+              storeLogToSD(errorLog);
               Serial.println("Failed to log PZEM data to instructor room: " + fbdo.errorReason());
             }
-            
-            yield(); // Add yield between Firebase operations
-            
-            // Update class status to indicate session is fully ended
-            String instructorPath = "/Instructors/" + uidStr;
-            FirebaseJson classStatusJson;
-            classStatusJson.set("Status", "Class Ended");
-            classStatusJson.set("dateTime", timestamp);
-            
-            // Store schedule information in ClassStatus
-            FirebaseJson scheduleJson;
-            scheduleJson.set("day", tapOutSchedule.day);
-            scheduleJson.set("startTime", tapOutSchedule.startTime);
-            scheduleJson.set("endTime", tapOutSchedule.endTime);
-            scheduleJson.set("subject", tapOutSchedule.subject);
-            scheduleJson.set("subjectCode", tapOutSchedule.subjectCode);
-            scheduleJson.set("section", tapOutSchedule.section);
-            
-            yield(); // Add yield during JSON preparation
-            
-            FirebaseJson roomNameJson;
-            roomNameJson.set("name", tapOutSchedule.roomName);
-            
-            classStatusJson.set("schedule/day", tapOutSchedule.day);
-            classStatusJson.set("schedule/startTime", tapOutSchedule.startTime);
-            classStatusJson.set("schedule/endTime", tapOutSchedule.endTime);
-            classStatusJson.set("schedule/subject", tapOutSchedule.subject);
-            classStatusJson.set("schedule/subjectCode", tapOutSchedule.subjectCode);
-            classStatusJson.set("schedule/section", tapOutSchedule.section);
-            classStatusJson.set("schedule/roomName/name", tapOutSchedule.roomName);
-            
-            yield(); // Add yield after JSON preparation
-            
-            String statusPath = instructorPath + "/ClassStatus";
-            if (Firebase.RTDB.updateNode(&fbdo, statusPath, &classStatusJson)) {
-              Serial.println("Class status updated to 'Class Ended'");
-            } else {
-              Serial.println("Failed to update class status: " + fbdo.errorReason());
-            }
-            
-            yield(); // Add yield after Firebase operation
-          } else {
-            // Store to SD for later sync
-            String pzemEntry = "PZEM:UID:" + uidStr + " Room:" + tapOutSchedule.roomName + 
-                              " Time:" + timestamp + " V:" + String(voltage, 1);
-            storeLogToSD(pzemEntry);
-            yield(); // Add yield after SD write
+            yield(); // Yield after Firebase operation
           }
         }
         
-        logInstructor(uidStr, timestamp, "EndSession");
-        yield(); // Add yield after logging
-        
-        // Reset system state and display ready message
-        tapOutPhase = false;
-        classSessionActive = false;
-        waitingForInstructorEnd = false;
-        isInstructorLogged = false;
-        presentCount = 0;
-        
-        // Display confirmation and return to ready state
-        displayMessage("Session Finalized", "Data Saved", 3000);
-        // Instead of a straight delay, use a safer approach with yields
-        unsigned long startTime = millis();
-        while (millis() - startTime < 3000) {
-          delay(100);  // Process in smaller chunks
-          yield();     // Give the watchdog timer a chance to reset
+        // Update attendance summary with total count information
+        if (!sdMode && isConnected && Firebase.ready()) {
+          String summaryPath = "/AttendanceSummary/" + currentSessionId;
+          // Count total attendees regardless of status
+          int totalStudents = 0;
+          for (const auto& student : firestoreStudents) {
+            if (student.second.find("section") != student.second.end() && 
+                student.second.at("section") == tapOutSchedule.section) {
+              totalStudents++;
+            }
+          }
+          
+          FirebaseJson summaryJson;
+          summaryJson.set("totalStudents", totalStudents);
+          summaryJson.set("finalizedTime", timestamp);
+          if (Firebase.RTDB.updateNode(&fbdo, summaryPath, &summaryJson)) {
+            Serial.println("Updated attendance summary with total students: " + String(totalStudents));
+          }
+          yield(); // Yield after Firebase update
+          
+          // Update ClassStatus to Officially Ended
+          String statusPath = "/ClassStatus/" + currentSessionId;
+          FirebaseJson statusJson;
+          statusJson.set("Status", "Officially Ended");
+          statusJson.set("dateTime", timestamp);
+          Firebase.RTDB.updateNode(&fbdo, statusPath, &statusJson);
+          yield(); // Yield after update
         }
         
-        displayMessage("Ready. Tap your", "RFID Card!", 0);
+        // Log final instructor action
+        logInstructor(uidStr, timestamp, "FinalizeSession");
+        yield(); // Yield after logging
+        
+        // Perform a controlled session cleanup
+        resetSessionState();
+        
+        // Provide feedback with non-blocking delays
+        displayMessage("Attendance Summary", "Saved Successfully", 2000);
+        unsigned long startTime = millis();
+        while (millis() - startTime < 2000) yield(); // Non-blocking delay
+        
+        displayMessage("Class Officially", "Ended", 2000);
+        startTime = millis();
+        while (millis() - startTime < 2000) yield(); // Non-blocking delay
+        
+        // Final smooth transition to ready state
+        smoothTransitionToReady();
+        
+        // Reset all session variables
+        waitingForInstructorEnd = false;
+        tapOutPhase = false;
+        lastInstructorUID = "";
+        currentSessionId = "";
+        presentCount = 0;
         
         return;
+      } else if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
+        // Allow late tap-outs from students
+        Serial.println("Student " + uidStr + " tapped during instructor wait phase");
+        String studentName = "Unknown";
+        try {
+          studentName = firestoreStudents.at(uidStr).at("fullName");
+          if (studentName.length() == 0) studentName = "Student";
+        } catch (...) {
+          studentName = "Student";
+        }
+        
+        logStudentToRTDB(uidStr, timestamp, 0.0, -2, "true", timestamp);
+        
+        // Visual and audio feedback
+        digitalWrite(LED_G_PIN, HIGH);
+        tone(BUZZER_PIN, 1000, 200);
+        unsigned long startTime = millis();
+        while (millis() - startTime < 200) yield(); // Non-blocking delay
+        digitalWrite(LED_G_PIN, LOW);
+        
+        displayMessage(studentName, "Late Tap-Out", 2000);
+        displayMessage("All Students Out", "Instructor Tap Now", 2000);
+      } else {
+        // Unauthorized card
+        deniedFeedback();
+        displayMessage("Unauthorized Card", "Instructor Only", 2000);
+        displayMessage("All Students Out", "Instructor Tap Now", 0);
       }
     }
+    yield(); // Yield at the end of loop
+    return;
   }
 
   // Offline display
@@ -5969,41 +8429,48 @@ void loop() {
     relayActive = false;
     displayMessage(superAdminSessionActive ? "Class Session" : "Class In Session", "", 500);
   }
-  yield();
+  yield(); // Yield after offline display
 
-  // Standard RFID Card Detection (added back)
+  // Standard RFID Card Detection
   static unsigned long lastRFIDCheckTime = 0;
+  static int rfidResetCount = 0;
   
-  // Check RFID reader health periodically
-  if (millis() - lastRFIDCheckTime >= 10000) { // Every 10 seconds
+  if (millis() - lastRFIDCheckTime >= 10000) {
     byte version = rfid.PCD_ReadRegister(rfid.VersionReg);
     if (version == 0 || version == 0xFF) {
-      // Reader may be unresponsive, reinitialize
-      Serial.println("RFID reader may be unresponsive. Reinitializing...");
-      rfid.PCD_Init();
-      delay(50);
+      Serial.println("RFID reader not responding. Reinitializing...");
+      SPI.end(); // Properly end SPI first
+      rfid.PCD_Init(); // Reinitialize the RFID reader
       rfid.PCD_SetAntennaGain(rfid.RxGain_max);
+      Serial.println("RFID reader reinitialized");
+      rfidResetCount++;
+      
+      if (rfidResetCount >= 3) {
+        logSystemEvent("RFID Failure Reset");
+        storeLogToSD("RFIDFailure:Timestamp:" + getFormattedTime());
+        // Less drastic than full restart
+        if (WiFi.status() == WL_CONNECTED) {
+          Firebase.reconnectWiFi(true);
+        }
+        displayMessage("RFID Error", "Recovering...", 2000);
+      }
+    } else {
+      rfidResetCount = 0;
     }
     lastRFIDCheckTime = millis();
+    yield(); // Yield after RFID health check
   }
   
-  // Actual card detection
   if (millis() - lastRFIDTapTime >= RFID_DEBOUNCE_DELAY) {
     yield(); // Prevent watchdog reset before RFID operations
-    
-    // First check if a card is present
     if (rfid.PICC_IsNewCardPresent()) {
-      // Small delay to ensure stable reading
-      delayMicroseconds(500);
-      yield(); // Prevent watchdog reset after delay
-      
-      // Now try to read the card serial data
+      unsigned long startTime = millis();
+      while (millis() - startTime < 0.5) yield(); // Non-blocking microsecond delay
       if (rfid.PICC_ReadCardSerial()) {
         String uidStr = getUIDString();
         String timestamp = getFormattedTime();
         lastRFIDTapTime = lastActivityTime = millis();
         
-        // Only print UID details the first time we see this card in this session
         if (uidDetailsPrinted.find(uidStr) == uidDetailsPrinted.end() || !uidDetailsPrinted[uidStr]) {
           Serial.println("Card detected: UID = " + uidStr);
           uidDetailsPrinted[uidStr] = true;
@@ -6011,38 +8478,72 @@ void loop() {
         
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
-        yield(); // Prevent watchdog reset before processing card
+        yield(); // Yield after RFID read
         
-        // Process the card
         if (isRegisteredUID(uidStr)) {
           if (uidStr == SUPER_ADMIN_UID) {
-            // Special handling for the hardcoded Super Admin
-            yield(); // Prevent watchdog reset
+            yield(); // Yield before logging
             logSuperAdmin(uidStr, timestamp);
           } else if (firestoreTeachers.find(uidStr) != firestoreTeachers.end()) {
-            // Normal teacher logic
             String role = firestoreTeachers[uidStr]["role"];
             if (role.length() == 0) role = "instructor";
             if (role.equalsIgnoreCase("instructor")) {
-              yield(); // Prevent watchdog reset before logging instructor
-              logInstructor(uidStr, timestamp, "Access");
+              yield(); // Yield before logging
+              
+              // Check if this is the instructor who started the current session
+              if (classSessionActive && uidStr == lastInstructorUID) {
+                Serial.println("Instructor " + uidStr + " tapped to end class session");
+                logInstructor(uidStr, timestamp, "EndSession");
+                
+                // End the class session and transition to tap-out phase
+                digitalWrite(RELAY2, HIGH);
+                delay(20); // Small delay for relay
+                yield(); // Allow system to process
+                
+                digitalWrite(RELAY3, HIGH);
+                delay(20); // Small delay for relay
+                yield(); // Allow system to process
+                
+                digitalWrite(RELAY4, HIGH);
+                delay(20); // Small delay for relay
+                yield(); // Allow system to process
+                
+                relayActive = false;
+                classSessionActive = false;
+                tapOutPhase = true;
+                tapOutStartTime = millis();
+                pzemLoggedForSession = false;
+                tapOutSchedule = currentSchedule; // Save current schedule for tap-out phase
+                
+                // Use more visible class ended message
+                displayMessage("Class Ended", "Tap to Confirm", 3000);
+                // Add small delay to ensure message is displayed
+                unsigned long endMsgTime = millis();
+                while (millis() - endMsgTime < 300) yield(); // Small non-blocking delay
+                
+                Serial.println("Instructor manually ended session");
+              } else {
+                // Regular instructor access
+                logInstructor(uidStr, timestamp, "Access");
+              }
             }
           } else if (firestoreStudents.find(uidStr) != firestoreStudents.end()) {
-            // Student logic would go here based on your existing code
-            yield(); // Prevent watchdog reset for student handling
+            yield(); // Yield for student handling
           }
         } else if (isAdminUID(uidStr)) {
-          yield(); // Prevent watchdog reset before admin access
+          yield(); // Yield before admin access
           logAdminAccess(uidStr, timestamp);
         } else {
-          yield(); // Prevent watchdog reset before unregistered handling
+          yield(); // Yield before unregistered handling
           logUnregisteredUID(uidStr, timestamp);
         }
-        
-        yield(); // Final yield after processing card
+        yield(); // Final yield after RFID processing
       }
     }
   }
+  yield(); // Final yield at loop end
+
+  checkAdminDoorAutoLock();
 }
 
 // Get instructor's schedule for a specific day, regardless of time
@@ -6085,7 +8586,11 @@ ScheduleInfo getInstructorScheduleForDay(String uid, String dateStr) {
       // Check if this is a valid schedule day
       for (size_t i = 0; i < schedulesArray.size(); i++) {
         // Add yield every few iterations to prevent watchdog timeout
-        if (i % 3 == 0) yield();
+        if (i % 3 == 0) {
+          yield();
+          // Reset watchdog for long schedule processing
+          if (i > 9) lastReadyPrint = millis(); // Only reset if processing many schedules
+        }
         
         FirebaseJsonData jsonData;
         if (schedulesArray.get(jsonData, i)) {
@@ -6126,6 +8631,7 @@ ScheduleInfo getInstructorScheduleForDay(String uid, String dateStr) {
                             " in room " + schedule.roomName);
               
               // Take the latest class on this day (if multiple)
+              // This is especially relevant for instructors ending class early
               // This is especially relevant for instructors ending class early
               continue;
             }
@@ -6331,6 +8837,10 @@ void logSuperAdmin(String uid, String timestamp) {
     adminAccessActive = true;
     lastAdminUID = uid;
     
+    // Set up door auto-lock timeout
+    adminDoorOpenTime = millis();
+    Serial.println("Door will auto-lock in 30 seconds while super admin inspection continues");
+    
     if (assignedRoomId == "") {
       displayMessage("No Room Available", "For Super Admin", 2000);
     } else {
@@ -6367,7 +8877,8 @@ void logSuperAdmin(String uid, String timestamp) {
     accessFeedback();
     logSystemEvent("Relay Deactivated for Super Admin: " + uid);
     displayMessage("Super Admin", "Exit Processed", 2000);
-    displayMessage("Ready. Tap your", "RFID Card!", 0);
+    // Use smooth transition instead of direct ready message
+    smoothTransitionToReady();
   } else {
     // Different admin is already active
     deniedFeedback();

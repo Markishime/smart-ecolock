@@ -25,13 +25,14 @@ import {
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Message } from '../types';
 
-interface Schedule {
-  id: string;
+interface TeacherSchedule {
   day: string;
+  startTime: string;
+  endTime: string;
+  room: string;
   subject: string;
-  classes: { time: string; subject: string }[];
-  room?: string;
-  status?: 'ongoing' | 'upcoming' | 'completed';
+  section: string;
+  sectionId: string;
 }
 
 interface Section {
@@ -40,7 +41,7 @@ interface Section {
   currentEnrollment: number;
   id: string;
   name: string;
-  schedules: { day: string; startTime: string; endTime: string; roomName?: string }[];
+  schedules: TeacherSchedule[];
 }
 
 interface Subject {
@@ -60,7 +61,7 @@ interface InstructorData {
   fullName: string;
   email: string;
   department: string;
-  schedules: Schedule[];
+  schedules: TeacherSchedule[];
   subjects: Subject[];
   assignedStudents: string[];
 }
@@ -70,47 +71,94 @@ interface RoomStatus {
   roomId: string;
 }
 
+interface ScheduleStatus {
+  status: string;
+  color: string;
+  details: string;
+  subject?: string;
+  room?: string;
+  timeRemaining?: string;
+}
+
 const travelThemeColors = {
   primary: 'from-teal-500 to-emerald-600',
   background: 'from-teal-50 via-sky-50 to-emerald-50',
   accent: 'from-indigo-500 to-purple-600',
 };
 
-const getScheduleStatus = (schedules: Schedule[], currentDay: string, currentTime: string) => {
-  const [currentHour, currentMinute] = currentTime.split(':').map(Number);
-  const currentMinutes = currentHour * 60 + currentMinute;
+const getScheduleStatus = (schedules: TeacherSchedule[]): ScheduleStatus => {
+  const now = new Date();
+  const currentDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()];
+  const currentTimeStr = now.toLocaleTimeString('en-US', { hour12: false });
 
-  const todaySchedules = schedules.filter((s) => s.day.toLowerCase().startsWith(currentDay.toLowerCase()));
-  if (!todaySchedules.length) {
-    return { status: 'No Classes Today', color: 'bg-gray-100 text-gray-800', details: '' };
+  const todaySchedules = schedules
+    .filter(schedule => schedule.day === currentDay)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+  if (todaySchedules.length === 0) {
+    return {
+      status: 'No Classes Today',
+      color: 'bg-gray-100 text-gray-800',
+      details: currentDay
+    };
   }
 
-  for (const schedule of todaySchedules) {
-    const [startTime, endTime] = schedule.classes[0].time.split(' - ');
-    const [startHour, startMinute] = startTime.split(':').map(Number);
-    const [endHour, endMinute] = endTime.split(':').map(Number);
-    const startMinutes = startHour * 60 + startMinute;
-    const endMinutes = endHour * 60 + endMinute;
+  const currentSchedule = todaySchedules.find(
+    schedule => currentTimeStr >= schedule.startTime && currentTimeStr <= schedule.endTime
+  );
 
-    if (currentMinutes >= startMinutes && currentMinutes <= endMinutes) {
-      return {
-        status: 'In Class',
-        color: 'bg-green-100 text-green-800',
-        details: `${schedule.subject} until ${endTime}`,
-      };
-    }
-    if (currentMinutes < startMinutes) {
-      const minutesUntil = startMinutes - currentMinutes;
-      const hours = Math.floor(minutesUntil / 60);
-      const minutes = minutesUntil % 60;
-      return {
-        status: 'Next Class',
-        color: 'bg-indigo-100 text-indigo-800',
-        details: `${schedule.subject} in ${hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`}`,
-      };
-    }
+  const upcomingSchedule = todaySchedules.find(
+    schedule => currentTimeStr < schedule.startTime
+  );
+
+  if (currentSchedule) {
+    const endTime = new Date(now);
+    const [endHour, endMinute] = currentSchedule.endTime.split(':').map(Number);
+    endTime.setHours(endHour, endMinute, 0);
+    const minutesRemaining = Math.floor((endTime.getTime() - now.getTime()) / (1000 * 60));
+
+    return {
+      status: 'Class In Session',
+      color: 'bg-green-100 text-green-800',
+      details: `${minutesRemaining} minutes remaining`,
+      subject: currentSchedule.subject,
+      room: currentSchedule.room
+    };
   }
-  return { status: 'Classes Finished', color: 'bg-gray-100 text-gray-800', details: 'All done for today' };
+
+  if (upcomingSchedule) {
+    const startTime = new Date(now);
+    const [startHour, startMinute] = upcomingSchedule.startTime.split(':').map(Number);
+    startTime.setHours(startHour, startMinute, 0);
+    const minutesUntilStart = Math.floor((startTime.getTime() - now.getTime()) / (1000 * 60));
+
+    if (minutesUntilStart <= 30) {
+      return {
+        status: 'Starting Soon',
+        color: 'bg-cyan-100 text-cyan-800',
+        details: `Starts in ${minutesUntilStart} minutes`,
+        subject: upcomingSchedule.subject,
+        room: upcomingSchedule.room
+      };
+    }
+
+    return {
+      status: 'Next Class',
+      color: 'bg-blue-100 text-blue-800',
+      details: `Starts at ${upcomingSchedule.startTime}`,
+      subject: upcomingSchedule.subject,
+      room: upcomingSchedule.room
+    };
+  }
+
+  const lastSchedule = todaySchedules[todaySchedules.length - 1];
+  return {
+    status: 'Classes Ended',
+    color: 'bg-amber-100 text-amber-800',
+    details: `Last class: ${lastSchedule.subject}`,
+    subject: lastSchedule.subject,
+    room: lastSchedule.room
+  };
 };
 
 const InstructorDashboard = () => {
@@ -124,6 +172,24 @@ const InstructorDashboard = () => {
   const [roomOccupancy, setRoomOccupancy] = useState<RoomStatus[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [loading, setLoading] = useState(true);
+  const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus>({
+    status: 'Loading...',
+    color: 'bg-gray-100 text-gray-800',
+    details: 'Fetching schedule...'
+  });
+
+  // Update current time and schedule status every second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      setCurrentTime(now);
+      if (instructorData?.schedules) {
+        setScheduleStatus(getScheduleStatus(instructorData.schedules));
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [instructorData]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -131,57 +197,31 @@ const InstructorDashboard = () => {
       return;
     }
 
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-
-    // Fetch Instructor Data from Firestore 'teachers' collection
+    // Fetch Instructor Data from Firestore
     const teacherRef = doc(db, 'teachers', currentUser.uid);
-    const unsubscribeTeacher = onSnapshot(
-      teacherRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          const subjects: Subject[] = data.assignedSubjects || [];
-          const allSchedules: Schedule[] = [];
+    const unsubscribeTeacher = onSnapshot(teacherRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setInstructorData({
+          id: currentUser.uid,
+          fullName: data.fullName || 'Instructor',
+          email: data.email || '',
+          department: data.department || 'N/A',
+          schedules: data.schedules || [],
+          subjects: data.assignedSubjects || [],
+          assignedStudents: data.assignedStudents || [],
+        });
 
-          // Extract schedules from sections within assignedSubjects
-          subjects.forEach((subject: Subject) => {
-            if (subject.sections && Array.isArray(subject.sections)) {
-              subject.sections.forEach((section) => {
-                if (section.schedules && Array.isArray(section.schedules)) {
-                  const sectionSchedules = section.schedules.map((s, index) => ({
-                    id: `${currentUser.uid}_${subject.name}_${section.code}_${s.day}_${index}`,
-                    day: s.day,
-                    subject: subject.name,
-                    classes: [{ time: `${s.startTime} - ${s.endTime}`, subject: subject.name }],
-                    room: s.roomName,
-                  }));
-                  allSchedules.push(...sectionSchedules);
-                }
-              });
-            }
-          });
-
-          setInstructorData({
-            id: currentUser.uid,
-            fullName: data.fullName || 'Instructor',
-            email: data.email || '',
-            department: data.department || 'N/A',
-            schedules: allSchedules,
-            subjects,
-            assignedStudents: data.assignedStudents || [],
-          });
-        } else {
-          Swal.fire('Error', 'Instructor data not found', 'error');
-          setInstructorData(null);
+        // Update schedule status immediately
+        if (data.schedules) {
+          setScheduleStatus(getScheduleStatus(data.schedules));
         }
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching instructor data:', error);
-        Swal.fire('Error', 'Failed to load instructor data', 'error');
-        setLoading(false);
+      } else {
+        Swal.fire('Error', 'Instructor data not found', 'error');
+        setInstructorData(null);
       }
-    );
+      setLoading(false);
+    });
 
     // Fetch Total Students
     const studentsQuery = query(collection(db, 'students'), where('teacherId', '==', currentUser.uid));
@@ -206,7 +246,7 @@ const InstructorDashboard = () => {
       const currentMinutes = currentHour * 60 + currentMinute;
 
       const active = instructorData?.schedules.filter((s) => {
-        const [startTime, endTime] = s.classes[0].time.split(' - ');
+        const [startTime, endTime] = s.startTime.split(' - ');
         const [startHour, startMinute] = startTime.split(':').map(Number);
         const [endHour, endMinute] = endTime.split(':').map(Number);
         const startMinutes = startHour * 60 + startMinute;
@@ -237,21 +277,20 @@ const InstructorDashboard = () => {
     const interval = setInterval(fetchActiveClasses, 60000);
 
     return () => {
-      clearInterval(timer);
-      clearInterval(interval);
       unsubscribeTeacher();
       unsubscribeStudents();
       unsubscribeAttendance();
       off(roomsRef);
+      clearInterval(interval);
     };
-  }, [currentUser, navigate, instructorData?.schedules]);
+  }, [currentUser, navigate]);
 
   const todaySchedule = useMemo(() => {
     const today = currentTime.toLocaleString('en-US', { weekday: 'short' }); // e.g., "Wed"
     return (
       instructorData?.schedules
         .filter((s) => s.day.toLowerCase().startsWith(today.toLowerCase()))
-        .sort((a, b) => a.classes[0].time.localeCompare(b.classes[0].time)) || []
+        .sort((a, b) => a.startTime.localeCompare(b.startTime)) || []
     );
   }, [instructorData?.schedules, currentTime]);
 
@@ -262,14 +301,6 @@ const InstructorDashboard = () => {
       schedules: instructorData?.schedules.filter((s) => s.day.toLowerCase().startsWith(day.toLowerCase())) || [],
     }));
   }, [instructorData?.schedules]);
-
-  const scheduleStatus = useMemo(() => {
-    return getScheduleStatus(
-      instructorData?.schedules || [],
-      currentTime.toLocaleString('en-US', { weekday: 'short' }),
-      currentTime.toLocaleTimeString('en-US', { hour12: false })
-    );
-  }, [instructorData?.schedules, currentTime]);
 
   if (loading) {
     return (
@@ -286,17 +317,18 @@ const InstructorDashboard = () => {
   return (
     <div className={`min-h-screen bg-gradient-to-br ${travelThemeColors.background}`}>
       <NavBar
-        currentTime={currentTime}
-        classStatus={{
-          status: scheduleStatus.status,
-          color: scheduleStatus.color,
-          details: scheduleStatus.details,
-          fullName: instructorData.fullName,
-        }}
         user={{
           role: 'instructor',
-          fullName: instructorData.fullName,
-          department: instructorData.department,
+          fullName: instructorData?.fullName || 'Instructor',
+          department: instructorData?.department || 'Loading...',
+        }}
+        classStatus={{
+          status: scheduleStatus.status,
+          color: scheduleStatus.color.replace('bg-', 'border-l-').replace('text-', ''),
+          details: scheduleStatus.subject 
+            ? `${scheduleStatus.subject} - Room ${scheduleStatus.room} (${scheduleStatus.details})`
+            : scheduleStatus.details,
+          fullName: instructorData?.fullName || 'Instructor',
         }}
       />
 
@@ -391,7 +423,7 @@ const InstructorDashboard = () => {
               {todaySchedule.length > 0 ? (
                 todaySchedule.map((schedule, index) => (
                   <motion.div
-                    key={schedule.id}
+                    key={schedule.sectionId}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.1, duration: 0.4 }}
@@ -403,7 +435,7 @@ const InstructorDashboard = () => {
                       <div className="flex flex-wrap items-center text-xs sm:text-sm text-gray-600 mt-1 gap-2 sm:gap-4">
                         <div className="flex items-center">
                           <ClockIcon className="h-4 w-4 sm:h-5 sm:w-5 mr-1 sm:mr-2" />
-                          {schedule.classes[0].time}
+                          {schedule.startTime} - {schedule.endTime}
                         </div>
                         {schedule.room && (
                           <div className="flex items-center">
@@ -443,12 +475,12 @@ const InstructorDashboard = () => {
                     <p className="font-semibold text-indigo-800 text-base sm:text-lg mb-3 sm:mb-4">{day}</p>
                     {schedules.length > 0 ? (
                       schedules.map((s) => (
-                        <div key={s.id} className="mb-2 sm:mb-3">
+                        <div key={s.sectionId} className="mb-2 sm:mb-3">
                           <p className="text-xs sm:text-sm font-medium text-gray-900">{s.subject}</p>
                           <p className="text-xs text-gray-600 flex flex-wrap items-center mt-1 gap-2">
                             <span className="flex items-center">
                               <ClockIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                              {s.classes[0].time}
+                              {s.startTime} - {s.endTime}
                             </span>
                             {s.room && (
                               <span className="flex items-center">
