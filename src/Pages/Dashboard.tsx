@@ -178,18 +178,8 @@ const InstructorDashboard = () => {
     details: 'Fetching schedule...'
   });
 
-  // Update current time and schedule status every second
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-      if (instructorData?.schedules) {
-        setScheduleStatus(getScheduleStatus(instructorData.schedules));
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [instructorData]);
+  // Add state for teacher's schedule
+  const [teacherSchedule, setTeacherSchedule] = useState<TeacherSchedule[]>([]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -197,31 +187,68 @@ const InstructorDashboard = () => {
       return;
     }
 
-    // Fetch Instructor Data from Firestore
-    const teacherRef = doc(db, 'teachers', currentUser.uid);
-    const unsubscribeTeacher = onSnapshot(teacherRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setInstructorData({
-          id: currentUser.uid,
-          fullName: data.fullName || 'Instructor',
-          email: data.email || '',
-          department: data.department || 'N/A',
-          schedules: data.schedules || [],
-          subjects: data.assignedSubjects || [],
-          assignedStudents: data.assignedStudents || [],
+    // Fetch Teacher Schedule from Firestore
+    const fetchTeacherSchedule = async () => {
+      try {
+        const teacherRef = doc(db, 'teachers', currentUser.uid);
+        const unsubscribeTeacher = onSnapshot(teacherRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            
+            // Extract schedules from assignedSubjects
+            const schedules: TeacherSchedule[] = [];
+            if (data.assignedSubjects && Array.isArray(data.assignedSubjects)) {
+              data.assignedSubjects.forEach((subject: any) => {
+                if (subject.sections && Array.isArray(subject.sections)) {
+                  subject.sections.forEach((section: any) => {
+                    if (section.schedules && Array.isArray(section.schedules)) {
+                      section.schedules.forEach((schedule: any) => {
+                        schedules.push({
+                          day: schedule.day || '',
+                          startTime: schedule.startTime || '',
+                          endTime: schedule.endTime || '',
+                          room: schedule.roomName || '',
+                          subject: subject.name || '',
+                          section: section.name || '',
+                          sectionId: section.id || ''
+                        });
+                      });
+                    }
+                  });
+                }
+              });
+            }
+
+            setTeacherSchedule(schedules);
+            setInstructorData({
+              id: currentUser.uid,
+              fullName: data.fullName || 'Instructor',
+              email: data.email || '',
+              department: data.department || 'N/A',
+              schedules: schedules,
+              subjects: data.assignedSubjects || [],
+              assignedStudents: data.assignedStudents || [],
+            });
+
+            // Update schedule status immediately
+            if (schedules.length > 0) {
+              setScheduleStatus(getScheduleStatus(schedules));
+            }
+          } else {
+            Swal.fire('Error', 'Instructor data not found', 'error');
+            setInstructorData(null);
+          }
+          setLoading(false);
         });
 
-        // Update schedule status immediately
-        if (data.schedules) {
-          setScheduleStatus(getScheduleStatus(data.schedules));
-        }
-      } else {
-        Swal.fire('Error', 'Instructor data not found', 'error');
-        setInstructorData(null);
+        return () => unsubscribeTeacher();
+      } catch (error) {
+        console.error('Error fetching teacher schedule:', error);
+        setLoading(false);
       }
-      setLoading(false);
-    });
+    };
+
+    fetchTeacherSchedule();
 
     // Fetch Total Students
     const studentsQuery = query(collection(db, 'students'), where('teacherId', '==', currentUser.uid));
@@ -277,7 +304,6 @@ const InstructorDashboard = () => {
     const interval = setInterval(fetchActiveClasses, 60000);
 
     return () => {
-      unsubscribeTeacher();
       unsubscribeStudents();
       unsubscribeAttendance();
       off(roomsRef);
@@ -286,21 +312,29 @@ const InstructorDashboard = () => {
   }, [currentUser, navigate]);
 
   const todaySchedule = useMemo(() => {
-    const today = currentTime.toLocaleString('en-US', { weekday: 'short' }); // e.g., "Wed"
-    return (
-      instructorData?.schedules
-        .filter((s) => s.day.toLowerCase().startsWith(today.toLowerCase()))
-        .sort((a, b) => a.startTime.localeCompare(b.startTime)) || []
-    );
-  }, [instructorData?.schedules, currentTime]);
+    const today = currentTime.toLocaleString('en-US', { weekday: 'long' }); // e.g., "Wednesday"
+    return teacherSchedule
+      .filter((s) => s.day.toLowerCase() === today.toLowerCase())
+      .sort((a, b) => {
+        const timeA = a.startTime.split(':').map(Number);
+        const timeB = b.startTime.split(':').map(Number);
+        return (timeA[0] * 60 + timeA[1]) - (timeB[0] * 60 + timeB[1]);
+      });
+  }, [teacherSchedule, currentTime]);
 
   const weeklySchedule = useMemo(() => {
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return days.map((day) => ({
       day,
-      schedules: instructorData?.schedules.filter((s) => s.day.toLowerCase().startsWith(day.toLowerCase())) || [],
+      schedules: teacherSchedule
+        .filter((s) => s.day.toLowerCase() === day.toLowerCase())
+        .sort((a, b) => {
+          const timeA = a.startTime.split(':').map(Number);
+          const timeB = b.startTime.split(':').map(Number);
+          return (timeA[0] * 60 + timeA[1]) - (timeB[0] * 60 + timeB[1]);
+        })
     }));
-  }, [instructorData?.schedules]);
+  }, [teacherSchedule]);
 
   if (loading) {
     return (
@@ -423,7 +457,7 @@ const InstructorDashboard = () => {
               {todaySchedule.length > 0 ? (
                 todaySchedule.map((schedule, index) => (
                   <motion.div
-                    key={schedule.sectionId}
+                    key={`${schedule.sectionId}-${index}`}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.1, duration: 0.4 }}
@@ -431,7 +465,12 @@ const InstructorDashboard = () => {
                   >
                     <BookOpenIcon className="h-6 w-6 sm:h-8 sm:w-8 text-indigo-600 mr-3 sm:mr-4" />
                     <div className="flex-1">
-                      <p className="font-semibold text-gray-900 text-base sm:text-lg">{schedule.subject}</p>
+                      <div className="flex justify-between items-start">
+                        <p className="font-semibold text-gray-900 text-base sm:text-lg">{schedule.subject}</p>
+                        <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
+                          {schedule.section}
+                        </span>
+                      </div>
                       <div className="flex flex-wrap items-center text-xs sm:text-sm text-gray-600 mt-1 gap-2 sm:gap-4">
                         <div className="flex items-center">
                           <ClockIcon className="h-4 w-4 sm:h-5 sm:w-5 mr-1 sm:mr-2" />
@@ -457,13 +496,13 @@ const InstructorDashboard = () => {
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2, duration: 0.5 }}
-              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50"
+              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50 mt-6"
             >
               <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 flex items-center">
                 <CalendarIcon className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2" />
                 Weekly Schedule
               </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
                 {weeklySchedule.map(({ day, schedules }) => (
                   <motion.div
                     key={day}
@@ -474,9 +513,14 @@ const InstructorDashboard = () => {
                   >
                     <p className="font-semibold text-indigo-800 text-base sm:text-lg mb-3 sm:mb-4">{day}</p>
                     {schedules.length > 0 ? (
-                      schedules.map((s) => (
-                        <div key={s.sectionId} className="mb-2 sm:mb-3">
-                          <p className="text-xs sm:text-sm font-medium text-gray-900">{s.subject}</p>
+                      schedules.map((s, index) => (
+                        <div key={`${s.sectionId}-${index}`} className="mb-2 sm:mb-3 p-2 bg-white/50 rounded-lg">
+                          <div className="flex justify-between items-start">
+                            <p className="text-xs sm:text-sm font-medium text-gray-900">{s.subject}</p>
+                            <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
+                              {s.section}
+                            </span>
+                          </div>
                           <p className="text-xs text-gray-600 flex flex-wrap items-center mt-1 gap-2">
                             <span className="flex items-center">
                               <ClockIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />

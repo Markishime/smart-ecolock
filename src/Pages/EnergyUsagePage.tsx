@@ -116,7 +116,12 @@ interface InstructorEnergyData {
   instructorName: string;
 }
 
-const VECO_RATE_PER_KWH = 14; // Pesos per kWh
+interface Duration {
+  hours: number;
+  minutes: number;
+  totalHours: number;
+}
+
 const SCALING_FACTOR = 20; // Scaling factor set to 20x
 
 const EnergyUsagePage: React.FC = () => {
@@ -142,6 +147,9 @@ const EnergyUsagePage: React.FC = () => {
 
   // State to store energy data for all instructors
   const [instructorsEnergyData, setInstructorsEnergyData] = useState<InstructorEnergyData[]>([]);
+
+  // Add this state for the rate
+  const [vecoRate, setVecoRate] = useState<number>(14);
 
   // Fetch all instructors' data in real-time
   useEffect(() => {
@@ -378,52 +386,56 @@ const EnergyUsagePage: React.FC = () => {
     };
   };
 
-  // Calculate duration based on AccessLogs timestamps
-  const calculateDuration = () => {
+  // Calculate duration based on ClassStatus schedule times
+  const calculateDuration = (): Duration => {
     if (!selectedTimestamp) {
-      return 1.48; // Default fallback
+      return { hours: 0, minutes: 0, totalHours: 0 };
     }
 
     try {
-      let durationHours = 1.48;
+      let durationMs = 0;
+      let calculatedDuration: Duration = { hours: 0, minutes: 0, totalHours: 0 };
+
       Object.values(instructorsData).forEach((instructor) => {
-        if (!instructor?.AccessLogs) return;
-
-        let accessTimestamp: string | null = null;
-        let endSessionTimestamp: string | null = null;
-
-        Object.values(instructor.AccessLogs).forEach((log: AccessLogEntry) => {
-          if (log.action === 'Access' && log.status === 'granted' && log.timestamp === selectedTimestamp) {
-            accessTimestamp = log.timestamp;
-          } else if (log.action === 'EndSession' && log.status === 'completed') {
-            endSessionTimestamp = log.timestamp;
-          }
-        });
-
-        if (accessTimestamp && endSessionTimestamp) {
-          const start = parseTimestamp(accessTimestamp);
-          const end = parseTimestamp(endSessionTimestamp);
-
-          if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
-            const durationMs = end.getTime() - start.getTime();
-            const calculatedDurationHours = durationMs / (1000 * 60 * 60);
-            if (calculatedDurationHours > 0) {
-              durationHours = calculatedDurationHours;
+        // First check if we have matching ClassStatus for the selected timestamp
+        if (instructor?.ClassStatus?.dateTime === selectedTimestamp) {
+          const schedule = instructor.ClassStatus.schedule;
+          if (schedule?.startTime && schedule?.endTime) {
+            // Extract hours and minutes from startTime (format HH:MM)
+            const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
+            const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
+            
+            // Calculate total minutes for start and end
+            let startTotalMinutes = startHour * 60 + startMinute;
+            let endTotalMinutes = endHour * 60 + endMinute;
+            
+            // Handle cases where the end time is on the next day
+            if (endTotalMinutes < startTotalMinutes) {
+              endTotalMinutes += 24 * 60; // Add 24 hours in minutes
             }
+            
+            const totalMinutes = endTotalMinutes - startTotalMinutes;
+            
+            calculatedDuration = {
+              hours: Math.floor(totalMinutes / 60),
+              minutes: totalMinutes % 60,
+              totalHours: totalMinutes / 60
+            };
+            
+            // Break the loop since we found the matching session
+            return;
           }
-        } else if (instructor?.ClassStatus?.schedule?.roomName?.pzem?.sessionDuration) {
-          durationHours = parseFloat(instructor.ClassStatus.schedule.roomName.pzem.sessionDuration) || 1.48;
         }
       });
 
-      return durationHours;
+      return calculatedDuration;
     } catch (error) {
       console.error('Error calculating duration:', error);
-      return 1.48;
+      return { hours: 0, minutes: 0, totalHours: 0 };
     }
   };
 
-  const durationHours = calculateDuration();
+  const duration = calculateDuration();
 
   // Calculate power consumption based on PZEM data
   const calculatePowerConsumption = () => {
@@ -448,22 +460,22 @@ const EnergyUsagePage: React.FC = () => {
     }
 
     const actualConsumptionKWh = prototypeConsumptionKWh * SCALING_FACTOR;
-    const prototypeCost = prototypeConsumptionKWh * VECO_RATE_PER_KWH * durationHours;
-    const actualCost = actualConsumptionKWh * VECO_RATE_PER_KWH * durationHours;
+    const prototypeCost = prototypeConsumptionKWh * vecoRate * duration.totalHours;
+    const actualCost = actualConsumptionKWh * vecoRate * duration.totalHours;
 
     return {
       prototypeConsumptionKWh: prototypeConsumptionKWh.toFixed(2),
       actualConsumptionKWh: actualConsumptionKWh.toFixed(2),
       prototypeCost: prototypeCost.toFixed(2),
       actualCost: actualCost.toFixed(2),
-      durationHours: durationHours.toFixed(2),
+      durationHours: duration.totalHours.toFixed(2),
     };
   };
 
   const powerConsumption = calculatePowerConsumption();
 
   // Use actual consumption for total consumption
-  const totalConsumption = parseFloat(powerConsumption.actualConsumptionKWh) * durationHours;
+  const totalConsumption = parseFloat(powerConsumption.actualConsumptionKWh) * duration.totalHours;
   const averageConsumption = energyData.length > 0 ? totalConsumption / energyData.length : 0;
   const peakUsage = energyData.length > 0 ? Math.max(...energyData.map((e) => e.consumptionKWh * SCALING_FACTOR)) : 0;
 
@@ -472,8 +484,8 @@ const EnergyUsagePage: React.FC = () => {
     const userDurationHours = parseFloat(calcDurationHours) || 1;
     const prototypeKWh = energyKWh;
     const actualKWh = prototypeKWh * SCALING_FACTOR;
-    const prototypeCost = prototypeKWh * VECO_RATE_PER_KWH * userDurationHours;
-    const actualCost = actualKWh * VECO_RATE_PER_KWH * userDurationHours;
+    const prototypeCost = prototypeKWh * vecoRate * userDurationHours;
+    const actualCost = actualKWh * vecoRate * userDurationHours;
 
     setCalcResult({
       prototypeKWh: prototypeKWh.toFixed(2),
@@ -728,20 +740,40 @@ const EnergyUsagePage: React.FC = () => {
               />
             </div>
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
-              <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
-                <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
-                Power Consumption Analysis (@ ₱{VECO_RATE_PER_KWH}/kWh)
-              </h3>
+              <div className="flex items-center justify-between mb-4 sm:mb-6">
+                <h3 className="text-base sm:text-lg font-semibold flex items-center">
+                  <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
+                  Power Consumption Analysis
+                </h3>
+                <div className="flex items-center">
+                  <label htmlFor="vecoRate" className="text-sm text-gray-600 mr-2">Rate (₱/kWh):</label>
+                  <input
+                    id="vecoRate"
+                    type="number"
+                    value={vecoRate}
+                    onChange={(e) => setVecoRate(Math.max(0, parseFloat(e.target.value) || 0))}
+                    className="w-20 rounded-lg border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 text-sm py-1 px-2"
+                    min="0"
+                    step="0.01"
+                  />
+                </div>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Prototype Consumption</h4>
-                  <p className="text-xs sm:text-sm">Duration: {powerConsumption.durationHours} hours</p>
+                  <p className="text-xs sm:text-sm">
+                    Duration: {duration.hours} hours {duration.minutes} minutes
+                    {duration.totalHours > 0 && ` (${duration.totalHours.toFixed(2)} hours)`}
+                  </p>
                   <p className="text-xs sm:text-sm">Consumption: {powerConsumption.prototypeConsumptionKWh} kWh</p>
                   <p className="text-xs sm:text-sm">Cost: ₱{powerConsumption.prototypeCost}</p>
                 </div>
                 <div>
                   <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Actual Room Consumption (Scaled x{SCALING_FACTOR})</h4>
-                  <p className="text-xs sm:text-sm">Duration: {powerConsumption.durationHours} hours</p>
+                  <p className="text-xs sm:text-sm">
+                    Duration: {duration.hours} hours {duration.minutes} minutes
+                    {duration.totalHours > 0 && ` (${duration.totalHours.toFixed(2)} hours)`}
+                  </p>
                   <p className="text-xs sm:text-sm">Consumption: {powerConsumption.actualConsumptionKWh} kWh</p>
                   <p className="text-xs sm:text-sm">Cost: ₱{powerConsumption.actualCost}</p>
                 </div>
@@ -750,7 +782,7 @@ const EnergyUsagePage: React.FC = () => {
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
               <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
                 <CalculatorIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
-                Interactive Power Calculator (@ ₱{VECO_RATE_PER_KWH}/kWh)
+                Interactive Power Calculator (@ ₱{vecoRate}/kWh)
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 <div>
@@ -791,13 +823,13 @@ const EnergyUsagePage: React.FC = () => {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                         <div>
                           <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Prototype Consumption</h4>
-                          <p>Duration: {calcResult.durationHours} hours</p>
+                          <p>Duration: {Math.floor(parseFloat(calcResult.durationHours))} hours {Math.round((parseFloat(calcResult.durationHours) % 1) * 60)} minutes</p>
                           <p>Consumption: {calcResult.prototypeKWh} kWh</p>
                           <p>Cost: ₱{calcResult.prototypeCost}</p>
                         </div>
                         <div>
                           <h4 className="font-medium text-gray-700 mb-2 text-sm sm:text-base">Actual Room Consumption (Scaled x{SCALING_FACTOR})</h4>
-                          <p>Duration: {calcResult.durationHours} hours</p>
+                          <p>Duration: {Math.floor(parseFloat(calcResult.durationHours))} hours {Math.round((parseFloat(calcResult.durationHours) % 1) * 60)} minutes</p>
                           <p>Consumption: {calcResult.actualKWh} kWh</p>
                           <p>Cost: ₱{calcResult.actualCost}</p>
                         </div>
@@ -882,7 +914,7 @@ const EnergyUsagePage: React.FC = () => {
                         <th scope="col" className="px-4 sm:px-6 py-2 sm:py-3">
                           Consumption (kWh)
                         </th>
-                      </tr>
+                      </tr> 
                     </thead>
                     <tbody>
                       {filteredEnergyData.length > 0 ? (
