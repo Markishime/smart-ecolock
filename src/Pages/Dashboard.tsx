@@ -1,6 +1,6 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 import { ref, onValue, off } from 'firebase/database';
 import { auth, db, rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
@@ -12,6 +12,14 @@ import {
   ClipboardDocumentCheckIcon,
   UsersIcon,
   CheckCircleIcon,
+  ChartBarIcon,
+  MagnifyingGlassIcon,
+  ArrowDownTrayIcon,
+  XCircleIcon,
+  BellIcon,
+  ClipboardDocumentListIcon,
+  DocumentIcon,
+  TableCellsIcon,
 } from '@heroicons/react/24/outline';
 import { motion } from 'framer-motion';
 import NavBar from '../components/NavBar';
@@ -24,6 +32,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Message } from '../types';
+import debounce from 'lodash/debounce';
 
 interface TeacherSchedule {
   day: string;
@@ -33,15 +42,16 @@ interface TeacherSchedule {
   subject: string;
   section: string;
   sectionId: string;
+  instructorName: string;
 }
 
 interface Section {
-  capacity: number;
-  code: string;
-  currentEnrollment: number;
   id: string;
   name: string;
-  schedules: TeacherSchedule[];
+  students: string[];
+  instructorId: string;
+  room?: string;
+  subjectId?: string;
 }
 
 interface Subject {
@@ -78,6 +88,47 @@ interface ScheduleStatus {
   subject?: string;
   room?: string;
   timeRemaining?: string;
+}
+
+interface AttendanceRecord {
+  id: string;
+  studentName: string;
+  studentEmail: string;
+  date: string;
+  time: string;
+  status: 'present' | 'late' | 'absent';
+  subjectName: string;
+  room: string;
+  timeIn?: string;
+  timeOut?: string;
+  sensor?: string;
+  sectionId: string;
+}
+
+interface Student {
+  name: string;
+  email: string;
+}
+
+interface SortConfig {
+  key: keyof AttendanceRecord;
+  direction: 'asc' | 'desc';
+}
+
+interface DateRange {
+  start: string;
+  end: string;
+}
+
+interface StudentPerformance {
+  name: string;
+  absences?: number;
+  attendanceRate?: number;
+}
+
+interface AttendancePattern {
+  time: string;
+  rate: number;
 }
 
 const travelThemeColors = {
@@ -180,6 +231,32 @@ const InstructorDashboard = () => {
 
   // Add state for teacher's schedule
   const [teacherSchedule, setTeacherSchedule] = useState<TeacherSchedule[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [selectedSection, setSelectedSection] = useState<string>('');
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [students, setStudents] = useState<Student[]>([]);
+  const [attendanceFilter, setAttendanceFilter] = useState<'weekly' | 'monthly'>('weekly');
+
+  // New state variables for filtering and sorting
+  const [statusFilter, setStatusFilter] = useState('');
+  const [subjectFilter, setSubjectFilter] = useState('');
+  const [dateRange, setDateRange] = useState<DateRange>({
+    start: '',
+    end: '',
+  });
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    key: 'studentName',
+    direction: 'desc',
+  });
+
+  // Debounced search
+  const debouncedSearch = useCallback(
+    debounce((query: string) => {
+      setSearchQuery(query);
+    }, 300),
+    []
+  );
 
   useEffect(() => {
     if (!currentUser) {
@@ -210,7 +287,8 @@ const InstructorDashboard = () => {
                           room: schedule.roomName || '',
                           subject: subject.name || '',
                           section: section.name || '',
-                          sectionId: section.id || ''
+                          sectionId: section.id || '',
+                          instructorName: data.fullName || 'Instructor',
                         });
                       });
                     }
@@ -272,13 +350,32 @@ const InstructorDashboard = () => {
       const [currentHour, currentMinute] = currentTimeStr.split(':').map(Number);
       const currentMinutes = currentHour * 60 + currentMinute;
 
-      const active = instructorData?.schedules.filter((s) => {
-        const [startTime, endTime] = s.startTime.split(' - ');
-        const [startHour, startMinute] = startTime.split(':').map(Number);
-        const [endHour, endMinute] = endTime.split(':').map(Number);
-        const startMinutes = startHour * 60 + startMinute;
-        const endMinutes = endHour * 60 + endMinute;
-        return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+      const active = instructorData?.schedules?.filter((s) => {
+        // Skip this schedule if startTime is undefined or doesn't contain the expected format
+        if (!s.startTime || !s.endTime || !s.startTime.includes(':') || !s.endTime.includes(':')) {
+          return false;
+        }
+        
+        try {
+          // Use direct time extraction instead of assuming "startTime - endTime" format
+          const startTimeParts = s.startTime.split(':').map(Number);
+          const endTimeParts = s.endTime.split(':').map(Number);
+          
+          // Ensure we have valid time parts
+          if (startTimeParts.length < 2 || endTimeParts.length < 2 || 
+              isNaN(startTimeParts[0]) || isNaN(startTimeParts[1]) || 
+              isNaN(endTimeParts[0]) || isNaN(endTimeParts[1])) {
+            return false;
+          }
+          
+          const startMinutes = startTimeParts[0] * 60 + startTimeParts[1];
+          const endMinutes = endTimeParts[0] * 60 + endTimeParts[1];
+          
+          return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+        } catch (error) {
+          console.error('Error parsing schedule time:', error);
+          return false;
+        }
       }).length || 0;
 
       setActiveClasses(active);
@@ -311,6 +408,59 @@ const InstructorDashboard = () => {
     };
   }, [currentUser, navigate]);
 
+  // Add attendance-related useEffect
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    // Fetch sections
+    const sectionsQuery = query(collection(db, 'sections'), where('instructorId', '==', currentUser.uid));
+    const unsubscribeSections = onSnapshot(sectionsQuery, (snapshot) => {
+      const sectionsData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Section[];
+      setSections(sectionsData);
+    });
+
+    // Fetch attendance records
+    const attendanceQuery = query(
+      collection(db, 'attendance'),
+      where('submittedBy.id', '==', currentUser.uid),
+      orderBy('timestamp', 'desc')
+    );
+    const unsubscribeAttendance = onSnapshot(attendanceQuery, (snapshot) => {
+      const records = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as AttendanceRecord[];
+      setAttendanceRecords(records);
+    });
+
+    return () => {
+      unsubscribeSections();
+      unsubscribeAttendance();
+    };
+  }, [currentUser]);
+
+  // Calculate attendance stats
+  const attendanceStats = useMemo(() => {
+    const section = sections.find((s) => s.id === selectedSection);
+    const totalStudents = section?.students.length || 0;
+    const relevantRecords = attendanceRecords.filter((r) => r.sectionId === selectedSection);
+    const present = relevantRecords.filter((r) => r.status === 'present').length;
+    const late = relevantRecords.filter((r) => r.status === 'late').length;
+    const absent = relevantRecords.filter((r) => r.status === 'absent').length;
+    const attendanceRate = totalStudents ? ((present + late) / (present + late + absent || 1)) * 100 : 0;
+
+    return {
+      totalStudents,
+      present,
+      late,
+      absent,
+      attendanceRate,
+    };
+  }, [attendanceRecords, sections, selectedSection]);
+
   const todaySchedule = useMemo(() => {
     const today = currentTime.toLocaleString('en-US', { weekday: 'long' }); // e.g., "Wednesday"
     return teacherSchedule
@@ -335,6 +485,191 @@ const InstructorDashboard = () => {
         })
     }));
   }, [teacherSchedule]);
+
+  const sortRecords = (records: AttendanceRecord[]) => {
+    if (!sortConfig.key) return records;
+    
+    return [...records].sort((a, b) => {
+      const aValue = a[sortConfig.key];
+      const bValue = b[sortConfig.key];
+      
+      if (aValue === undefined || bValue === undefined) return 0;
+      
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return sortConfig.direction === 'asc' 
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+      
+      return 0;
+    });
+  };
+
+  const handleSort = (key: keyof AttendanceRecord) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const filteredRecords = useMemo(() => {
+    let filtered = attendanceRecords;
+    
+    if (selectedSection) {
+      filtered = filtered.filter(record => record.sectionId === selectedSection);
+    }
+    
+    if (subjectFilter) {
+      filtered = filtered.filter(record => record.subjectName === subjectFilter);
+    }
+    
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(record => 
+        record.studentName.toLowerCase().includes(query) ||
+        record.studentEmail.toLowerCase().includes(query)
+      );
+    }
+    
+    return sortRecords(filtered);
+  }, [attendanceRecords, selectedSection, subjectFilter, searchQuery, sortConfig]);
+
+  // Data insights calculations
+  const frequentAbsentees = useMemo(() => {
+    const studentAbsences = new Map<string, number>();
+    filteredRecords.forEach((record) => {
+      if (record.status === 'absent') {
+        studentAbsences.set(
+          record.studentName,
+          (studentAbsences.get(record.studentName) || 0) + 1
+        );
+      }
+    });
+    return Array.from(studentAbsences.entries())
+      .map(([name, absences]) => ({ name, absences }))
+      .sort((a, b) => b.absences - a.absences)
+      .slice(0, 5);
+  }, [filteredRecords]);
+
+  const bestPerformers = useMemo(() => {
+    const studentAttendance = new Map<string, { present: number; total: number }>();
+    filteredRecords.forEach((record) => {
+      const stats = studentAttendance.get(record.studentName) || { present: 0, total: 0 };
+      stats.total++;
+      if (record.status === 'present' || record.status === 'late') {
+        stats.present++;
+      }
+      studentAttendance.set(record.studentName, stats);
+    });
+    return Array.from(studentAttendance.entries())
+      .map(([name, stats]) => ({
+        name,
+        attendanceRate: Math.round((stats.present / stats.total) * 100),
+      }))
+      .sort((a, b) => b.attendanceRate - a.attendanceRate)
+      .slice(0, 5);
+  }, [filteredRecords]);
+
+  const attendancePatterns = useMemo<AttendancePattern[]>(() => {
+    const patterns: { [key: string]: number } = {};
+    const total: { [key: string]: number } = {};
+
+    filteredRecords.forEach(record => {
+      const time = record.time;
+      if (!patterns[time]) {
+        patterns[time] = 0;
+        total[time] = 0;
+      }
+      if (record.status === 'present') {
+        patterns[time]++;
+      }
+      total[time]++;
+    });
+
+    return Object.keys(patterns).map(time => ({
+      time,
+      rate: (patterns[time] / total[time]) * 100
+    }));
+  }, [filteredRecords]);
+
+  const exportCSV = () => {
+    if (!selectedSection) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'No Section Selected',
+        text: 'Please select a section to export attendance records.'
+      });
+      return;
+    }
+
+    if (!attendanceRecords.length) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'No Records Found',
+        text: 'There are no attendance records to export for the selected section.'
+      });
+      return;
+    }
+
+    const headers = [
+      'Student Name',
+      'Student Email',
+      'Date',
+      'Time',
+      'Status',
+      'Subject',
+      'Room',
+      'Time In',
+      'Time Out',
+      'Sensor'
+    ].join(',');
+
+    const rows = attendanceRecords.map(record => [
+      record.studentName,
+      record.studentEmail,
+      record.date,
+      record.time,
+      record.status,
+      record.subjectName,
+      record.room,
+      record.timeIn || '',
+      record.timeOut || '',
+      record.sensor || ''
+    ].map(field => `"${field}"`).join(','));
+
+    const csvContent = [headers, ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `attendance_records_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export handlers
+  const exportPDF = () => {
+    // TODO: Implement PDF export
+    Swal.fire('Coming Soon', 'PDF export feature will be available soon!', 'info');
+  };
+
+  const exportExcel = () => {
+    // TODO: Implement Excel export
+    Swal.fire('Coming Soon', 'Excel export feature will be available soon!', 'info');
+  };
+
+  const scheduleReport = () => {
+    // TODO: Implement report scheduling
+    Swal.fire('Coming Soon', 'Report scheduling feature will be available soon!', 'info');
+  };
+
+  const handleViewDetails = (record: AttendanceRecord) => {
+    // TODO: Implement view details functionality
+    Swal.fire('Coming Soon', 'View details feature will be available soon!', 'info');
+  };
 
   if (loading) {
     return (
@@ -367,9 +702,9 @@ const InstructorDashboard = () => {
       />
 
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 mt-16">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+        <div className="grid grid-cols-1 gap-6 sm:gap-8">
           {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6 sm:space-y-8">
+          <div className="space-y-6 sm:space-y-8">
             {/* Welcome Section */}
             <motion.section
               initial={{ opacity: 0, y: 30 }}
@@ -395,113 +730,363 @@ const InstructorDashboard = () => {
                   )}
                 </div>
               </div>
-
-              {/* Overview Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 mt-6 sm:mt-8">
-                {[
-                  {
-                    title: 'Total Students',
-                    value: totalStudents,
-                    icon: <UsersIcon className="h-6 w-6 sm:h-8 sm:w-8 text-teal-500" />,
-                    color: 'bg-teal-50',
-                  },
-                  {
-                    title: 'Attendance Rate',
-                    value: `${attendanceRate.toFixed(1)}%`,
-                    icon: <CheckCircleIcon className="h-6 w-6 sm:h-8 sm:w-8 text-green-500" />,
-                    color: 'bg-green-50',
-                  },
-                  {
-                    title: 'Active Classes',
-                    value: activeClasses,
-                    icon: <BookOpenIcon className="h-6 w-6 sm:h-8 sm:w-8 text-indigo-500" />,
-                    color: 'bg-indigo-50',
-                  },
-                  {
-                    title: 'Room Usage',
-                    value: `${roomUsage.toFixed(1)}%`,
-                    icon: <MapPinIcon className="h-6 w-6 sm:h-8 sm:w-8 text-purple-500" />,
-                    color: 'bg-purple-50',
-                  },
-                ].map((stat, index) => (
-                  <motion.div
-                    key={stat.title}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.1, duration: 0.5 }}
-                    className={`${stat.color} rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-md sm:shadow-lg hover:shadow-xl transition-all duration-300`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs sm:text-sm text-gray-600">{stat.title}</p>
-                        <h3 className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stat.value}</h3>
-                      </div>
-                      <div className="p-2 sm:p-3 bg-white/50 rounded-full">{stat.icon}</div>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
             </motion.section>
 
-            {/* Today's Schedule */}
+            {/* Attendance Management Section */}
             <motion.section
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1, duration: 0.5 }}
+              transition={{ delay: 0.3, duration: 0.5 }}
               className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50"
             >
-              <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 flex items-center">
-                <CalendarIcon className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2" />
-                Today's Schedule
-              </h2>
-              {todaySchedule.length > 0 ? (
-                todaySchedule.map((schedule, index) => (
-                  <motion.div
-                    key={`${schedule.sectionId}-${index}`}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.1, duration: 0.4 }}
-                    className="flex items-center p-3 sm:p-4 bg-gradient-to-r from-gray-50 to-white rounded-lg sm:rounded-xl mb-3 sm:mb-4 shadow-sm hover:shadow-md transition-all duration-300"
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
+                    <ClipboardDocumentCheckIcon className="h-6 w-6 text-indigo-600 mr-2" />
+                    Attendance Management
+                  </h2>
+                  <p className="text-gray-600 mt-1">Track and manage student attendance</p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <select
+                    value={selectedSection}
+                    onChange={(e) => setSelectedSection(e.target.value)}
+                    className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 w-full sm:w-auto shadow-sm"
                   >
-                    <BookOpenIcon className="h-6 w-6 sm:h-8 sm:w-8 text-indigo-600 mr-3 sm:mr-4" />
-                    <div className="flex-1">
-                      <div className="flex justify-between items-start">
-                        <p className="font-semibold text-gray-900 text-base sm:text-lg">{schedule.subject}</p>
-                        <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
-                          {schedule.section}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center text-xs sm:text-sm text-gray-600 mt-1 gap-2 sm:gap-4">
-                        <div className="flex items-center">
-                          <ClockIcon className="h-4 w-4 sm:h-5 sm:w-5 mr-1 sm:mr-2" />
-                          {schedule.startTime} - {schedule.endTime}
-                        </div>
-                        {schedule.room && (
-                          <div className="flex items-center">
-                            <MapPinIcon className="h-4 w-4 sm:h-5 sm:w-5 mr-1 sm:mr-2" />
-                            {schedule.room}
+                    <option value="">Select Section</option>
+                    {sections.map((section) => (
+                      <option key={section.id} value={section.id}>
+                        {section.name} {section.room ? `(Room ${section.room})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={attendanceFilter}
+                    onChange={(e) => setAttendanceFilter(e.target.value as 'weekly' | 'monthly')}
+                    className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 w-full sm:w-auto shadow-sm"
+                  >
+                    <option value="weekly">Weekly View</option>
+                    <option value="monthly">Monthly View</option>
+                  </select>
+                </div>
+              </div>
+
+              {selectedSection && (
+                <>
+                  {/* Attendance Stats */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    {[
+                      {
+                        label: 'Total Students',
+                        value: attendanceStats.totalStudents,
+                        icon: UsersIcon,
+                        color: 'from-teal-50 to-emerald-50',
+                      },
+                      {
+                        label: 'Present',
+                        value: attendanceStats.present,
+                        icon: CheckCircleIcon,
+                        color: 'from-green-50 to-emerald-50',
+                      },
+                      {
+                        label: 'Late',
+                        value: attendanceStats.late,
+                        icon: ClockIcon,
+                        color: 'from-yellow-50 to-amber-50',
+                      },
+                      {
+                        label: 'Attendance Rate',
+                        value: `${attendanceStats.attendanceRate.toFixed(1)}%`,
+                        icon: ChartBarIcon,
+                        color: 'from-blue-50 to-indigo-50',
+                      },
+                    ].map((stat) => (
+                      <motion.div
+                        key={stat.label}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.4, duration: 0.5 }}
+                        className={`bg-gradient-to-br ${stat.color} rounded-xl p-4 shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100/50`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-gray-600">{stat.label}</p>
+                            <h3 className="text-xl font-bold text-gray-900 mt-1">{stat.value}</h3>
                           </div>
-                        )}
+                          <div className="p-2 bg-white/50 rounded-full shadow-sm">
+                            <stat.icon className={`h-6 w-6 ${stat.color.replace('from-', 'text-').replace('to-', '')}`} />
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+
+                  {/* Search and Export */}
+                  <div className="flex flex-col gap-4 mb-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {/* Search Input */}
+                      <div className="relative flex-1">
+                        <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Search students..."
+                          value={searchQuery}
+                          onChange={(e) => {
+                            setSearchQuery(e.target.value);
+                            debouncedSearch(e.target.value);
+                          }}
+                          className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white/50 backdrop-blur-sm shadow-sm"
+                        />
+                      </div>
+
+                      {/* Status Filter */}
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      >
+                        <option value="">All Status</option>
+                        <option value="present">Present</option>
+                        <option value="late">Late</option>
+                        <option value="absent">Absent</option>
+                      </select>
+
+                      {/* Subject Filter */}
+                      <select
+                        value={subjectFilter}
+                        onChange={(e) => setSubjectFilter(e.target.value)}
+                        className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      >
+                        <option value="">All Subjects</option>
+                        {sections.map((subject) => (
+                          <option key={subject.id} value={subject.id}>
+                            {subject.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Date Range Picker */}
+                      <div className="flex gap-2">
+                        <input
+                          type="date"
+                          value={dateRange.start}
+                          onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+                          className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                        />
+                        <input
+                          type="date"
+                          value={dateRange.end}
+                          onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+                          className="border rounded-lg px-4 py-2 bg-white/50 backdrop-blur-sm focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                        />
                       </div>
                     </div>
-                  </motion.div>
-                ))
-              ) : (
-                <p className="text-gray-600 text-center py-4 text-sm sm:text-base">No classes scheduled for today</p>
+
+                    {/* Export Options */}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={exportCSV}
+                        className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all duration-300 shadow-sm hover:shadow-md"
+                      >
+                        <ArrowDownTrayIcon className="w-5 h-5" />
+                        Export CSV
+                      </button>
+                      <button
+                        onClick={exportPDF}
+                        className="flex items-center gap-2 bg-gradient-to-r from-red-600 to-pink-600 text-white px-4 py-2 rounded-lg hover:from-red-700 hover:to-pink-700 transition-all duration-300 shadow-sm hover:shadow-md"
+                      >
+                        <DocumentIcon className="w-5 h-5" />
+                        Export PDF
+                      </button>
+                      <button
+                        onClick={exportExcel}
+                        className="flex items-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-sm hover:shadow-md"
+                      >
+                        <TableCellsIcon className="w-5 h-5" />
+                        Export Excel
+                      </button>
+                      <button
+                        onClick={scheduleReport}
+                        className="flex items-center gap-2 bg-gradient-to-r from-amber-600 to-orange-600 text-white px-4 py-2 rounded-lg hover:from-amber-700 hover:to-orange-700 transition-all duration-300 shadow-sm hover:shadow-md"
+                      >
+                        <CalendarIcon className="w-5 h-5" />
+                        Schedule Report
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Data Insights */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    {/* Most Frequent Absentees */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-white/50 rounded-xl p-4 shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100/50"
+                    >
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4">Most Frequent Absentees</h3>
+                      <div className="space-y-2">
+                        {frequentAbsentees.map((student, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-red-50 rounded-lg">
+                            <span className="text-sm font-medium text-gray-900">{student.name}</span>
+                            <span className="text-sm text-red-600">{student.absences} absences</span>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+
+                    {/* Best Attendance Performers */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-white/50 rounded-xl p-4 shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100/50"
+                    >
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4">Best Attendance Performers</h3>
+                      <div className="space-y-2">
+                        {bestPerformers.map((student, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-green-50 rounded-lg">
+                            <span className="text-sm font-medium text-gray-900">{student.name}</span>
+                            <span className="text-sm text-green-600">{student.attendanceRate}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+
+                    {/* Attendance Patterns */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-white/50 rounded-xl p-4 shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100/50"
+                    >
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4">Attendance Patterns</h3>
+                      <div className="space-y-2">
+                        {attendancePatterns.map((pattern: AttendancePattern, index: number) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-blue-50 rounded-lg">
+                            <span className="text-sm font-medium text-gray-900">{pattern.time}</span>
+                            <span className="text-sm text-blue-600">{pattern.rate.toFixed(1)}% attendance</span>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  </div>
+
+                  {/* Attendance Records Table */}
+                  <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gradient-to-r from-gray-50 to-white">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('studentName')}>
+                            Student {sortConfig.key === 'studentName' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('date')}>
+                            Date {sortConfig.key === 'date' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('time')}>
+                            Time {sortConfig.key === 'time' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('status')}>
+                            Status {sortConfig.key === 'status' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                          </th>
+                          <th 
+                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
+                            onClick={() => handleSort('subjectName')}
+                          >
+                            Subject
+                            {sortConfig.key === 'subjectName' && (
+                              <span className="ml-1">
+                                {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('room')}>
+                            Room {sortConfig.key === 'room' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {filteredRecords.map((record) => (
+                          <tr key={record.id} className="hover:bg-gray-50 transition-colors duration-200">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <div className="flex items-center">
+                                <div className="flex-shrink-0 h-10 w-10">
+                                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 flex items-center justify-center shadow-sm">
+                                    <span className="text-indigo-600 font-medium">
+                                      {record.studentName.split(' ').map((n) => n[0]).join('')}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="ml-4">
+                                  <div className="text-sm font-medium text-gray-900">{record.studentName}</div>
+                                  <div className="text-sm text-gray-500">{record.studentEmail}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {new Date(record.date).toLocaleDateString()}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {record.time}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <span
+                                className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                  record.status === 'present'
+                                    ? 'bg-green-100 text-green-800'
+                                    : record.status === 'late'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-red-100 text-red-800'
+                                }`}
+                              >
+                                {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                              {record.subjectName}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                              {record.room}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                              <button
+                                onClick={() => handleViewDetails(record)}
+                                className="text-indigo-600 hover:text-indigo-900 font-medium transition-colors duration-200"
+                              >
+                                View Details
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </motion.section>
 
-            {/* Weekly Schedule */}
+            {/* Weekly Schedule Section */}
             <motion.section
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2, duration: 0.5 }}
-              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50 mt-6"
+              transition={{ delay: 0.4, duration: 0.5 }}
+              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50"
             >
-              <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 flex items-center">
-                <CalendarIcon className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2" />
-                Weekly Schedule
-              </h2>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
+                    <CalendarIcon className="h-6 w-6 text-indigo-600 mr-2" />
+                    Weekly Schedule
+                  </h2>
+                  <p className="text-gray-600 mt-1">View your teaching schedule for the week</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Current Week:</span>
+                  <span className="text-sm font-medium text-indigo-600">
+                    {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} -{' '}
+                    {new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                  </span>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
                 {weeklySchedule.map(({ day, schedules }) => (
                   <motion.div
@@ -509,61 +1094,57 @@ const InstructorDashboard = () => {
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.4 }}
-                    className="p-4 sm:p-6 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-lg sm:rounded-2xl shadow-md hover:shadow-lg transition-all duration-300"
+                    className="p-4 sm:p-6 bg-gradient-to-br from-indigo-50/50 to-purple-50/50 rounded-xl sm:rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100/50"
                   >
-                    <p className="font-semibold text-indigo-800 text-base sm:text-lg mb-3 sm:mb-4">{day}</p>
+                    <div className="flex items-center justify-between mb-4">
+                      <p className="font-semibold text-indigo-800 text-base sm:text-lg">{day}</p>
+                      <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
+                        {schedules.length} {schedules.length === 1 ? 'Class' : 'Classes'}
+                      </span>
+                    </div>
                     {schedules.length > 0 ? (
-                      schedules.map((s, index) => (
-                        <div key={`${s.sectionId}-${index}`} className="mb-2 sm:mb-3 p-2 bg-white/50 rounded-lg">
-                          <div className="flex justify-between items-start">
-                            <p className="text-xs sm:text-sm font-medium text-gray-900">{s.subject}</p>
-                            <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
-                              {s.section}
-                            </span>
-                          </div>
-                          <p className="text-xs text-gray-600 flex flex-wrap items-center mt-1 gap-2">
-                            <span className="flex items-center">
-                              <ClockIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                              {s.startTime} - {s.endTime}
-                            </span>
-                            {s.room && (
-                              <span className="flex items-center">
-                                <MapPinIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                                {s.room}
+                      <div className="space-y-3">
+                        {schedules.map((s, index) => (
+                          <motion.div
+                            key={`${s.sectionId}-${index}`}
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: index * 0.1 }}
+                            className="p-3 bg-white/50 rounded-lg shadow-sm hover:shadow-md transition-all duration-300"
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <p className="text-sm font-medium text-gray-900">{s.subject}</p>
+                              <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
+                                {s.section}
                               </span>
-                            )}
-                          </p>
-                        </div>
-                      ))
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center text-xs text-gray-600">
+                                <ClockIcon className="h-4 w-4 mr-2 text-indigo-500" />
+                                <span>{s.startTime} - {s.endTime}</span>
+                              </div>
+                              {s.room && (
+                                <div className="flex items-center text-xs text-gray-600">
+                                  <MapPinIcon className="h-4 w-4 mr-2 text-indigo-500" />
+                                  <span>Room {s.room}</span>
+                                </div>
+                              )}
+                              <div className="flex items-center text-xs text-gray-600">
+                                <UsersIcon className="h-4 w-4 mr-2 text-indigo-500" />
+                                <span>{s.instructorName}</span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
                     ) : (
-                      <p className="text-xs sm:text-sm text-gray-500 italic">No classes</p>
+                      <div className="text-center py-4">
+                        <p className="text-sm text-gray-500 italic">No classes scheduled</p>
+                      </div>
                     )}
                   </motion.div>
                 ))}
               </div>
-            </motion.section>
-          </div>
-
-          {/* Sidebar */}
-          <div className="lg:col-span-1 space-y-6 sm:space-y-8">
-            {/* Quick Actions */}
-            <motion.section
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.4, duration: 0.5 }}
-              className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 border border-gray-100/50"
-            >
-              <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 flex items-center">
-                <SolidClipboard className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 mr-2" />
-                Quick Actions
-              </h2>
-              <Link
-                to="/instructor/take-attendance"
-                className="w-full flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg sm:rounded-2xl shadow-md sm:shadow-lg hover:shadow-xl hover:from-indigo-600 hover:to-purple-700 transition-all duration-300 text-sm sm:text-base"
-              >
-                <ClipboardDocumentCheckIcon className="h-5 w-5 sm:h-6 sm:w-6 mr-2 sm:mr-3" />
-                Take Attendance
-              </Link>
             </motion.section>
           </div>
         </div>

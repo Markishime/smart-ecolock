@@ -18,6 +18,7 @@ import Swal from 'sweetalert2';
 import { ref, onValue, off } from 'firebase/database';
 import { rtdb } from '../firebase';
 import { useAuth } from './AuthContext';
+import { toast } from 'react-hot-toast';
 
 interface Room {
   id: string;
@@ -37,6 +38,12 @@ interface PZEMData {
   voltage: string;
   calculatedEnergy?: string;
   sessionDuration?: string;
+}
+
+interface ClassHistoryEntry {
+  Status: string;
+  dateTime: string;
+  schedule: Schedule;
 }
 
 interface EnergyUsage {
@@ -122,6 +129,31 @@ interface Duration {
   totalHours: number;
 }
 
+interface Student {
+  id: string;
+  fullName: string;
+  idNumber: string;
+  email: string;
+  mobileNumber: string;
+  department: string;
+  role: string;
+  attendance: any;
+}
+
+interface AttendanceRecord {
+  personalInfo?: {
+    fullName: string;
+    idNumber: string;
+    email: string;
+    mobileNumber: string;
+    department: string;
+    role: string;
+  };
+  attendanceInfo?: {
+    timestamp: string;
+  };
+}
+
 const SCALING_FACTOR = 20; // Scaling factor set to 20x
 
 const EnergyUsagePage: React.FC = () => {
@@ -151,6 +183,10 @@ const EnergyUsagePage: React.FC = () => {
   // Add this state for the rate
   const [vecoRate, setVecoRate] = useState<number>(14);
 
+  // Add this state for students
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loadingStudents, setLoadingStudents] = useState(true);
+
   // Fetch all instructors' data in real-time
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -176,15 +212,35 @@ const EnergyUsagePage: React.FC = () => {
             let fetchedPzem: PZEMData | null = null;
             const instructorName = instructor.Profile?.fullName || 'Unknown Instructor';
 
+            // Prioritize ClassHistory data if available (officially ended sessions)
             if (instructor.ClassHistory) {
-              Object.values(instructor.ClassHistory).forEach((history: any) => {
-                if (history.schedule && history.schedule.roomName && history.schedule.roomName.pzem) {
-                  const power = parseFloat(history.schedule.roomName.pzem.power) || 0;
-                  totalPower += power;
-                  fetchedRoomName = history.schedule.roomName.name || '';
-                  fetchedPzem = history.schedule.roomName.pzem;
+              // Find the most recent ClassHistory entry
+              const historyEntries = Object.entries(instructor.ClassHistory);
+              if (historyEntries.length > 0) {
+                // Sort by timestamp (dateTime) to get the most recent entry
+                historyEntries.sort((a, b) => {
+                  const entryA = a[1] as ClassHistoryEntry;
+                  const entryB = b[1] as ClassHistoryEntry;
+                  return entryB.dateTime.localeCompare(entryA.dateTime);
+                });
+                
+                const latestHistory = historyEntries[0][1] as ClassHistoryEntry;
+                if (latestHistory.Status === "Class Ended" && 
+                    latestHistory.schedule?.roomName?.pzem) {
+                  const power = parseFloat(latestHistory.schedule.roomName.pzem.power) || 0;
+                  totalPower = power;
+                  fetchedRoomName = latestHistory.schedule.roomName.name || '';
+                  fetchedPzem = latestHistory.schedule.roomName.pzem;
                 }
-              });
+              }
+            }
+            
+            // Fall back to ClassStatus only if no valid ClassHistory data was found
+            if (!fetchedPzem && instructor.ClassStatus?.schedule?.roomName?.pzem) {
+              const power = parseFloat(instructor.ClassStatus.schedule.roomName.pzem.power) || 0;
+              totalPower = power;
+              fetchedRoomName = instructor.ClassStatus.schedule.roomName.name || '';
+              fetchedPzem = instructor.ClassStatus.schedule.roomName.pzem;
             }
 
             energyDataList.push({
@@ -226,9 +282,20 @@ const EnergyUsagePage: React.FC = () => {
         const roomSet = new Set<string>();
         const timestamps: string[] = [];
 
-        // Fetch roomName from ClassStatus/schedule/roomName for all instructors
+        // Fetch roomName from ClassHistory first, then fall back to ClassStatus
         Object.values(instructorsData).forEach((instructor) => {
-          if (instructor?.ClassStatus?.schedule?.roomName?.name) {
+          // First try to get room names from ClassHistory (officially ended sessions)
+          if (instructor?.ClassHistory) {
+            Object.values(instructor.ClassHistory).forEach((history: any) => {
+              if (history.schedule?.roomName?.name) {
+                roomSet.add(history.schedule.roomName.name);
+              }
+            });
+          }
+          
+          // If no room was found in history, check ClassStatus
+          if (instructor?.ClassStatus?.schedule?.roomName?.name &&
+              !Array.from(roomSet).includes(instructor.ClassStatus.schedule.roomName.name)) {
             roomSet.add(instructor.ClassStatus.schedule.roomName.name);
           }
 
@@ -290,52 +357,117 @@ const EnergyUsagePage: React.FC = () => {
         const energyEntries: EnergyUsage[] = [];
 
         Object.entries(instructorsData).forEach(([rfidUid, instructor]) => {
-          const schedule = instructor?.ClassStatus?.schedule;
-          const roomName = schedule?.roomName;
-          const pzem = roomName?.pzem;
-          const instructorName = instructor?.Profile?.fullName || 'Unknown Instructor';
+          // First check ClassHistory for PZEM data (officially ended sessions)
+          let foundInHistory = false;
+          
+          if (instructor?.ClassHistory) {
+            Object.entries(instructor.ClassHistory).forEach(([historyKey, historyEntry]) => {
+              const entry = historyEntry as ClassHistoryEntry;
+              const schedule = entry?.schedule;
+              const roomName = schedule?.roomName;
+              const pzem = roomName?.pzem;
+              const instructorName = instructor?.Profile?.fullName || 'Unknown Instructor';
+              
+              if (pzem && roomName?.name && roomName.name === selectedClassroom && 
+                  entry.Status === "Class Ended") {
+                
+                const selectedTime = parseTimestamp(selectedTimestamp);
+                if (!selectedTime || isNaN(selectedTime.getTime())) {
+                  return;
+                }
 
-          const selectedTime = parseTimestamp(selectedTimestamp);
-          if (!selectedTime || isNaN(selectedTime.getTime())) {
-            return;
+                const timeWindowStart = new Date(selectedTime.getTime() - 60 * 60 * 1000);
+                const timeWindowEnd = new Date(selectedTime.getTime() + 60 * 60 * 1000);
+                
+                const pzemTimestamp = parseTimestamp(pzem.timestamp);
+                
+                if (
+                  pzemTimestamp &&
+                  !isNaN(pzemTimestamp.getTime()) &&
+                  pzemTimestamp >= timeWindowStart &&
+                  pzemTimestamp <= timeWindowEnd
+                ) {
+                  const powerWatts = parseFloat(pzem.power) || 0;
+                  const consumptionKWh = parseFloat(pzem.calculatedEnergy || pzem.energy) || 0;
+                  
+                  energyEntries.push({
+                    id: `instructor_${rfidUid}_${historyKey}`,
+                    classroomId: selectedClassroom,
+                    timestamp: pzemTimestamp,
+                    powerWatts,
+                    consumptionKWh,
+                    devices: {
+                      lighting: consumptionKWh * 0.25,
+                      projection: consumptionKWh * 0.25,
+                      computers: consumptionKWh * 0.25,
+                      hvac: consumptionKWh * 0.25,
+                    },
+                    instructorName,
+                    subject: schedule?.subject || 'Unknown Subject',
+                    subjectCode: schedule?.subjectCode || 'N/A',
+                    schedule: {
+                      day: schedule?.day || 'N/A',
+                      startTime: schedule?.startTime || 'N/A',
+                      endTime: schedule?.endTime || 'N/A',
+                      section: schedule?.section || 'N/A',
+                    },
+                  });
+                  
+                  foundInHistory = true;
+                }
+              }
+            });
           }
+          
+          // Only fall back to ClassStatus if no valid data was found in ClassHistory
+          if (!foundInHistory) {
+            const schedule = instructor?.ClassStatus?.schedule;
+            const roomName = schedule?.roomName;
+            const pzem = roomName?.pzem;
+            const instructorName = instructor?.Profile?.fullName || 'Unknown Instructor';
 
-          const timeWindowStart = new Date(selectedTime.getTime() - 60 * 60 * 1000);
-          const timeWindowEnd = new Date(selectedTime.getTime() + 60 * 60 * 1000);
+            if (pzem && roomName?.name && roomName.name === selectedClassroom) {
+              const selectedTime = parseTimestamp(selectedTimestamp);
+              if (!selectedTime || isNaN(selectedTime.getTime())) {
+                return;
+              }
 
-          if (pzem && roomName?.name && roomName.name === selectedClassroom) {
-            const powerWatts = parseFloat(pzem.power) || 0;
-            const consumptionKWh = parseFloat(pzem.calculatedEnergy || pzem.energy) || 0;
-            const pzemTimestamp = parseTimestamp(pzem.timestamp);
+              const timeWindowStart = new Date(selectedTime.getTime() - 60 * 60 * 1000);
+              const timeWindowEnd = new Date(selectedTime.getTime() + 60 * 60 * 1000);
+              const pzemTimestamp = parseTimestamp(pzem.timestamp);
 
-            if (
-              pzemTimestamp &&
-              !isNaN(pzemTimestamp.getTime()) &&
-              pzemTimestamp >= timeWindowStart &&
-              pzemTimestamp <= timeWindowEnd
-            ) {
-              energyEntries.push({
-                id: `instructor_${rfidUid}_${pzem.timestamp}`,
-                classroomId: selectedClassroom,
-                timestamp: pzemTimestamp,
-                powerWatts,
-                consumptionKWh,
-                devices: {
-                  lighting: consumptionKWh * 0.25,
-                  projection: consumptionKWh * 0.25,
-                  computers: consumptionKWh * 0.25,
-                  hvac: consumptionKWh * 0.25,
-                },
-                instructorName,
-                subject: schedule?.subject || 'Unknown Subject',
-                subjectCode: schedule?.subjectCode || 'N/A',
-                schedule: {
-                  day: schedule?.day || 'N/A',
-                  startTime: schedule?.startTime || 'N/A',
-                  endTime: schedule?.endTime || 'N/A',
-                  section: schedule?.section || 'N/A',
-                },
-              });
+              if (
+                pzemTimestamp &&
+                !isNaN(pzemTimestamp.getTime()) &&
+                pzemTimestamp >= timeWindowStart &&
+                pzemTimestamp <= timeWindowEnd
+              ) {
+                const powerWatts = parseFloat(pzem.power) || 0;
+                const consumptionKWh = parseFloat(pzem.calculatedEnergy || pzem.energy) || 0;
+                
+                energyEntries.push({
+                  id: `instructor_${rfidUid}_${pzem.timestamp}`,
+                  classroomId: selectedClassroom,
+                  timestamp: pzemTimestamp,
+                  powerWatts,
+                  consumptionKWh,
+                  devices: {
+                    lighting: consumptionKWh * 0.25,
+                    projection: consumptionKWh * 0.25,
+                    computers: consumptionKWh * 0.25,
+                    hvac: consumptionKWh * 0.25,
+                  },
+                  instructorName,
+                  subject: schedule?.subject || 'Unknown Subject',
+                  subjectCode: schedule?.subjectCode || 'N/A',
+                  schedule: {
+                    day: schedule?.day || 'N/A',
+                    startTime: schedule?.startTime || 'N/A',
+                    endTime: schedule?.endTime || 'N/A',
+                    section: schedule?.section || 'N/A',
+                  },
+                });
+              }
             }
           }
         });
@@ -360,11 +492,107 @@ const EnergyUsagePage: React.FC = () => {
     processData();
   }, [selectedClassroom, selectedTimestamp, instructorsData]);
 
-  // Helper to parse timestamp format (YYYY_MM_DD_HHMMSS)
+  // Fetch students under current instructor
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    const studentsRef = ref(rtdb, 'Students');
+    const unsubscribe = onValue(
+      studentsRef,
+      (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          const fetchedStudents: Student[] = [];
+          
+          // Process each student in the Students node
+          Object.entries(data).forEach(([rfidUid, studentData]: [string, any]) => {
+            console.log('Processing student:', rfidUid, studentData); // Debug log
+            
+            try {
+              // First try to get personal info from Profile
+              let personalInfo = studentData.Profile || null;
+              
+              // If no Profile, try to get from the most recent attendance record
+              if (!personalInfo && studentData.Attendance) {
+                // Get the last session key
+                const lastSession = studentData.lastSession;
+                if (lastSession && studentData.Attendance[lastSession]?.personalInfo) {
+                  personalInfo = studentData.Attendance[lastSession].personalInfo;
+                } else {
+                  // If no lastSession or no personalInfo in lastSession, try any attendance record
+                  const attendanceRecords = Object.values(studentData.Attendance) as AttendanceRecord[];
+                  const recordWithInfo = attendanceRecords.find(record => record?.personalInfo);
+                  if (recordWithInfo?.personalInfo) {
+                    personalInfo = recordWithInfo.personalInfo;
+                  }
+                }
+              }
+
+              // Add student if we have any personal info
+              if (personalInfo) {
+                const student: Student = {
+                  id: rfidUid,
+                  fullName: personalInfo.fullName || 'Unknown',
+                  idNumber: personalInfo.idNumber || 'N/A',
+                  email: personalInfo.email || 'N/A',
+                  mobileNumber: personalInfo.mobileNumber || 'N/A',
+                  department: personalInfo.department || 'N/A',
+                  role: personalInfo.role || 'student',
+                  attendance: studentData.Attendance || {}
+                };
+
+                fetchedStudents.push(student);
+              } else {
+                console.warn(`No personal info found for student ${rfidUid}`);
+              }
+            } catch (error) {
+              console.error(`Error processing student ${rfidUid}:`, error);
+            }
+          });
+
+          console.log('Fetched students:', fetchedStudents); // Debug log
+          
+          // Sort students by name
+          fetchedStudents.sort((a, b) => a.fullName.localeCompare(b.fullName));
+          setStudents(fetchedStudents);
+        }
+        setLoadingStudents(false);
+      },
+      (error) => {
+        console.error('Error fetching students:', error);
+        toast.error('Failed to load students');
+        setLoadingStudents(false);
+      }
+    );
+
+    return () => off(studentsRef, 'value', unsubscribe);
+  }, [currentUser]);
+
+  // Helper to parse timestamp format (YYYY_MM_DD_HHMMSS) and convert to 12-hour format
   const parseTimestamp = (timestamp: string): Date | null => {
     try {
-      const formatted = timestamp.replace(/_/g, ':').replace(/(\d{4}:\d{2}:\d{2}):(\d{2})(\d{2})(\d{2})/, '$1 $2:$3:$4');
+      // Split the timestamp into components
+      const parts = timestamp.split('_');
+      if (parts.length < 4) return null;
+      
+      const [year, month, day] = parts.slice(0, 3);
+      const timePart = parts[3];
+      
+      if (!year || !month || !day || !timePart) return null;
+      
+      const hours = timePart.substring(0, 2);
+      const minutes = timePart.substring(2, 4);
+      const seconds = timePart.substring(4, 6);
+      
+      // Convert to 12-hour format
+      let hour = parseInt(hours);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      hour = hour % 12 || 12; // Convert to 12-hour format
+      
+      // Create formatted timestamp string
+      const formatted = `${year}-${month}-${day} ${hour}:${minutes}:${seconds} ${ampm}`;
       const date = new Date(formatted);
+      
       return isNaN(date.getTime()) ? null : date;
     } catch {
       return null;
@@ -373,60 +601,137 @@ const EnergyUsagePage: React.FC = () => {
 
   // Get the latest PZEM data for real-time display
   const getCurrentData = () => {
-    const instructor = Object.values(instructorsData).find(
-      (instructor) => instructor?.ClassStatus?.schedule?.roomName?.name === selectedClassroom
-    );
-    if (!instructor?.ClassStatus?.schedule) return null;
-    const schedule = instructor.ClassStatus.schedule;
-    const roomName = schedule?.roomName;
-    if (!roomName || !roomName.pzem) return null;
-    return {
-      pzem: roomName.pzem,
-      schedule,
-    };
+    // First look for a matching ClassHistory with "Class Ended" status
+    for (const instructor of Object.values(instructorsData)) {
+      if (instructor?.ClassHistory) {
+        // Sort history entries by timestamp to get the most recent one
+        const historyEntries = Object.entries(instructor.ClassHistory)
+          .sort((a, b) => {
+            const entryA = a[1] as ClassHistoryEntry;
+            const entryB = b[1] as ClassHistoryEntry;
+            return entryB.dateTime.localeCompare(entryA.dateTime);
+          });
+        
+        // Check the most recent class history entry first
+        for (const pair of historyEntries) {
+          const historyEntry = pair[1] as ClassHistoryEntry;
+          if (
+            historyEntry.Status === "Class Ended" &&
+            historyEntry.schedule?.roomName?.name === selectedClassroom &&
+            historyEntry.schedule?.roomName?.pzem
+          ) {
+            return {
+              pzem: historyEntry.schedule.roomName.pzem,
+              schedule: historyEntry.schedule
+            };
+          }
+        }
+      }
+    }
+    
+    // Fall back to ClassStatus if no matching ClassHistory found
+    for (const instructor of Object.values(instructorsData)) {
+      if (
+        instructor?.ClassStatus?.schedule?.roomName?.name === selectedClassroom &&
+        instructor?.ClassStatus?.schedule?.roomName?.pzem
+      ) {
+        return {
+          pzem: instructor.ClassStatus.schedule.roomName.pzem,
+          schedule: instructor.ClassStatus.schedule
+        };
+      }
+    }
+    
+    return null;
   };
 
-  // Calculate duration based on ClassStatus schedule times
+  // Calculate duration based on Access timestamp and PZEM timestamp
   const calculateDuration = (): Duration => {
     if (!selectedTimestamp) {
       return { hours: 0, minutes: 0, totalHours: 0 };
     }
 
     try {
-      let durationMs = 0;
       let calculatedDuration: Duration = { hours: 0, minutes: 0, totalHours: 0 };
+      let foundMatch = false;
+      
+      // Parse the selected access timestamp
+      const accessTimestamp = parseTimestamp(selectedTimestamp);
+      if (!accessTimestamp) {
+        return calculatedDuration;
+      }
 
-      Object.values(instructorsData).forEach((instructor) => {
-        // First check if we have matching ClassStatus for the selected timestamp
-        if (instructor?.ClassStatus?.dateTime === selectedTimestamp) {
-          const schedule = instructor.ClassStatus.schedule;
-          if (schedule?.startTime && schedule?.endTime) {
-            // Extract hours and minutes from startTime (format HH:MM)
-            const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
-            const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
+      // First check ClassHistory for PZEM timestamp
+      for (const instructor of Object.values(instructorsData)) {
+        if (instructor?.ClassHistory) {
+          // Look through ClassHistory entries
+          const historyEntries = Object.entries(instructor.ClassHistory)
+            .filter(([_, entry]) => (entry as ClassHistoryEntry).Status === "Class Ended");
+          
+          for (const [historyKey, historyEntry] of historyEntries) {
+            const entry = historyEntry as ClassHistoryEntry;
             
-            // Calculate total minutes for start and end
-            let startTotalMinutes = startHour * 60 + startMinute;
-            let endTotalMinutes = endHour * 60 + endMinute;
-            
-            // Handle cases where the end time is on the next day
-            if (endTotalMinutes < startTotalMinutes) {
-              endTotalMinutes += 24 * 60; // Add 24 hours in minutes
+            // Check if this history entry is for our selected classroom
+            if (entry.schedule?.roomName?.name === selectedClassroom && 
+                entry.schedule?.roomName?.pzem?.timestamp) {
+              
+              // Parse the PZEM timestamp
+              const pzemTimestamp = parseTimestamp(entry.schedule.roomName.pzem.timestamp);
+              
+              if (pzemTimestamp) {
+                // Calculate duration between access timestamp and PZEM timestamp
+                const durationMs = pzemTimestamp.getTime() - accessTimestamp.getTime();
+                
+                // Only use positive durations
+                if (durationMs > 0) {
+                  const totalMinutes = Math.floor(durationMs / (1000 * 60));
+                  
+                  calculatedDuration = {
+                    hours: Math.floor(totalMinutes / 60),
+                    minutes: totalMinutes % 60,
+                    totalHours: totalMinutes / 60
+                  };
+                  
+                  foundMatch = true;
+                  break;
+                }
+              }
             }
+          }
+          
+          if (foundMatch) break;
+        }
+      }
+      
+      // If no matching ClassHistory, check ClassStatus
+      if (!foundMatch) {
+        for (const instructor of Object.values(instructorsData)) {
+          if (instructor?.ClassStatus?.schedule?.roomName?.name === selectedClassroom &&
+              instructor?.ClassStatus?.schedule?.roomName?.pzem?.timestamp) {
             
-            const totalMinutes = endTotalMinutes - startTotalMinutes;
+            // Parse the PZEM timestamp
+            const pzemTimestamp = parseTimestamp(instructor.ClassStatus.schedule.roomName.pzem.timestamp);
             
-            calculatedDuration = {
-              hours: Math.floor(totalMinutes / 60),
-              minutes: totalMinutes % 60,
-              totalHours: totalMinutes / 60
-            };
-            
-            // Break the loop since we found the matching session
-            return;
+            if (pzemTimestamp) {
+              // Calculate duration between access timestamp and PZEM timestamp
+              const durationMs = pzemTimestamp.getTime() - accessTimestamp.getTime();
+              
+              // Only use positive durations
+              if (durationMs > 0) {
+                const totalMinutes = Math.floor(durationMs / (1000 * 60));
+                
+                calculatedDuration = {
+                  hours: Math.floor(totalMinutes / 60),
+                  minutes: totalMinutes % 60,
+                  totalHours: totalMinutes / 60
+                };
+                
+                break;
+              }
+            }
           }
         }
-      });
+      }
 
       return calculatedDuration;
     } catch (error) {
@@ -440,13 +745,16 @@ const EnergyUsagePage: React.FC = () => {
   // Calculate power consumption based on PZEM data
   const calculatePowerConsumption = () => {
     let prototypeConsumptionKWh = 0;
+    let actualConsumptionKWh = 0;
 
+    // Get current data for display in the UI
     const currentData = getCurrentData();
     const pzem = currentData?.pzem;
 
     if (pzem) {
       prototypeConsumptionKWh = parseFloat(pzem.calculatedEnergy || pzem.energy) || 0;
 
+      // Update the latest entry's consumptionKWh and devices if we have entries
       if (energyData.length > 0) {
         const latestEntry = energyData[energyData.length - 1];
         latestEntry.consumptionKWh = prototypeConsumptionKWh;
@@ -459,7 +767,11 @@ const EnergyUsagePage: React.FC = () => {
       }
     }
 
-    const actualConsumptionKWh = prototypeConsumptionKWh * SCALING_FACTOR;
+    // For display in the Power Consumption Analysis section
+    // This shows the consumption for the current session/classroom
+    actualConsumptionKWh = prototypeConsumptionKWh * SCALING_FACTOR;
+    
+    // Calculate costs based on consumption and duration
     const prototypeCost = prototypeConsumptionKWh * vecoRate * duration.totalHours;
     const actualCost = actualConsumptionKWh * vecoRate * duration.totalHours;
 
@@ -474,10 +786,26 @@ const EnergyUsagePage: React.FC = () => {
 
   const powerConsumption = calculatePowerConsumption();
 
-  // Use actual consumption for total consumption
-  const totalConsumption = parseFloat(powerConsumption.actualConsumptionKWh) * duration.totalHours;
-  const averageConsumption = energyData.length > 0 ? totalConsumption / energyData.length : 0;
-  const peakUsage = energyData.length > 0 ? Math.max(...energyData.map((e) => e.consumptionKWh * SCALING_FACTOR)) : 0;
+  // For consistency with the displayed power consumption, get the instructor energy data for the selected classroom
+  const selectedInstructorEnergyData = instructorsEnergyData.find(
+    instructor => instructor.roomName === selectedClassroom
+  );
+
+  // Calculate the total consumption
+  // If we have energy data entries, use them; otherwise use the current PZEM data
+  const totalConsumption = energyData.length > 0 
+    ? energyData.reduce((total, entry) => total + (entry.consumptionKWh * SCALING_FACTOR), 0)
+    : parseFloat(powerConsumption.actualConsumptionKWh);
+    
+  // Calculate average consumption - if no entries, the average is the total
+  const averageConsumption = energyData.length > 0 
+    ? totalConsumption / energyData.length 
+    : totalConsumption;
+    
+  // Calculate peak usage - if no entries, the peak is the total
+  const peakUsage = energyData.length > 0 
+    ? Math.max(...energyData.map((e) => e.consumptionKWh * SCALING_FACTOR)) 
+    : totalConsumption;
 
   const handleCalculate = () => {
     const energyKWh = parseFloat(calcEnergyKWh) || 0;
@@ -499,9 +827,44 @@ const EnergyUsagePage: React.FC = () => {
   const currentData = getCurrentData();
   const latestPzemData = currentData?.pzem;
   const latestSchedule = currentData?.schedule;
-  const latestInstructorName = Object.values(instructorsData).find(
-    (instructor) => instructor?.ClassStatus?.schedule?.roomName?.name === selectedClassroom
-  )?.Profile?.fullName || 'Unknown Instructor';
+  
+  // Get the instructor name with the same priority logic as PZEM data
+  let latestInstructorName = 'Unknown Instructor';
+  
+  // First try to find matching instructor from ClassHistory with "Class Ended" status
+  for (const instructor of Object.values(instructorsData)) {
+    if (instructor?.ClassHistory) {
+      // Sort history entries by timestamp to get the most recent one
+      const historyEntries = Object.entries(instructor.ClassHistory)
+        .sort((a, b) => {
+          const entryA = a[1] as ClassHistoryEntry;
+          const entryB = b[1] as ClassHistoryEntry;
+          return entryB.dateTime.localeCompare(entryA.dateTime);
+        });
+      
+      // Check the most recent class history entry first
+      for (const pair of historyEntries) {
+        const historyEntry = pair[1] as ClassHistoryEntry;
+        if (
+          historyEntry.Status === "Class Ended" &&
+          historyEntry.schedule?.roomName?.name === selectedClassroom
+        ) {
+          latestInstructorName = instructor.Profile?.fullName || 'Unknown Instructor';
+          break;
+        }
+      }
+    }
+  }
+  
+  // Fall back to ClassStatus if no matching ClassHistory found
+  if (latestInstructorName === 'Unknown Instructor') {
+    const instructorWithMatchingRoom = Object.values(instructorsData).find(
+      (instructor) => instructor?.ClassStatus?.schedule?.roomName?.name === selectedClassroom
+    );
+    if (instructorWithMatchingRoom?.Profile?.fullName) {
+      latestInstructorName = instructorWithMatchingRoom.Profile.fullName;
+    }
+  }
 
   const filteredEnergyData = energyData.filter((entry) =>
     [entry.instructorName, entry.subject, entry.subjectCode, entry.schedule.section]
@@ -735,7 +1098,7 @@ const EnergyUsagePage: React.FC = () => {
               <StatCard
                 icon={ArrowsRightLeftIcon}
                 title="Readings"
-                value={energyData.length}
+                value={energyData.length > 0 ? energyData.length : (latestPzemData ? 1 : 0)}
                 description="Total data points"
               />
             </div>
@@ -839,39 +1202,43 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               </div>
             </div>
-            {energyData.length > 0 && (
-              <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
-                <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6">
-                  Device Energy Breakdown (Latest Reading)
-                </h3>
+            {/* Device Energy Breakdown - show regardless of whether we have entries */}
+            <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
+              <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6">
+                Device Energy Breakdown (Latest Reading)
+              </h3>
+              {latestPzemData ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                   <DeviceEnergy
                     label="Lighting"
-                    value={energyData[energyData.length - 1].devices.lighting * SCALING_FACTOR}
+                    value={parseFloat(powerConsumption.actualConsumptionKWh) * 0.25}
                     color="rgb(59, 130, 246)"
                     icon={LightBulbIcon}
                   />
                   <DeviceEnergy
                     label="Projection"
-                    value={energyData[energyData.length - 1].devices.projection * SCALING_FACTOR}
+                    value={parseFloat(powerConsumption.actualConsumptionKWh) * 0.25}
                     color="rgb(16, 185, 129)"
                     icon={ChartBarIcon}
                   />
                   <DeviceEnergy
                     label="Computers"
-                    value={energyData[energyData.length - 1].devices.computers * SCALING_FACTOR}
+                    value={parseFloat(powerConsumption.actualConsumptionKWh) * 0.25}
                     color="rgb(245, 158, 11)"
                     icon={PowerIcon}
                   />
                   <DeviceEnergy
                     label="HVAC"
-                    value={energyData[energyData.length - 1].devices.hvac * SCALING_FACTOR}
+                    value={parseFloat(powerConsumption.actualConsumptionKWh) * 0.25}
                     color="rgb(239, 68, 68)"
                     icon={ArrowsRightLeftIcon}
                   />
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-center text-gray-500">No device breakdown available</p>
+              )}
+            </div>
+            
             {energyData.length > 0 && (
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mt-6 sm:mt-8">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6">
@@ -945,6 +1312,55 @@ const EnergyUsagePage: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* Add Students Section */}
+            <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm mb-6 sm:mb-8">
+              <h3 className="text-base sm:text-lg font-semibold mb-4 sm:mb-6 flex items-center">
+                <UserIcon className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2 text-indigo-600" />
+                Students Under Current Instructor
+              </h3>
+              {loadingStudents ? (
+                <div className="flex justify-center items-center h-32">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                </div>
+              ) : students.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {students.map((student) => (
+                    <div key={student.id} className="bg-gray-50 p-4 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
+                          <span className="text-indigo-600 font-medium">
+                            {student.fullName.split(' ').map(n => n[0]).join('')}
+                          </span>
+                        </div>
+                        <div>
+                          <h4 className="font-medium text-gray-900">{student.fullName}</h4>
+                          <p className="text-sm text-gray-500">ID: {student.idNumber}</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <span className="text-gray-500">Department:</span>
+                          <span className="ml-1 font-medium">{student.department}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Email:</span>
+                          <span className="ml-1 font-medium">{student.email}</span>
+                        </div>
+                        {student.mobileNumber && (
+                          <div className="col-span-2">
+                            <span className="text-gray-500">Mobile:</span>
+                            <span className="ml-1 font-medium">{student.mobileNumber}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-gray-500">No students found</p>
+              )}
+            </div>
           </>
         )}
       </div>

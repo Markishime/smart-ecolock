@@ -117,6 +117,7 @@ const TakeAttendance: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [currentSchedule, setCurrentSchedule] = useState<Schedule | null>(null);
   const [roomId, setRoomId] = useState<string>('');
+  const [statusChangeStudent, setStatusChangeStudent] = useState<Student | null>(null);
   const [instructorDetails, setInstructorDetails] = useState<{
     fullName: string;
     department: string;
@@ -470,6 +471,17 @@ const TakeAttendance: React.FC = () => {
     return () => off(instructorRef, 'value', unsubscribe);
   }, [currentUser, selectedSection, selectedSubject]);
 
+  // Reset status change student when students array changes
+  useEffect(() => {
+    if (statusChangeStudent) {
+      // Find the updated student in the students array
+      const updatedStudent = students.find(s => s.rfidUid === statusChangeStudent.rfidUid);
+      if (updatedStudent) {
+        setStatusChangeStudent(updatedStudent);
+      }
+    }
+  }, [students, statusChangeStudent]);
+
   const handleAttendanceChange = async (rfidUid: string, status: 'present' | 'absent' | 'late') => {
     if (!selectedSection || !selectedSubject) {
       toast.error('Please select a subject and section');
@@ -487,6 +499,11 @@ const TakeAttendance: React.FC = () => {
         now.getSeconds().toString().padStart(2, '0');
 
       const student = students.find((s) => s.rfidUid === rfidUid);
+      
+      if (!student) {
+        toast.error('Student not found');
+        return;
+      }
 
       const dbStatus = status === 'absent' ? 'Absent' : status === 'late' ? 'Late' : 'Present';
       const isPresentOrLate = status === 'present' || status === 'late';
@@ -521,7 +538,26 @@ const TakeAttendance: React.FC = () => {
         role: studentData?.Profile?.role || 'student'
       };
 
-      // Update the attendance data with the new structure
+      // First update local state to ensure UI is responsive
+      setStudents(prevStudents => 
+        prevStudents.map(s => {
+          if (s.rfidUid === rfidUid) {
+            return {
+              ...s,
+              attendanceStatus: status,
+              classStatus: dbStatus,
+              timestamp: timeStr,
+              timeIn: isPresentOrLate ? timeStr : s.timeIn,
+              action: isPresentOrLate ? 'Confirmed RFID' : 'Not Confirmed',
+              rfidAuthenticated: isPresentOrLate,
+              lastSession: sessionId
+            };
+          }
+          return s;
+        })
+      );
+
+      // Then update the attendance data with the new structure
       await set(ref(rtdb, `/Students/${rfidUid}/Attendance/${sessionId}`), {
         allSchedules: relevantSchedules,
         attendanceInfo: {
@@ -544,7 +580,42 @@ const TakeAttendance: React.FC = () => {
       // Update lastSession
       await set(ref(rtdb, `/Students/${rfidUid}/lastSession`), sessionId);
 
-      toast.success(`Marked ${status} for ${student?.studentName} at ${now.toLocaleTimeString()}`);
+      console.log(`Status updated for ${student.studentName} to ${status}`);
+
+      const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      
+      // Show toast with status icon
+      if (status === 'present') {
+        toast.success(
+          <div className="flex items-center">
+            <CheckCircleIcon className="w-5 h-5 mr-2 text-green-500" />
+            <div>
+              <strong>{student?.studentName}</strong> marked as <span className="font-semibold text-green-600">Present</span>
+              <div className="text-xs">{formattedTime}</div>
+            </div>
+          </div>
+        );
+      } else if (status === 'late') {
+        toast.warning(
+          <div className="flex items-center">
+            <ClockIcon className="w-5 h-5 mr-2 text-yellow-500" />
+            <div>
+              <strong>{student?.studentName}</strong> marked as <span className="font-semibold text-yellow-600">Late</span>
+              <div className="text-xs">{formattedTime}</div>
+            </div>
+          </div>
+        );
+      } else {
+        toast.error(
+          <div className="flex items-center">
+            <XCircleIcon className="w-5 h-5 mr-2 text-red-500" />
+            <div>
+              <strong>{student?.studentName}</strong> marked as <span className="font-semibold text-red-600">Absent</span>
+              <div className="text-xs">{formattedTime}</div>
+            </div>
+          </div>
+        );
+      }
     } catch (error) {
       console.error('Error updating attendance in RTDB:', error);
       toast.error('Failed to update attendance status');
@@ -857,28 +928,56 @@ const TakeAttendance: React.FC = () => {
     switch (student.attendanceStatus) {
       case 'present':
         return (
-          <span className="text-green-600 text-xs sm:text-sm">
+          <span className="text-green-600 text-xs sm:text-sm flex items-center">
+            <CheckCircleIcon className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
             Present {weightInfo} {timeInfo}
           </span>
         );
       case 'late':
         return (
-          <span className="text-yellow-600 text-xs sm:text-sm">
+          <span className="text-yellow-600 text-xs sm:text-sm flex items-center">
+            <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
             Late {weightInfo} {timeInfo}
           </span>
         );
       case 'absent':
         return (
-          <span className="text-red-600 text-xs sm:text-sm">
+          <span className="text-red-600 text-xs sm:text-sm flex items-center">
+            <XCircleIcon className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
             Absent {weightInfo} {timeInfo}
           </span>
         );
       default:
         return (
-          <span className="text-gray-600 text-xs sm:text-sm">
+          <span className="text-gray-600 text-xs sm:text-sm flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 sm:w-4 sm:h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
             Not marked {weightInfo} {timeInfo}
           </span>
         );
+    }
+  };
+
+  // Close the status change modal
+  const closeStatusChangeModal = () => {
+    console.log('Closing status change modal');
+    setStatusChangeStudent(null);
+  };
+
+  // Update status from modal with forced state updates 
+  const updateStatusFromModal = (status: 'present' | 'absent' | 'late') => {
+    if (statusChangeStudent) {
+      console.log(`Updating status from modal: ${statusChangeStudent.studentName} to ${status}`);
+      
+      // Store student reference before closing modal
+      const studentToUpdate = statusChangeStudent;
+      
+      // Close modal first for UI responsiveness
+      setStatusChangeStudent(null);
+      
+      // Then update attendance
+      handleAttendanceChange(studentToUpdate.rfidUid, status);
     }
   };
 
@@ -1154,8 +1253,22 @@ const TakeAttendance: React.FC = () => {
                       </div>
                     </div>
                     
-                    <div className="flex items-center px-3 py-2 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg text-xs sm:text-sm">
-                      <span className="font-medium text-gray-700 mr-2">Status:</span> {getStatusDisplay(student)}
+                    <div 
+                      className="flex items-center justify-between px-3 py-2 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg text-xs sm:text-sm cursor-pointer hover:from-indigo-100 hover:to-blue-100 transition-colors group"
+                      onClick={() => {
+                        console.log('Opening status change modal for:', student.studentName, 'Current status:', student.attendanceStatus);
+                        setStatusChangeStudent(student);
+                      }}
+                      title="Click to change status"
+                    >
+                      <div className="flex items-center">
+                        <span className="font-medium text-gray-700 mr-2">Status:</span> {getStatusDisplay(student)}
+                      </div>
+                      <div className="bg-white bg-opacity-70 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:text-sm">
@@ -1248,6 +1361,116 @@ const TakeAttendance: React.FC = () => {
           </div>
         </motion.div>
       </main>
+
+      {statusChangeStudent && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm"
+        >
+          <motion.div
+            initial={{ scale: 0.9 }}
+            animate={{ scale: 1 }}
+            className="bg-white p-5 sm:p-6 rounded-xl shadow-xl w-full max-w-md mx-4 border border-gray-200"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg sm:text-xl font-bold text-gray-800">Update Attendance Status</h2>
+              <button
+                onClick={closeStatusChangeModal}
+                className="text-gray-500 hover:text-gray-700 transition-colors p-1"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg mb-4">
+              <div className="flex items-center mb-3">
+                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center mr-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-800">
+                    {statusChangeStudent.studentName}
+                  </h3>
+                  <p className="text-sm text-gray-600">ID: {statusChangeStudent.idNumber}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center">
+                <span className="font-medium text-gray-700 mr-2">Current Status:</span> 
+                {statusChangeStudent.attendanceStatus === 'present' ? (
+                  <span className="text-green-600">Present</span>
+                ) : statusChangeStudent.attendanceStatus === 'late' ? (
+                  <span className="text-yellow-600">Late</span>
+                ) : (
+                  <span className="text-red-600">Absent</span>
+                )}
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              <button
+                onClick={() => {
+                  console.log('Clicked Present button');
+                  updateStatusFromModal('present');
+                }}
+                className={`flex flex-col items-center justify-center p-3 rounded-lg transition-colors ${
+                  statusChangeStudent.attendanceStatus === 'present' 
+                    ? 'bg-green-100 text-green-800 ring-2 ring-green-500' 
+                    : 'bg-white border border-gray-200 hover:bg-green-50 text-gray-800'
+                }`}
+              >
+                <CheckCircleIcon className="w-8 h-8 mb-1 text-green-500" />
+                <span className="font-medium">Present</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  console.log('Clicked Late button');
+                  updateStatusFromModal('late');
+                }}
+                className={`flex flex-col items-center justify-center p-3 rounded-lg transition-colors ${
+                  statusChangeStudent.attendanceStatus === 'late' 
+                    ? 'bg-yellow-100 text-yellow-800 ring-2 ring-yellow-500' 
+                    : 'bg-white border border-gray-200 hover:bg-yellow-50 text-gray-800'
+                }`}
+              >
+                <ClockIcon className="w-8 h-8 mb-1 text-yellow-500" />
+                <span className="font-medium">Late</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  console.log('Clicked Absent button');
+                  updateStatusFromModal('absent');
+                }}
+                className={`flex flex-col items-center justify-center p-3 rounded-lg transition-colors ${
+                  statusChangeStudent.attendanceStatus === 'absent' 
+                    ? 'bg-red-100 text-red-800 ring-2 ring-red-500' 
+                    : 'bg-white border border-gray-200 hover:bg-red-50 text-gray-800'
+                }`}
+              >
+                <XCircleIcon className="w-8 h-8 mb-1 text-red-500" />
+                <span className="font-medium">Absent</span>
+              </button>
+            </div>
+            
+            <div className="flex justify-end">
+              <button
+                onClick={closeStatusChangeModal}
+                className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
 
       {confirmationStudent && confirmationTapTime && (
         <motion.div
