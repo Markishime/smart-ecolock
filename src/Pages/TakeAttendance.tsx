@@ -911,11 +911,16 @@ const TakeAttendance: React.FC = () => {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-lg sm:rounded-2xl shadow-md sm:shadow-lg p-4 sm:p-6"
+          className="bg-white rounded-lg sm:rounded-2xl shadow-md sm:shadow-lg p-4 sm:p-6 border border-gray-100"
         >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-5 sm:mb-6 border-b border-gray-100 pb-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Take Attendance</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center">
+                <span className="w-8 h-8 mr-2 flex items-center justify-center bg-indigo-100 text-indigo-600 rounded-full">
+                  <CheckCircleIcon className="w-5 h-5" />
+                </span>
+                Take Attendance
+              </h1>
               {subjectsLoading ? (
                 <div className="flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-5 w-5 sm:h-6 sm:w-6 border-t-2 border-indigo-600"></div>
@@ -997,25 +1002,98 @@ const TakeAttendance: React.FC = () => {
           </div>
 
           {currentSchedule && selectedSection && selectedSubject && (
-            <div className="mb-4 sm:mb-6 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg sm:rounded-xl p-3 sm:p-4 text-white shadow-md sm:shadow-lg">
+            <div className="mb-4 sm:mb-6 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-lg sm:rounded-xl p-4 sm:p-5 text-white shadow-md sm:shadow-lg border border-blue-700/20">
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
                 <div>
-                  <h3 className="text-base sm:text-lg font-semibold">
+                  <h3 className="text-base sm:text-lg font-semibold flex items-center">
+                    <CalendarIcon className="w-5 h-5 mr-2 text-blue-200" />
                     {selectedSubject.name.length > 25 ? `${selectedSubject.name.substring(0, 22)}...` : selectedSubject.name}
                   </h3>
                   <div className="mt-1 text-blue-100 text-xs sm:text-sm">
-                    <p>Room {currentSchedule.room} • Section {selectedSection.name}</p>
-                    <p>
+                    <p className="flex items-center gap-1.5">
+                      <span className="bg-white/20 px-2 py-0.5 rounded-full">Room {currentSchedule.room}</span>
+                      <span className="bg-white/20 px-2 py-0.5 rounded-full">Section {selectedSection.name}</span>
+                    </p>
+                    <p className="mt-1 flex items-center">
+                      <ClockIcon className="w-4 h-4 mr-1 text-blue-200" />
                       {currentSchedule.startTime} - {currentSchedule.endTime} • {currentSchedule.day}
                     </p>
                   </div>
                 </div>
-                <div className="bg-white/20 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm backdrop-blur-sm">
+                <div className="bg-white/20 px-3 sm:px-4 py-1.5 rounded-full text-xs sm:text-sm backdrop-blur-sm font-medium shadow-sm">
                   Current Class
                 </div>
               </div>
             </div>
           )}
+
+          {selectedSection ? (
+            <>
+              <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row gap-3 sm:gap-4 sm:items-center bg-gray-50 p-3 sm:p-4 rounded-lg">
+                <div className="relative flex-grow">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg className="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Search by student name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="border border-gray-300 bg-white py-2 pl-10 pr-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full"
+                  />
+                </div>
+                
+                <div className="flex gap-2 sm:gap-3">
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as 'all' | 'present' | 'absent' | 'late')}
+                    className="border border-gray-300 bg-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="present">Present Only</option>
+                    <option value="late">Late Only</option>
+                    <option value="absent">Absent Only</option>
+                  </select>
+                  
+                  <select
+                    value={`${sortBy}-${sortOrder}`}
+                    onChange={(e) => {
+                      const [newSortBy, newSortOrder] = e.target.value.split('-');
+                      setSortBy(newSortBy as 'name' | 'status' | 'time');
+                      setSortOrder(newSortOrder as 'asc' | 'desc');
+                    }}
+                    className="border border-gray-300 bg-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                  >
+                    <option value="name-asc">Name (A-Z)</option>
+                    <option value="name-desc">Name (Z-A)</option>
+                    <option value="status-asc">Status (Present First)</option>
+                    <option value="status-desc">Status (Absent First)</option>
+                    <option value="time-asc">Time (Earliest First)</option>
+                    <option value="time-desc">Time (Latest First)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mb-3 flex justify-between items-center">
+                <div className="text-sm text-gray-500">
+                  Showing <span className="font-medium text-gray-700">{filteredAndSortedStudents.length}</span> of <span className="font-medium text-gray-700">{students.length}</span> students
+                </div>
+                <div className="flex gap-2">
+                  <div className="px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">
+                    Present: {stats.present}
+                  </div>
+                  <div className="px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
+                    Late: {stats.late}
+                  </div>
+                  <div className="px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-medium">
+                    Absent: {stats.absent}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {selectedSection ? (
             filteredAndSortedStudents.length > 0 ? (
@@ -1026,93 +1104,114 @@ const TakeAttendance: React.FC = () => {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     whileHover={{ scale: 1.02 }}
-                    className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-4 flex flex-col space-y-2 border border-gray-200"
+                    className="bg-white rounded-lg sm:rounded-xl p-4 sm:p-5 flex flex-col space-y-3 border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex-1">
-                        <p className="font-medium text-gray-800 text-sm sm:text-base">
+                        <p className="font-semibold text-gray-800 text-sm sm:text-base">
                           {student.studentName.length > 20 ? `${student.studentName.substring(0, 17)}...` : student.studentName}
                         </p>
-                        <p className="text-xs text-gray-600">UID: {student.rfidUid.substring(0, 8)}...</p>
-                        <p className="text-xs text-gray-600">ID: {student.idNumber}</p>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                            UID: {student.rfidUid.substring(0, 8)}...
+                          </span>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                            ID: {student.idNumber}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex gap-1 sm:gap-2">
+                      <div className="flex gap-1.5 sm:gap-2">
                         <button
                           onClick={() => handleAttendanceChange(student.rfidUid, 'present')}
                           className={`
-                            p-1.5 sm:p-2 rounded-full
-                            ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white' : 'bg-green-100 text-green-600 hover:bg-green-200'}
+                            p-1.5 sm:p-2 rounded-full transition-colors duration-200
+                            ${student.attendanceStatus === 'present' ? 'bg-green-500 text-white shadow-sm' : 'bg-green-100 text-green-600 hover:bg-green-200'}
                           `}
+                          title="Mark as Present"
                         >
                           <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                         </button>
                         <button
                           onClick={() => handleAttendanceChange(student.rfidUid, 'late')}
                           className={`
-                            p-1.5 sm:p-2 rounded-full
-                            ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
+                            p-1.5 sm:p-2 rounded-full transition-colors duration-200
+                            ${student.attendanceStatus === 'late' ? 'bg-yellow-500 text-white shadow-sm' : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'}
                           `}
+                          title="Mark as Late"
                         >
                           <ClockIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                         </button>
                         <button
                           onClick={() => handleAttendanceChange(student.rfidUid, 'absent')}
                           className={`
-                            p-1.5 sm:p-2 rounded-full
-                            ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 hover:bg-red-200'}
+                            p-1.5 sm:p-2 rounded-full transition-colors duration-200
+                            ${student.attendanceStatus === 'absent' ? 'bg-red-500 text-white shadow-sm' : 'bg-red-100 text-red-600 hover:bg-red-200'}
                           `}
+                          title="Mark as Absent"
                         >
                           <XCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                         </button>
                       </div>
                     </div>
-                    <div className="space-y-1 text-xs sm:text-sm">
-                      <p>
-                        <span className="font-medium text-gray-700">Status:</span> {getStatusDisplay(student)}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Email:</span>{' '}
-                        {student.email.length > 20 ? `${student.email.substring(0, 17)}...` : student.email || 'N/A'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Mobile:</span> {student.mobileNumber || 'N/A'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Dept:</span>{' '}
-                        {student.department.length > 15 ? `${student.department.substring(0, 12)}...` : student.department || 'N/A'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Section:</span> {student.section || 'Unknown'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Subject:</span>{' '}
-                        {selectedSubject && selectedSubject.name.length > 20 ? `${selectedSubject.name.substring(0, 17)}...` : selectedSubject?.name || 'N/A'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Weight:</span>{' '}
+                    
+                    <div className="flex items-center px-3 py-2 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg text-xs sm:text-sm">
+                      <span className="font-medium text-gray-700 mr-2">Status:</span> {getStatusDisplay(student)}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:text-sm">
+                      <div>
+                        <span className="font-medium text-gray-700">Email:</span>
+                        <p className="text-gray-600 truncate">
+                          {student.email || 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700">Mobile:</span>
+                        <p className="text-gray-600">
+                          {student.mobileNumber || 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700">Department:</span>
+                        <p className="text-gray-600 truncate">
+                          {student.department || 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700">Section:</span>
+                        <p className="text-gray-600">
+                          {student.section || 'Unknown'}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2">
+                      <div className="px-3 py-1.5 rounded-md bg-blue-50 text-blue-700 text-xs flex items-center gap-1">
+                        <span className="font-semibold">Weight:</span>
                         {student.weight ? `${student.weight.toFixed(1)} ${student.weightUnit}` : 'N/A'}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-700">Verified:</span>{' '}
-                        {student.weightAuthenticated ? (
-                          <span className="text-green-600">Yes</span>
-                        ) : (
-                          <span className="text-red-600">No</span>
-                        )}
-                      </p>
-                      {student.schedules.length > 0 && (
-                        <div>
-                          <span className="font-medium text-gray-700">Schedules:</span>
-                          <ul className="list-disc pl-4">
+                      </div>
+                      <div className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1 ${student.weightAuthenticated ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                        <span className="font-semibold">Verified:</span>
+                        {student.weightAuthenticated ? 'Yes' : 'No'}
+                      </div>
+                    </div>
+
+                    {student.schedules.length > 0 && (
+                      <div className="mt-1">
+                        <p className="font-medium text-gray-700 text-xs sm:text-sm mb-1">Schedules:</p>
+                        <div className="max-h-20 overflow-y-auto bg-gray-50 rounded-md p-2">
+                          <ul className="space-y-1">
                             {student.schedules.map((sched, index) => (
-                              <li key={index} className="text-xs sm:text-sm">
-                                {sched.day} {sched.startTime}-{sched.endTime} ({sched.subject}, Section {sched.section})
+                              <li key={index} className="text-xs text-gray-600 flex flex-wrap">
+                                <span className="font-medium mr-1">{sched.day}:</span>
+                                {sched.startTime}-{sched.endTime} • {sched.subject.substring(0, 15)}{sched.subject.length > 15 ? '...' : ''} 
+                                <span className="text-gray-500 ml-1">({sched.section})</span>
                               </li>
                             ))}
                           </ul>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </motion.div>
                 ))}
               </div>
@@ -1123,23 +1222,23 @@ const TakeAttendance: React.FC = () => {
             <p className="text-gray-600 text-center py-4 text-sm sm:text-base">Please select a subject and section to view students.</p>
           )}
 
-          <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-4">
+          <div className="mt-6 sm:mt-8 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-4 pt-4 border-t border-gray-100">
             {selectedSection && (
-              <div className="text-xs sm:text-sm text-gray-600">
-                Attendance: {stats.attendanceRate.toFixed(1)}% | Punctuality: {stats.punctualityRate.toFixed(1)}%
+              <div className="text-xs sm:text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
+                <span className="font-medium">Attendance:</span> {stats.attendanceRate.toFixed(1)}% | <span className="font-medium">Punctuality:</span> {stats.punctualityRate.toFixed(1)}%
               </div>
             )}
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full sm:w-auto">
               <Link
                 to="/instructor/attendance-management"
-                className="bg-indigo-100 text-indigo-700 px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-200 transition flex items-center justify-center gap-2 text-xs sm:text-sm"
+                className="bg-indigo-100 text-indigo-700 px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-200 transition flex items-center justify-center gap-2 text-xs sm:text-sm font-medium shadow-sm"
               >
                 <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 View Records
               </Link>
               <button
                 onClick={submitAttendance}
-                className="bg-indigo-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 text-xs sm:text-sm"
+                className="bg-indigo-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 text-xs sm:text-sm font-medium shadow-sm"
                 disabled={!selectedSection || !selectedSubject || !currentSchedule}
               >
                 <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -1154,37 +1253,74 @@ const TakeAttendance: React.FC = () => {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm"
         >
           <motion.div
             initial={{ scale: 0.9 }}
             animate={{ scale: 1 }}
-            className="bg-white p-4 sm:p-6 rounded-lg sm:rounded-xl shadow-xl w-full max-w-[90vw] sm:max-w-md mx-4"
+            className="bg-white p-5 sm:p-6 rounded-xl shadow-xl w-full max-w-md mx-4 border border-gray-200"
           >
-            <h2 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Confirm Attendance</h2>
-            <div className="space-y-2 text-sm sm:text-base">
-              <p>
-                <strong>Student:</strong>{' '}
-                {confirmationStudent.studentName.length > 20
-                  ? `${confirmationStudent.studentName.substring(0, 17)}...`
-                  : confirmationStudent.studentName}
-              </p>
-              <p>
-                <strong>Tap Time:</strong> {confirmationTapTime.toLocaleString()}
-              </p>
-              <p className="text-gray-600">Weight sensor confirmation pending...</p>
-            </div>
-            <div className="mt-4 sm:mt-6 flex justify-end gap-2 sm:gap-3">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg sm:text-xl font-bold text-gray-800">Confirm Attendance</h2>
               <button
                 onClick={rejectAttendance}
-                className="px-3 sm:px-4 py-1.5 sm:py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-xs sm:text-sm"
+                className="text-gray-500 hover:text-gray-700 transition-colors p-1"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg mb-4">
+              <div className="flex items-center mb-3">
+                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center mr-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-800">
+                    {confirmationStudent.studentName.length > 20
+                      ? `${confirmationStudent.studentName.substring(0, 17)}...`
+                      : confirmationStudent.studentName}
+                  </h3>
+                  <p className="text-sm text-gray-600">ID: {confirmationStudent.idNumber}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-gray-500">Tap Time</p>
+                  <p className="font-medium text-gray-800">{confirmationTapTime.toLocaleTimeString()}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Tap Date</p>
+                  <p className="font-medium text-gray-800">{confirmationTapTime.toLocaleDateString()}</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded flex items-center mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-yellow-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <p className="text-sm text-yellow-700">Weight sensor confirmation pending...</p>
+            </div>
+            
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={rejectAttendance}
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
               >
                 Reject
               </button>
               <button
                 onClick={confirmAttendance}
-                className="px-3 sm:px-4 py-1.5 sm:py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-xs sm:text-sm"
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium flex items-center"
               >
+                <CheckCircleIcon className="w-4 h-4 mr-1.5" />
                 Confirm
               </button>
             </div>
