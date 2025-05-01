@@ -31,7 +31,7 @@
     "react-scripts": "5.0.1",
     "react-textfit": "^1.1.1",
     "react-toastify": "^11.0.5",
-    "recharts": "^2.15.1",
+    "recharts": "^2.15.2",
     "sweetalert2": "^11.6.13",
     "typescript": "^4.9.5",
     "web-vitals": "^2.1.4"
